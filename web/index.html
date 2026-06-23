@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AeroSplat-GIS: Tactical 3D Stream</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #050505; font-family: monospace; }
+        #ui-panel {
+            position: absolute; top: 10px; left: 10px; background: rgba(10, 15, 10, 0.85);
+            color: #00ff33; padding: 15px; border: 1px solid #00ff33; border-radius: 4px;
+            z-index: 10; box-shadow: 0 0 15px rgba(0,255,51,0.2);
+        }
+        h3 { margin-top: 0; border-bottom: 1px solid #00ff33; padding-bottom: 5px; }
+        .stat-line { margin: 5px 0; }
+        #canvas-container { width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <h3>🛰️ AeroSplat-GIS v0.6</h3>
+        <div class="stat-line"><b>Ціль:</b> Нью-Йорк (БПЛА)</div>
+        <div class="stat-line"><b>Зчитано Гаусіанів:</b> <span id="count-val">0</span></div>
+        <div class="stat-line"><b>Затримка GPU:</b> <span id="latency-val">0 ms</span></div>
+        <div class="stat-line" style="color: #888;">Керування: Мишка (ЛКМ - обертання, ПКМ - зсув, скрол - зум)</div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

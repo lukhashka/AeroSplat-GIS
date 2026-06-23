@@ -1,0 +1,286 @@
+#  AeroSplat-GIS
+
+## UAV-Based 3D Terrain Reconstruction and GIS Visualization Engine
+
+AeroSplat-GIS is a geospatial reconstruction and visualization framework
+designed for generating metrically accurate 3D terrain models from UAV
+imagery and simulation environments.
+
+The project combines traditional photogrammetry techniques (**Structure
+from Motion** and **Multi-View Stereo**) with modern neural scene
+representations based on **3D Gaussian Splatting (3DGS)**, enabling
+interactive visualization of reconstructed environments.
+
+The system is optimized for **interactive real-time visualization on
+modern consumer GPUs**.
+
+------------------------------------------------------------------------
+
+## Reconstruction Examples
+
+| Dense Point Cloud (MVS) | 3D Gaussian Splatting |
+|---|---|
+| <img src="assets/examples/dense_point_cloud.png" width="400"> | <img src="assets/examples/gaussian_splatting.png" width="400"> |
+| Classical point-based reconstruction | Neural Gaussian representation |
+
+------------------------------------------------------------------------
+
+#  Features
+
+## Dual Reconstruction Pipeline
+
+AeroSplat-GIS supports two independent reconstruction approaches:
+
+### Dense Point Cloud Reconstruction
+
+Based on classical photogrammetry:
+
+-   Structure-from-Motion (SfM)
+-   Multi-View Stereo (MVS)
+-   Dense point cloud generation
+
+### Neural Scene Reconstruction
+
+Based on:
+
+-   3D Gaussian Splatting (3DGS)
+-   Differentiable rendering
+-   PyTorch optimization pipeline
+
+Both approaches can be compared and visualized depending on required
+accuracy and performance characteristics.
+
+------------------------------------------------------------------------
+
+##  Georeferenced Reconstruction
+
+The pipeline supports geographic alignment through metadata processing
+and coordinate injection.
+
+Supported parameters:
+
+-   Latitude
+-   Longitude
+-   Altitude
+
+The reconstructed scene is scaled into real-world metric coordinates.
+
+    1 unit in 3D space ≈ 1 meter in the real environment
+
+------------------------------------------------------------------------
+
+##  GPU Rendering Optimization
+
+The visualization layer uses:
+
+-   WebGL
+-   Three.js
+-   Custom GLSL shaders
+
+Optimization techniques include:
+
+-   Depth-based visibility filtering
+-   Frustum culling
+-   Efficient GPU-side rendering
+-   Binary tensor streaming
+
+------------------------------------------------------------------------
+
+##  Binary Tensor Streaming
+
+The backend supports direct streaming of serialized PyTorch tensors to
+the WebGL frontend.
+
+This reduces loading overhead compared to traditional text-based formats
+and allows efficient transfer of large reconstructed scenes.
+
+------------------------------------------------------------------------
+
+# Architecture Pipeline
+
+```text
+Raw UAV Images
+        │
+        ▼
+exif_injector.py
+GPS metadata injection
+        │
+        ▼
+sfm_runner.py
+Sparse reconstruction (COLMAP SfM)
+        │
+        ▼
+dense_runner.py
+Dense reconstruction (MVS)
+        │
+        ▼
+ply_parser.py
+Point cloud processing
+        │
+        ├──────────────────────┐
+        │                      │
+        ▼                      ▼
+Dense Point Cloud       3D Gaussian Splatting
+                               │
+                               ▼
+                        gs_trainer.py
+                        PyTorch optimization
+                               │
+                               ▼
+                         FastAPI Backend
+                               │
+                               ▼
+                      WebGL Viewer (Three.js)
+```
+
+------------------------------------------------------------------------
+
+#  Repository Structure
+
+    AeroSplat-GIS/
+    ├── data/
+    │   ├── raw_images_3d/
+    │   └── colmap_output/
+    │
+    ├── src/
+    │   ├── reconstruction/
+    │   │   ├── exif_injector.py
+    │   │   ├── sfm_runner.py
+    │   │   ├── dense_runner.py
+    │   │   └── ply_parser.py
+    │   │
+    │   ├── optimization/
+    │   │   └── gs_trainer.py
+    │   │
+    │   └── server/
+    │       └── main.py
+    │
+    ├── web/
+    │   ├── index.html
+    │   ├── app.js
+    │   └── orbit_controls.js
+    │
+    ├── requirements.txt
+    └── README.md
+
+------------------------------------------------------------------------
+
+#  System Requirements
+
+## Hardware
+
+Recommended:
+
+-   NVIDIA GPU with CUDA support
+-   Minimum 6 GB VRAM for larger scenes
+
+## Software
+
+Required:
+
+-   Python 3.x
+-   CUDA-enabled PyTorch
+-   COLMAP installed and available in system PATH
+
+Supported:
+
+-   Windows 10/11
+-   Linux distributions
+
+------------------------------------------------------------------------
+
+#  Installation
+
+Install PyTorch with CUDA support:
+
+``` bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+Install dependencies:
+
+``` bash
+pip install fastapi uvicorn pillow pyautogui piexif
+```
+
+------------------------------------------------------------------------
+
+#  Reconstruction Pipeline Usage
+
+Place input images:
+
+    data/raw_images_3d/
+
+Run:
+
+``` bash
+python src/reconstruction/exif_injector.py
+python src/reconstruction/sfm_runner.py
+python src/reconstruction/dense_runner.py
+python src/reconstruction/ply_parser.py
+python src/optimization/gs_trainer.py
+```
+
+------------------------------------------------------------------------
+
+#  Launch Visualization Server
+
+``` bash
+python src/server/main.py
+```
+
+Open:
+
+    http://127.0.0.1:8000/web/
+
+Recommended browsers:
+
+-   Google Chrome
+-   Microsoft Edge
+
+------------------------------------------------------------------------
+
+## Reconstruction Modes Comparison
+
+| Feature | Dense Point Cloud (MVS) | 3D Gaussian Splatting |
+|---|---|---|
+| Data Representation | XYZ coordinates with RGB attributes | Optimized Gaussian primitives with position, covariance, opacity, and color |
+| Scene Model | Discrete sampled geometry | Continuous volumetric scene representation |
+| Vegetation Handling | Fragmented and sparse reconstruction | Smooth volumetric reconstruction of complex structures |
+| Rendering Pipeline | `THREE.Points` / point-based rendering | GPU-accelerated GLSL Gaussian splatting renderer |
+| Memory Consumption | Lower storage requirements | Higher memory usage due to additional Gaussian parameters |
+| Visual Quality | Moderate realism | High-fidelity photorealistic reconstruction |
+| Real-Time Performance | Limited by point count | Optimized for interactive GPU rendering |
+
+#  Development Status
+
+Current version:
+
+    v0.6.0
+
+Implemented:
+
+-   GPS metadata injection
+-   COLMAP SfM reconstruction
+-   Dense MVS reconstruction
+-   Point cloud processing
+-   3D Gaussian Splatting optimization
+-   FastAPI backend
+-   WebGL visualization frontend
+
+------------------------------------------------------------------------
+
+#  Future Improvements
+
+-   Distance measurement tools
+-   Elevation profile generation
+-   GIS overlay support
+-   Terrain analysis utilities
+-   Additional export formats
+-   Large-scale scene optimization
+
+------------------------------------------------------------------------
+
+#  License
+
+MIT License
