@@ -1,60 +1,108 @@
-import os
-import struct  # 🔥 ВИПРАВЛЕНО: додали стандартний бінарний розпакувальник
-import torch
+#!/usr/bin/env python3
+"""
+ply_parser.py — AeroSplat-GIS
 
-def parse_dense_ply():
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-    ply_path = os.path.join(project_dir, "data", "colmap_output", "dense", "fused.ply")
-    output_pt_path = os.path.join(project_dir, "data", "zaporizhzhia_cloud.pt")
+COLMAP dense `.ply` -> `.pt` point cloud for the GS trainer / server.
 
-    if not os.path.exists(ply_path):
-        print(f"❌ Помилка: Файл {ply_path} не знайдено! Спочатку запусти dense_runner.py")
-        return
+The dense MVS result normally lands at:
+    data/colmap_output/dense/0/fused.ply
+Note that `sparse/0/points3D.ply` is the SPARSE cloud in PLY clothing — if
+that is what you are pointing at, use colmap_parser.py on points3D.bin
+instead, which also gives you reprojection error and track length to filter on.
 
-    print(f"📖 Читання щільної PLY-моделі: {ply_path}")
-    
-    xyz_list = []
-    rgb_list = []
-    
-    with open(ply_path, "rb") as f:
-        # Читаємо заголовок (header) файлу PLY
-        header = ""
-        while b"end_header" not in header.encode('utf-8', errors='ignore'):
-            line = f.readline().decode('utf-8', errors='ignore')
-            header += line
-            if "element vertex" in line:
-                num_vertices = int(line.split()[-1])
-        
-        print(f"📊 Знайдено реальних РЕКОНСТРУЙОВАНИХ точок: {num_vertices:,}")
-        print("⏳ Парсинг масиву даних у тензори PyTorch...")
+Usage:
+    python src/reconstruction/ply_parser.py --dataset zaporizhzhia
+    python src/reconstruction/ply_parser.py \
+        --input data/colmap_output/dense/0/fused.ply \
+        --output data/zaporizhzhia_dense.pt --mad-k 20
+"""
 
-        has_normals = "nx" in header
-        bytes_per_vertex = 27 if has_normals else 15
+from __future__ import annotations
 
-        for _ in range(num_vertices):
-            data = f.read(bytes_per_vertex)
-            if len(data) < bytes_per_vertex:
-                break
-            
-            # 🔥 ВИПРАВЛЕНО: Читаємо 3 значення float32 (12 байт) безпечно через struct
-            x, y, z = struct.unpack("<3f", data[:12])
-            
-            # Витягуємо кольори (останні 3 байти: uint8)
-            r = data[-3] / 255.0
-            g = data[-2] / 255.0
-            b = data[-1] / 255.0
-            
-            xyz_list.append([x, y, z])
-            rgb_list.append([r, g, b])
+import argparse
+import sys
+from pathlib import Path
 
-    # Зберігаємо у PyTorch тензори
-    cloud_data = {
-        'xyz': torch.tensor(xyz_list, dtype=torch.float32),
-        'rgb': torch.tensor(rgb_list, dtype=torch.float32)
-    }
-    
-    torch.save(cloud_data, output_pt_path)
-    print(f"💾 Успішно експортовано {len(xyz_list):,} точок у {output_pt_path}!")
+import numpy as np
+
+from cloud_io import filter_cloud, read_ply, save_cloud
+
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--dataset", default=None,
+                   help="Dataset name; fills in the conventional paths.")
+    p.add_argument("--input", type=Path, default=None)
+    p.add_argument("--output", type=Path, default=None)
+    p.add_argument("--mad-k", type=float, default=0.0,
+                   help="Robust per-axis outlier rejection, in MADs. Try 20. "
+                        "0 disables.")
+    p.add_argument("--max-points", type=int, default=None,
+                   help="Randomly subsample to at most N points. Useful to "
+                        "match gs_trainer_v3's --max-gaussians budget.")
+    p.add_argument("--recenter", action="store_true")
+    p.add_argument("--seed", type=int, default=0)
+    return p
+
+
+def resolve_paths(args) -> tuple[Path, Path]:
+    if args.input and args.output:
+        return args.input, args.output
+    if not args.dataset:
+        raise SystemExit("Provide either --dataset or both --input and --output")
+    ds = args.dataset
+    inp = args.input or (PROJECT_DIR / "data" / "colmap_output" / "dense" / "0"
+                         / "fused.ply")
+    out = args.output or (PROJECT_DIR / "data" / f"{ds}_dense.pt")
+    return inp, out
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    inp, out = resolve_paths(args)
+
+    if not inp.is_file():
+        print(f"ERROR: {inp} not found — run dense_runner.py first",
+              file=sys.stderr)
+        return 1
+
+    print(f"Reading dense PLY: {inp}")
+    xyz, rgb, hdr = read_ply(inp)
+    print(f"  format: {hdr.fmt}")
+    print(f"  vertex properties: "
+          f"{', '.join(n for n, _ in hdr.props)}")
+    print(f"  {len(xyz):,} vertices")
+
+    if rgb is None:
+        print("  warning: no colour properties found — filling mid grey. "
+              "The GS trainer will have to learn all colour from scratch.")
+        rgb = np.full((len(xyz), 3), 128, dtype=np.uint8)
+
+    xyz, rgb, stats = filter_cloud(xyz, rgb, mad_k=args.mad_k,
+                                   max_points=args.max_points, seed=args.seed)
+
+    save_cloud(out, xyz, rgb, source=inp, stats=stats, recenter=args.recenter,
+               extra_meta={"kind": "colmap_dense",
+                           "ply_properties": [n for n, _ in hdr.props]})
+    print("next: python src/reconstruction/gs_trainer_v3.py")
+    return 0
+
+
+def _fix_console_encoding() -> None:
+    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
+    (cp1252 etc) — this script's error/warning prints include em dashes."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name)
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
-    parse_dense_ply()
+    _fix_console_encoding()
+    raise SystemExit(main())

@@ -138,30 +138,20 @@ Dense Point Cloud       3D Gaussian Splatting
 #  Repository Structure
 
     AeroSplat-GIS/
-    ├── data/
-    │   ├── raw_images_3d/
-    │   └── colmap_output/
-    │
     ├── src/
-    │   ├── reconstruction/
-    │   │   ├── exif_injector.py
-    │   │   ├── sfm_runner.py
-    │   │   ├── dense_runner.py
-    │   │   └── ply_parser.py
-    │   │
-    │   ├── optimization/
-    │   │   └── gs_trainer.py
-    │   │
-    │   └── server/
-    │       └── main.py
-    │
-    ├── web/
-    │   ├── index.html
-    │   ├── app.js
-    │   └── orbit_controls.js
-    │
-    ├── requirements.txt
-    └── README.md
+    │   ├── starter.py            # оркестратор (`aerosplat run`)
+    │   ├── doctor.py             # діагностика (`aerosplat doctor`)
+    │   ├── telemetry/            # exif_injector.py
+    │   ├── reconstruction/       # earthstudio_to_colmap, sfm_runner, dense_runner,
+    │   │                         # ply_parser, colmap_parser, cloud_io, gs_trainer_v3
+    │   └── server/main.py        # FastAPI (`aerosplat serve`)
+    ├── web/                      # власний WebGL-в'ювер
+    ├── tools/                    # дослідницькі/діагностичні скрипти
+    ├── legacy/                   # застарілий код (лише для історії)
+    ├── docs/                     # ARCHITECTURE, ROADMAP, DECISIONS, REAL_DRONES
+    ├── data/                     # НЕ в git, див. data/README.md
+    ├── pyproject.toml
+    └── requirements.txt
 
 ------------------------------------------------------------------------
 
@@ -191,42 +181,38 @@ Supported:
 
 #  Installation
 
-Install PyTorch with CUDA support:
-
 ``` bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# PyTorch під вашу CUDA (приклад для CUDA 12.6)
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu126
+pip install -e .
+aerosplat doctor
 ```
 
-Install dependencies:
-
-``` bash
-pip install fastapi uvicorn pillow pyautogui piexif
-```
+COLMAP має бути в `PATH` (або `--colmap-bin`). Опційно: CUDA-растерізатор Inria
+(`diff-gaussian-rasterization/`, **non-commercial**, збирається локально) —
+без нього використовується повільніший PyTorch-растерізатор.
 
 ------------------------------------------------------------------------
 
 #  Reconstruction Pipeline Usage
 
-Place input images:
-
-    data/raw_images_3d/
-
-Run:
+Датасет кладеться в `data/<ds>/` (див. [data/README.md](data/README.md)).
 
 ``` bash
-python src/reconstruction/exif_injector.py
-python src/reconstruction/sfm_runner.py
-python src/reconstruction/dense_runner.py
-python src/reconstruction/ply_parser.py
-python src/optimization/gs_trainer.py
+aerosplat run --dataset dataset_v6            # весь пайплайн
+aerosplat run --dataset dataset_v6 --dry-run  # показати команди
+aerosplat run --dataset dataset_v6 --from sfm
 ```
+
+`camera_source` за замовчуванням `auto`: Earth Studio JSON, якщо він є, інакше
+synthetic-режим. Тренер без `--self-test` вимагає явні `--input/--colmap/--images`.
 
 ------------------------------------------------------------------------
 
 #  Launch Visualization Server
 
 ``` bash
-python src/server/main.py
+aerosplat serve   # або: python src/server/main.py
 ```
 
 Open:
@@ -256,7 +242,7 @@ Recommended browsers:
 
 Current version:
 
-    v0.6.0
+    v0.6.1 (Фаза 0 — стабілізація, див. docs/ROADMAP.md)
 
 Implemented:
 
@@ -283,4 +269,6 @@ Implemented:
 
 #  License
 
-MIT License
+Код проєкту — MIT. **Виняток:** `diff-gaussian-rasterization` (Inria) —
+Gaussian-Splatting License, лише некомерційні дослідження; це опційна
+залежність, не частина репозиторію. Докладніше: [docs/DECISIONS.md](docs/DECISIONS.md).

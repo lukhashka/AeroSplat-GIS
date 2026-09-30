@@ -1,20 +1,32 @@
-# Python virtual environment
+# Python
 venv/
 .venv/
 env/
-
-# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.egg-info/
+build/
+dist/
 
 # Jupyter
 .ipynb_checkpoints/
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
-
-# OS
 .DS_Store
 Thumbs.db
+
+# Data & heavy artefacts (see data/README.md) — never commit
+data/*
+!data/README.md
+*.pt
+*.ply
+*.zip
+*.xlsx
+colmap_output_*/
+runs/
+
+# Third-party CUDA rasterizer (Inria, non-commercial licence) — built locally
+diff-gaussian-rasterization/
