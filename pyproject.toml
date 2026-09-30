@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aerosplat"
+version = "0.6.1"
+description = "UAV 3D reconstruction (COLMAP + 3D Gaussian Splatting) with GIS georeferencing"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10",
+    "piexif==1.1.3",
+    "fastapi>=0.110",
+    "uvicorn>=0.28",
+]
+
+[project.optional-dependencies]
+# torch must match your CUDA build — see requirements.txt / README for the index URL.
+train = ["torch>=2.2", "torchvision>=0.17"]
+dev = ["pytest"]
+
+[project.scripts]
+aerosplat = "starter:cli"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["starter", "doctor"]

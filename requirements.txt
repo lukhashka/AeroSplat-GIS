@@ -1,8 +1,15 @@
+# Runtime dependencies (tested: Python 3.11, CUDA 12.6).
+# torch/torchvision: install the build matching your CUDA, e.g.
+#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu126
+torch>=2.2
+torchvision>=0.17
+numpy>=1.26
+pillow>=10
 piexif==1.1.3
-numpy
+fastapi>=0.110
+uvicorn>=0.28
 
-fastapi==0.110.0
-uvicorn==0.28.0
-websockets==12.0
-
+# Optional: CUDA rasterizer (Inria, NON-COMMERCIAL licence — see docs/DECISIONS.md).
+# Built from ./diff-gaussian-rasterization; without it the trainer falls back to
+# the pure-PyTorch tile rasterizer (slower).
 ninja
