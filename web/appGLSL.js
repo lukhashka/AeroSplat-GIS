@@ -2,32 +2,9 @@
 //  AeroSplat-GIS — 3DGS WebGL Viewer
 //  Справжній растерізатор еліпсів через GLSL
 //
-//  Rewritten against AeroSplat-viewer-review.md:
-//
-//  §A1  quatToMat built Rᵀ instead of R (GLSL mat3() is column-major),
-//       so every non-spherical Gaussian was oriented backwards. Fixed.
-//  §A2  gl_PointCoord is y-down while Σ' is derived y-up, flipping the
-//       Mahalanobis cross term. Moot in this build: the instanced-quad
-//       path passes vDelta in the covariance's own y-up pixel space.
-//  §A3  The up-axis flip and the scene scale now live in sceneRoot's
-//       object matrix, not on the server. The shader's W·Σ·Wᵀ path then
-//       applies them to positions and Gaussian orientations together —
-//       which is exactly what the server-side permutation could not do,
-//       because it never touched the quaternions.
-//  §B2  Frustum clamp on the projected position before building the
-//       Jacobian, killing the exploding ellipses at frame edges.
-//  §B3  gl.POINTS replaced with instanced quads: no whole-sprite
-//       clipping when the centre leaves the viewport, no driver
-//       ALIASED_POINT_SIZE_RANGE ceiling, and the quad is fitted to the
-//       ellipse's own eigenbasis so a wider cutoff costs almost nothing.
-//  §C2  Mip-Splatting opacity compensation for the 0.3px dilation.
-//  §C3  Depth sort is requested on real camera movement, not per frame,
-//       and the worker's rejection replies clear the back-pressure flag.
-//  §3.2 No de-interleaving on load. Splat data goes straight to the GPU
-//       as a texture; dense data is bound as interleaved views.
-//  §3.5 Guarded HUD lookups, pixel ratio and viewport handled in the
-//       resize path, supersampling instead of MSAA, highp in the dense
-//       fragment shader.
+//  Rationale for the shader maths and failure handling is in docs/decisions/
+//  (ADR-0004 shader correctness, ADR-0005 failure handling, ADR-0003 wire
+//  format); the §-tags below are indexed in docs/decisions/README.md.
 //
 //  Splat data reaches the GPU as an RGBA32F texture, not as vertex
 //  attributes. The server's 16-float record is exactly 4 RGBA texels
@@ -283,7 +260,7 @@ const SORT_MOVE_FRAC = 0.005;                 // of scene radius
 if (sortWorker) {
     sortWorker.onmessage = (e) => {
         sortInFlight = false;                     // cleared for 'sorted' and 'rejected' alike
-        // Hook 5 (DIAGNOSTICS-WIRING.md): reports the round trip, and
+        // Hook 5 (see aero-debug.js): reports the round trip, and
         // msg.workerMs (added to the worker) separates algorithm time
         // from postMessage/structured-clone overhead.
         window.AeroDebug && AeroDebug.onSortComplete(e.data.workerMs);
@@ -538,7 +515,7 @@ const fragmentShaderGS = `
     // visible hard circular edge where the Gaussian was truncated.
     const float CUTOFF_SQ = 12.25;
 
-    // DIAGNOSTICS-WIRING.md §3: 0 = normal render. 1 = every placed quad
+    // aero-debug.js debug modes: 0 = normal render. 1 = every placed quad
     // painted flat magenta with no cutoff and no alpha — if the screen
     // stays empty here, geometry never reached the rasterizer and the
     // fault is upstream of shading (wrong texture data, wrong transform,
@@ -875,7 +852,7 @@ function buildSplatMesh(floatArr, meta) {
             uViewport:        { value: viewportPx.clone() },
             uScaleMultiplier: { value: debugScaleMultiplier },
             uNearCull:        { value: Math.max(sceneRadius * nearCullFraction, 0.01) },
-            uDebugMode:       { value: 0 }   // DIAGNOSTICS-WIRING.md §3
+            uDebugMode:       { value: 0 }   // aero-debug.js debug modes
         }
     });
 
@@ -1012,7 +989,7 @@ async function loadSpatialData() {
             `webgl2=${isWebGL2}, maxTextureSize=${maxTextureSize}`
         );
 
-        // Hook 2 (DIAGNOSTICS-WIRING.md): the real bytes, analyzed. Every
+        // Hook 2 (see aero-debug.js): the real bytes, analyzed. Every
         // claim the panel makes about scale encoding, opacity, quaternion
         // norms and projected size is measured here, not taken from
         // scene-meta's say-so.
@@ -1122,7 +1099,7 @@ injectModeSelector();  // built up front, so its absence isn't a load-failure si
 loadSpatialData();
 animate();
 
-// Hook 6 (DIAGNOSTICS-WIRING.md): the panel resolves most viewer bindings
+// Hook 6 (see aero-debug.js): the panel resolves most viewer bindings
 // by name (they're reachable as top-level const/let in this classic
 // script's declarative record), which covers reads. These four need
 // explicit handles: injectTestScene calls buildSplatMesh and

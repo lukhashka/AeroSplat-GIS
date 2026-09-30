@@ -140,9 +140,9 @@ aerosplat run --dataset sample` на малому семпл-датасеті (1
 > **Статус (гілка `phase-1-foundation`):** зроблено частково —
 > ✅ 1.2 валідований `RunConfig` (pydantic) + YAML/JSON + `configs/`;
 > ✅ 1.4 `ruff` (вузький набір E9/F), єдина `fix_console_encoding`, модуль `aerosplat.logging_utils`;
-> ✅ 1.5 28 CPU-тестів (config, starter, cloud_io, golden-тест осей Earth Studio) + GitHub Actions CI;
-> ⏳ 1.1 повна структура пакета, стадії як функції (зараз subprocess), `RunLayout`/`manifest.json`,
-> 1.3 інкрементальність, `mypy`/`eslint`, тести FastAPI та `TileRasterizer` vs gsplat, ADR замість коментарів-журналів.
+> ✅ 1.5 45 CPU-тестів (config, starter, pipeline, cloud_io, FastAPI, golden-тест осей Earth Studio) + GitHub Actions CI (ruff, mypy, eslint, pytest);
+> ✅ стадії як функції in-process, `RunLayout`/`manifest.json`, `--resume` (1.3); ADR у `docs/decisions/` замість коментарів-журналів;
+> ⏳ 1.1 повна структура пакета (`io/ geo/ sfm/ gs/`), тест `TileRasterizer` vs gsplat.
 
 ### 1.1 Структура пакета
 

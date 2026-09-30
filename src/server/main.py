@@ -1,29 +1,11 @@
 # ═══════════════════════════════════════════════════════════════════
 #  AeroSplat-GIS — Serving layer (FastAPI)
 #
-#  Rewritten against AeroSplat-viewer-review.md. What changed and why:
-#
-#  §A3  The server no longer rotates or rescales geometry. It only
-#       *centres* (a translation, which leaves covariance untouched) and
-#       reports the transform. The up-axis flip and the scene scale are
-#       applied in the viewer's object matrix, where the shader's
-#       W·Σ·Wᵀ path transforms positions and Gaussian orientations
-#       together. Rotating positions here while leaving the quaternions
-#       alone was silently misorienting every splat.
-#  §A4  scale/opacity are explicitly de-activated from the trainer's
-#       log/logit storage (exp / sigmoid) with post-conditions checked
-#       loudly at load time instead of assumed.
-#  §B1  Non-finite rows are filtered consistently across every attribute
-#       before anything computes a statistic over them.
-#  §B4  Dense and splat modes now share one scene frame (one centre, one
-#       scale), so the two representations are directly comparable — and
-#       so TRIPS output later slots into the same frame.
-#  §C4  Centre/extent use median + percentile, not mean + std, because
-#       COLMAP clouds reliably contain a few wildly distant strays.
-#  §3.3 Added /api/v1/scene-meta, ETag + Cache-Control, and a wire
-#       format that the browser can hand straight to the GPU.
-#  §3.4 Lazy per-(dataset, mode, step) loading, dataset as a query
-#       parameter, real `step` sampling, POST /api/v1/reload.
+#  Design rationale lives in docs/decisions/ (ADR-0001 scene frame and
+#  transform split, ADR-0002 activation contract, ADR-0003 wire format).
+#  In short: the server only *centres*; the up-axis flip and scene scale
+#  are applied by the viewer (scene-meta reports them), and dense/splat
+#  share one scene frame.
 #
 #  Wire format — splat (stride 16 floats, "SPLAT16"):
 #      [ 0: 3] xyz        (centred, metric units)
@@ -133,34 +115,12 @@ def _warn_dataset_path_collisions() -> None:
 # imports the app directly rather than running this file as a script.
 _warn_dataset_path_collisions()
 
-# ── Trainer contract (review §A4, revised in review-2 §S1) ─────────
-# Whether the .pt stores raw training parameters (scale in log-space,
-# opacity as a logit) or already-activated values turned out to VARY
-# between trainer outputs. The original fix detected this from the data
-# itself:
-#
-#   scale:   log-space scales for sub-unit Gaussians are NEGATIVE.
-#            A tensor with no negative entries is "already metric".
-#   opacity: logits range well outside [0,1]; activated opacity cannot.
-#
-# This heuristic silently fails in exactly the case its own comment
-# used to warn about: COLMAP's unit scale is arbitrary, not metric. A
-# scene whose extent happens to be large in COLMAP units can have every
-# Gaussian's log-scale come out POSITIVE even though the file is
-# genuinely log-space — the heuristic then concludes "already metric",
-# skips exp(), and every splat renders ~100x too small. No crash, no
-# warning: alpha compensation quietly drives opacity toward zero and the
-# fragment shader discards nearly the whole scene. Dark screen, "success"
-# in the log.
-#
-# So the contract is now PRODUCER-DECLARED, not guessed: _activate_splat
-# looks for an "activations" key written by the trainer first, and only
-# falls back to the heuristic — loudly — if the file predates that key.
-# See gs_trainer_v3.py: add
-#     "activations": {"scale_is_log": True, "opacity_is_logit": True}
-# to the dict passed to torch.save().
-#
-# Force an override only to defeat a specific known-bad file; leave both
+# ── Trainer contract (§A4/§S1, see ADR-0002) ───────────────────────
+# The .pt declares an "activations" key (written by gs_trainer_v3._save);
+# _activate_splat trusts it, and falls back LOUDLY to a min/max heuristic
+# only for older files. The heuristic is a guess that fails silently on
+# large-extent scenes (dark screen, "success" in the log), so use the
+# overrides below only to defeat a specific known-bad file; leave both
 # None to use file-contract-then-heuristic.
 SPLAT_ACTIVATION_OVERRIDES = {
     "scale_is_log": None,
@@ -201,13 +161,13 @@ SPLAT_LAYOUT = [
 # *and* covariances at once.
 UP_AXIS_ROTATION = {"axis": "x", "degrees": 90.0}
 
-# review-2 §4: COLMAP units are arbitrary up to a similarity transform —
-# an "extent" of 3.7 doesn't mean 3.7 of anything until it's tied to a
-# real-world scale. PIPELINE.md §2.3 lists a per-dataset geo file
-# (`data/<dataset>_geo.txt`) that should carry exactly this. This
-# resolver looks for it and reports what it found; it does NOT invent a
-# scale by guessing at the file's format, because a wrong "confident"
-# number is worse for a measurement tool than an honest None.
+# review-2 §4 (ADR-0001): COLMAP units are arbitrary up to a similarity
+# transform — an "extent" of 3.7 doesn't mean 3.7 of anything until it's
+# tied to a real-world scale. A per-dataset geo file
+# (`data/<dataset_id>_geo.txt`) should carry exactly this. This resolver
+# looks for it and reports what it found; it does NOT invent a scale by
+# guessing at the file's format, because a wrong "confident" number is
+# worse for a measurement tool than an honest None.
 GEO_FILE_TEMPLATE = os.path.join(project_dir, "data", "{dataset_id}_geo.txt")
 
 
@@ -218,8 +178,7 @@ def load_metric_scale(dataset: str) -> Optional[Dict[str, object]]:
     Returns None if no geo file is found. If a file IS found, returns
     what's known about it without parsing a format that hasn't been
     confirmed yet — replace the body of the `if path exists` branch once
-    dataset_v6.json / *_geo.txt's real schema is settled (PIPELINE.md
-    §7.3 flags this as the highest-value unexplored input in the repo).
+    dataset_v6.json / *_geo.txt's real schema is settled (the highest-value unexplored input in the repo, see ADR-0001).
     """
     # dataset_v6_geo.txt is named after the RUN (dataset_v6), not the
     # logical dataset key ("zaporizhzhia") used elsewhere in this file —
