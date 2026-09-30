@@ -1,6 +1,6 @@
 import pytest
 
-import starter
+from aerosplat import starter
 
 
 def _args(argv):

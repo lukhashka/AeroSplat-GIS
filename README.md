@@ -139,15 +139,16 @@ Dense Point Cloud       3D Gaussian Splatting
 
     AeroSplat-GIS/
     ├── src/
-    │   ├── starter.py            # оркестратор (`aerosplat run`)
-    │   ├── doctor.py             # діагностика (`aerosplat doctor`)
-    │   ├── aerosplat/            # пакет: config, paths, logging_utils
-    │   │   ├── pipeline/         # стадії, RunLayout, manifest.json
-    │   │   ├── geo/              # earthstudio_to_colmap, exif_injector
-    │   │   ├── sfm/              # sfm_runner, dense_runner
-    │   │   ├── io/               # cloud_io, ply_parser, colmap_parser
-    │   │   └── gs/               # trainer (3DGS)
-    │   └── server/main.py        # FastAPI (`aerosplat serve`)
+    │   └── aerosplat/            # пакет
+    │       ├── starter.py        # оркестратор (`aerosplat run`)
+    │       ├── doctor.py         # діагностика (`aerosplat doctor`)
+    │       ├── server/main.py    # FastAPI (`aerosplat serve`)
+    │       ├── config.py, paths.py, logging_utils.py
+    │       ├── pipeline/         # стадії, RunLayout, manifest.json
+    │       ├── geo/              # earthstudio_to_colmap, exif_injector
+    │       ├── sfm/              # sfm_runner, dense_runner
+    │       ├── io/               # cloud_io, ply_parser, colmap_parser
+    │       └── gs/               # trainer (3DGS)
     ├── web/                      # власний WebGL-в'ювер
     ├── tools/                    # дослідницькі/діагностичні скрипти
     ├── legacy/                   # застарілий код (лише для історії)
@@ -215,7 +216,7 @@ synthetic-режим. Тренер без `--self-test` вимагає явні 
 #  Launch Visualization Server
 
 ``` bash
-aerosplat serve   # або: python src/server/main.py
+aerosplat serve   # або: python -m aerosplat.server.main
 ```
 
 Open:

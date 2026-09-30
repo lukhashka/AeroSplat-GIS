@@ -27,7 +27,7 @@ flowchart TD
         CSV[flight_telemetry.csv<br/>опційно]
     end
 
-    subgraph ORCH["src/starter.py — оркестратор (in-process)"]
+    subgraph ORCH["aerosplat/starter.py — оркестратор (in-process)"]
         direction TB
         G["geo<br/>earthstudio_to_colmap.py"]
         E["exif<br/>geo/exif_injector.py"]
@@ -50,7 +50,7 @@ flowchart TD
     S -->|пози камер| T
     T -->|data/<ds>_splat.pt| SRV
 
-    subgraph SRV["src/server/main.py — FastAPI"]
+    subgraph SRV["aerosplat/server/main.py — FastAPI"]
         API["/api/v1/scene-meta<br/>/api/v1/spatial-chunk<br/>/api/v1/status<br/>/api/v1/reload"]
     end
 
@@ -62,14 +62,14 @@ flowchart TD
         DBG[aero-debug.js — діагностика F9]
     end
 
-    DOC["src/doctor.py — read-only діагностика всіх стадій"] -.-> ORCH
+    DOC["aerosplat/doctor.py — read-only діагностика всіх стадій"] -.-> ORCH
 ```
 
 ---
 
 ## 3. Шари та модулі
 
-### 3.1 Оркестрація — `src/starter.py`
+### 3.1 Оркестрація — `aerosplat/starter.py`
 
 * Єдина точка входу. Стадії: `geo → exif → sfm → dense → parse → train`.
 * Стадії — реєстр у `aerosplat/pipeline/stages.py`: кожна будує argv і викликає
@@ -130,7 +130,7 @@ flowchart TD
 `trips_trainer.py` (TRIPS без нейро-реконструктора), `optimization/gs_trainer.py`
 (v0.1, «рандомний GT»). У пайплайні не використовуються.
 
-### 3.6 Сервер — `src/server/main.py` (FastAPI)
+### 3.6 Сервер — `aerosplat/server/main.py` (FastAPI)
 
 * `DATASET_PATHS` — жорстко прописаний реєстр датасетів
   (`zaporizhzhia`, `dataset_v6`, `mill19` → **усі три вказують на ті самі файли**).
@@ -167,7 +167,7 @@ flowchart TD
 
 ### 3.8 Діагностика
 
-* `src/doctor.py` — read-only перевірка кожної стадії (кадри, інтринсики,
+* `aerosplat/doctor.py` — read-only перевірка кожної стадії (кадри, інтринсики,
   EXIF, БД COLMAP, sparse, dense, `.pt`).
 * `compare_poses.py`, `diagnose_pose_axis.py`, `validate_convention.py`,
   `inspector_matches.py`, `checker/checker_ply.py` — разові дослідницькі скрипти
@@ -227,9 +227,9 @@ viewer sceneRoot            = Rx(+90°) · (100 / extent)   → Y-up, радіу
 ```
 AeroSplat-GIS/
 ├── src/
-│   ├── starter.py                 # оркестратор
-│   ├── doctor.py                  # діагностика
 │   ├── aerosplat/                 # пакет
+│   │   ├── starter.py, doctor.py  # оркестратор (`aerosplat run`), діагностика
+│   │   ├── server/main.py         # FastAPI (активний; mainG.py — легасі)
 │   │   ├── config.py, paths.py, logging_utils.py
 │   │   ├── pipeline/              # stages, runner, layout (RunLayout), manifest
 │   │   ├── geo/                   # earthstudio_to_colmap.py, exif_injector.py
@@ -238,7 +238,6 @@ AeroSplat-GIS/
 │   │   └── gs/trainer.py          # АКТИВНИЙ тренер (був gs_trainer_v3)
 │   │                              # (gs_trainer_v2, trips_trainer, colmap_loader — у legacy/)
 │   ├── optimization/gs_trainer.py, gs_compressor.py               # легасі v0.1
-│   ├── server/main.py (активний), mainG.py (легасі)
 │   ├── scripts/auto_photo.py      # легасі
 │   ├── checker/checker_ply.py     # разовий скрипт
 │   └── cloud_src_project.zip      # архів коду (untracked)

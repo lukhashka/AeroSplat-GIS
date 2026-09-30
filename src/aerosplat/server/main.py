@@ -43,6 +43,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
+from aerosplat.paths import PROJECT_DIR
 
 
 _fix_console_encoding()
@@ -61,7 +62,7 @@ app.add_middleware(
 )
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+project_dir = str(PROJECT_DIR)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -84,8 +85,8 @@ DATASET_PATHS: Dict[str, Dict[str, str]] = {
         "cloud": os.path.join(project_dir, "data", "dataset_v6_dense.pt"),
         "splat": os.path.join(project_dir, "data", "dataset_v6_splat.pt"),
     },
-    # Matches starter.py's Paths naming convention (data/<dataset>_dense.pt,
-    # data/<dataset>_splat.pt) directly, so a starter.py run for this
+    # Matches RunLayout's naming convention (data/<dataset>_dense.pt,
+    # data/<dataset>_splat.pt) directly, so an `aerosplat run` for this
     # dataset is reachable as ?dataset=dataset_v6 without editing this file
     # again or going through the unrelated 'mill19' placeholder below.
     "dataset_v6": {

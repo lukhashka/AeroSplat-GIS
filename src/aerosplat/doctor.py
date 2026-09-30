@@ -6,10 +6,10 @@ doctor.py — діагностика даних пайплайну AeroSplat-GIS
 Нічого не запускає і нічого не змінює. Читає те, що вже є на диску,
 і каже, де саме пайплайн зламався (або зламається).
 
-    python src/doctor.py
-    python src/doctor.py --dataset dataset_v6
-    python src/doctor.py --stage sparse      # лише один розділ
-    python src/doctor.py --verbose           # + список кадрів/пар
+    aerosplat doctor
+    aerosplat doctor --dataset dataset_v6
+    aerosplat doctor --stage sparse      # лише один розділ
+    aerosplat doctor --verbose           # + список кадрів/пар
 
 Перевіряє:
   1. footage    — скільки кадрів, роздільність, чи однакова, реальний FOV
@@ -30,9 +30,7 @@ import struct
 from collections import Counter
 from pathlib import Path
 
-SRC_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = SRC_DIR.parent
-DATA_DIR = PROJECT_DIR / "data"
+from aerosplat.paths import DATA_DIR, PROJECT_DIR
 
 OK, WARN, BAD, INFO = "✅", "⚠️ ", "❌", "  "
 _problems: list[str] = []
@@ -124,7 +122,7 @@ def check_intrinsics(info: dict, cfg_w, cfg_h, cfg_fov):
 
     w, h = info["width"], info["height"]
     say(INFO, f"реальні кадри:  {w}×{h}")
-    say(INFO, f"конфіг starter: {cfg_w}×{cfg_h}, fov={cfg_fov}°")
+    say(INFO, f"конфіг RunConfig: {cfg_w}×{cfg_h}, fov={cfg_fov}°")
 
     if (w, h) != (cfg_w, cfg_h):
         bad(f"НЕЗБІГ РОЗДІЛЬНОСТІ: кадри {w}×{h}, а в конфізі {cfg_w}×{cfg_h}")
@@ -497,7 +495,7 @@ def main(argv=None):
                     choices=["all", "footage", "intrinsics", "exif",
                              "database", "sparse", "dense", "pt"])
     ap.add_argument("--image-width", type=int, default=1920,
-                    help="що зараз стоїть у CONFIG starter.py")
+                    help="що зараз стоїть у RunConfig (aerosplat/config.py)")
     ap.add_argument("--image-height", type=int, default=1080)
     ap.add_argument("--fov-deg", type=float, default=60.0)
     ap.add_argument("--verbose", action="store_true")

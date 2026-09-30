@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-starter.py — єдина точка входу в пайплайн AeroSplat-GIS.
+aerosplat.starter — єдина точка входу в пайплайн AeroSplat-GIS.
 
 footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat
 
-Кладеться в src/; стадії — у пакеті aerosplat (io/, geo/, sfm/, gs/).
-
 Приклади:
-    python src/starter.py                          # весь пайплайн, дефолтний датасет
-    python src/starter.py --dataset dataset_v6
-    python src/starter.py --from sfm               # почати з SfM (кадри вже геотеговані)
-    python src/starter.py --only train
-    python src/starter.py --stages exif,sfm,dense
-    python src/starter.py --dry-run                # тільки показати команди
-    python src/starter.py --config my_run.json     # усі параметри з файлу
+    aerosplat run                          # весь пайплайн, дефолтний датасет
+    aerosplat run --dataset dataset_v6
+    aerosplat run --from sfm               # почати з SfM (кадри вже геотеговані)
+    aerosplat run --only train
+    aerosplat run --stages exif,sfm,dense
+    aerosplat run --dry-run                # тільки показати команди
+    aerosplat run --config my_run.json     # усі параметри з файлу
 """
 
 from __future__ import annotations
@@ -30,7 +28,6 @@ from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import DATA_DIR, RunLayout, abs_path
 from aerosplat.pipeline.runner import StageError, preflight, run_stages
 
-SRC_DIR = Path(__file__).resolve().parent
 STAGES = ["geo", "exif", "sfm", "dense", "parse", "train"]
 
 # Параметри: src/aerosplat/config.py (RunConfig, валідація pydantic).
@@ -175,7 +172,7 @@ def main(argv=None) -> int:
         log.info(f"   хмара: {layout.cloud_in}")
         log.info(f"   splat: {layout.splat_pt}")
         log.info(f"   журнал: {layout.manifest_path}")
-        log.info(f"   далі:  AEROSPLAT_DATASET={layout.dataset} python src/server/main.py")
+        log.info(f"   далі:  AEROSPLAT_DATASET={layout.dataset} aerosplat serve")
     return 0
 
 
@@ -188,12 +185,12 @@ def cli() -> int:
     if cmd == "run":
         return main(rest)
     if cmd == "doctor":
-        import doctor
+        from aerosplat import doctor
         return doctor.main(rest) or 0
     if cmd == "serve":
         import runpy
-        sys.argv = [str(SRC_DIR / "server" / "main.py"), *rest]
-        runpy.run_path(str(SRC_DIR / "server" / "main.py"), run_name="__main__")
+        sys.argv = ["aerosplat serve", *rest]
+        runpy.run_module("aerosplat.server.main", run_name="__main__")
         return 0
     raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve")
 

@@ -23,13 +23,12 @@ train = ["torch>=2.2", "torchvision>=0.17"]
 dev = ["pytest", "ruff", "mypy", "httpx"]
 
 [project.scripts]
-aerosplat = "starter:cli"
+aerosplat = "aerosplat.starter:cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["starter", "doctor"]
 packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
-            "aerosplat.sfm", "aerosplat.gs"]
+            "aerosplat.sfm", "aerosplat.gs", "aerosplat.server"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", default=None,
                    help="Dataset name; fills in the conventional input/output "
                         "paths. Keep this consistent with AEROSPLAT_DATASET "
-                        "in src/server/main.py.")
+                        "in aerosplat/server/main.py.")
     p.add_argument("--input", type=Path, default=None,
                    help="Path to points3D.bin")
     p.add_argument("--output", type=Path, default=None,

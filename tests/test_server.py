@@ -1,8 +1,8 @@
-"""API tests for src/server/main.py on tiny synthetic .pt files (CPU only)."""
+"""API tests for aerosplat/server/main.py on tiny synthetic .pt files (CPU only)."""
 
-import importlib.util
-import struct
+import importlib
 import sys
+import struct
 
 import pytest
 import torch
@@ -10,17 +10,12 @@ import torch
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from conftest import ROOT  # noqa: E402
-
 N = 200
 
 
 def _load_server():
-    spec = importlib.util.spec_from_file_location("aerosplat_server", ROOT / "src/server/main.py")
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod  # dataclasses resolve string annotations via sys.modules
-    spec.loader.exec_module(mod)
-    return mod
+    sys.modules.pop("aerosplat.server.main", None)  # fresh module state per test
+    return importlib.import_module("aerosplat.server.main")
 
 
 @pytest.fixture
