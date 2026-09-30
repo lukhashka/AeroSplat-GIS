@@ -51,9 +51,8 @@
     function look(name) {
         if (name in overrides) return overrides[name]();
         try {
-            // eslint-disable-next-line no-eval
             return (0, eval)(name);
-        } catch (e) {
+        } catch {
             return undefined;
         }
     }
@@ -114,7 +113,7 @@
         console[kind] = function (...args) {
             const text = args.map(a => {
                 if (a instanceof Error) return a.message;
-                if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+                if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
                 return String(a);
             }).join(' ');
             state.logs.push({ t: performance.now(), level: kind, msg: text.slice(0, 2000) });

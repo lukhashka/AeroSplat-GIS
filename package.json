@@ -1,0 +1,14 @@
+{
+  "name": "aerosplat-web",
+  "private": true,
+  "type": "module",
+  "description": "Lint tooling for the web/ viewer (no build step; scripts are classic <script> files).",
+  "scripts": {
+    "lint": "eslint web"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "globals": "^15"
+  }
+}

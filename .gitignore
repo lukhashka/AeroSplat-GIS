@@ -30,3 +30,6 @@ runs/
 
 # Third-party CUDA rasterizer (Inria, non-commercial licence) — built locally
 diff-gaussian-rasterization/
+
+# Node
+node_modules/
