@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 SCHEMA = 1
 
@@ -66,7 +66,7 @@ class Manifest:
         self.save()
 
     def record(self, name: str, *, status: str, fingerprint: str, seconds: float = 0.0,
-               inputs: list[Path] = (), outputs: list[Path] = (),
+               inputs: Sequence[Path] = (), outputs: Sequence[Path] = (),
                error: str | None = None) -> None:
         self.data["stages"][name] = {
             "status": status,

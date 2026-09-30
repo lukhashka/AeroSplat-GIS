@@ -54,7 +54,7 @@ def run(cmd, step_name):
     return dt
 
 
-_HELP_CACHE = {}
+_HELP_CACHE: dict = {}
 
 
 def colmap_help(colmap_cmd, subcommand):

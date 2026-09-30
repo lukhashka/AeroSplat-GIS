@@ -63,7 +63,7 @@ def read_points3d_bin(path: Path) -> Points3D:
         raise ValueError(f"{path} declares 0 points — SfM likely failed")
 
     # Pass 1: walk the variable-length records, recording where each starts.
-    offsets = []
+    offsets: list[int] = []
     o = 8
     total = len(buf)
     for _ in range(n):

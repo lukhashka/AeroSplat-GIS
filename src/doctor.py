@@ -61,7 +61,7 @@ def header(title):
 # ══════════════════════════════════════════════════════════════════════
 def check_footage(footage_dir: Path, verbose=False) -> dict:
     header(f"1. FOOTAGE  —  {footage_dir}")
-    info = {}
+    info: dict = {}
     if not footage_dir.is_dir():
         bad(f"теки не існує: {footage_dir}")
         return info
@@ -85,7 +85,7 @@ def check_footage(footage_dir: Path, verbose=False) -> dict:
         warn("Pillow не встановлено — пропускаю аналіз зображень")
         return info
 
-    sizes = Counter()
+    sizes: Counter = Counter()
     total_bytes = 0
     for p in frames:
         try:
@@ -304,7 +304,7 @@ def check_database(db_path: Path, verbose=False):
                     f"вони випадуть із реконструкції")
 
             # чи є ланцюг (потрібно для track length > 2)
-            deg = Counter()
+            deg: Counter = Counter()
             for pair_id, _ in rows:
                 deg[pair_id // 2147483647] += 1
                 deg[pair_id % 2147483647] += 1

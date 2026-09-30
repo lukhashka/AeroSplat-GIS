@@ -541,7 +541,7 @@ def scene_frame(dataset: str) -> SceneFrame:
 
     center, extent = robust_center_and_extent(xyz)
     frame = SceneFrame(
-        center=tuple(float(c) for c in center),
+        center=(float(center[0]), float(center[1]), float(center[2])),
         extent=extent,
         scene_scale=TARGET_SCENE_RADIUS / extent,
         source=os.path.basename(path),

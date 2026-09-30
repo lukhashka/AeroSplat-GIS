@@ -69,7 +69,7 @@ import time
 import struct
 import argparse
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -315,11 +315,11 @@ def load_colmap_cameras(sparse_dir: str) -> List[Camera]:
             p = line.split()
             qvec = torch.tensor([float(v) for v in p[1:5]], dtype=torch.float32)
             tvec = torch.tensor([float(v) for v in p[5:8]], dtype=torch.float32)
-            cam_id, name = int(p[8]), " ".join(p[9:])
+            cam_id, img_name = int(p[8]), " ".join(p[9:])
             model, W, H, params = intrinsics[cam_id]
             fx, fy, cx, cy = _intrinsics_from_params(model, params)
             R = quaternion_to_rotation_matrix(qvec.unsqueeze(0))[0]
-            cams.append(Camera(R, tvec, fx, fy, cx, cy, W, H, name))
+            cams.append(Camera(R, tvec, fx, fy, cx, cy, W, H, img_name))
             i += 2      # наступний рядок — points2D, пропускаємо явно
     else:
         raise FileNotFoundError(f"Не знайдено images.bin/txt у {sparse_dir}")
@@ -362,17 +362,17 @@ def _decode_and_scale(path: str, max_res: int) -> Tuple[Tensor, float]:
     паралельно з ThreadPoolExecutor.
     """
     from PIL import Image
-    img = Image.open(path)
-    native_w, native_h = img.size
+    src = Image.open(path)
+    native_w, native_h = src.size
     scale = min(1.0, max_res / max(native_w, native_h))
     target_w = max(1, int(native_w * scale))
     target_h = max(1, int(native_h * scale))
 
     if scale < 1.0:
-        img.draft("RGB", (target_w, target_h))
-    img = img.convert("RGB")
+        src.draft("RGB", (target_w, target_h))
+    img = src.convert("RGB")
     if scale < 1.0:
-        img = img.resize((target_w, target_h), Image.LANCZOS)
+        img = img.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
     arr = torch.frombuffer(img.tobytes(), dtype=torch.uint8).clone()
     arr = arr.view(img.size[1], img.size[0], 3).float() / 255.0
@@ -1252,6 +1252,7 @@ def train(
     densifier = GaussianDensifier(model, grad_threshold=grad_threshold)
 
     # ── 4. Растерізатор ─────────────────────────────────────────────
+    rasterizer: Union[CudaRasterizer, TileRasterizer]
     if rasterizer_kind == "auto":
         try:
             rasterizer = CudaRasterizer()
@@ -1295,8 +1296,9 @@ def train(
         lr_xyz = update_xyz_lr(optimizer, iteration, num_iterations, extent)
 
         pick = int(torch.randint(len(cams), (1,)).item())
-        cam = (cams_warm[pick] if (warmup_iters and iteration <= warmup_iters)
+        cam = (cams_warm[pick] if (cams_warm is not None and iteration <= warmup_iters)
                else cams[pick])
+        assert cam.image is not None
 
         gt = cam.image.to(device, non_blocking=True)
 
@@ -1331,11 +1333,11 @@ def train(
         # ── Логування ───────────────────────────────────────────────
         if iteration % 50 == 0 or iteration == 1:
             with torch.no_grad():
-                p = psnr(rendered, gt)
+                psnr_val = psnr(rendered, gt)
             per_it = (time.time() - t_loop) / iteration
             eta = per_it * (num_iterations - iteration)
             log(f"  [{iteration:>6}/{num_iterations}] loss {loss.item():.4f} | "
-                f"PSNR {p:5.2f} | N {model.n_gaussians:,} | "
+                f"PSNR {psnr_val:5.2f} | N {model.n_gaussians:,} | "
                 f"lr_xyz {lr_xyz:.2e} | {per_it*1000:6.1f} ms/it | "
                 f"ETA {eta/60:.1f} min")
 
@@ -1363,7 +1365,7 @@ def _save(model: GaussianModel, path: str):
     """
     with torch.no_grad():
         p = model.get_params(with_cov=False)
-        scene = {k: v.detach().cpu() for k, v in p.items()}
+        scene: Dict[str, Any] = {k: v.detach().cpu() for k, v in p.items()}
     scene["activations"] = {"scale_is_log": False, "opacity_is_logit": False}
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     torch.save(scene, path)

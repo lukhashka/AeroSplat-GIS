@@ -29,7 +29,7 @@ class _StdoutHandler(logging.StreamHandler):
         super().__init__(sys.stdout)
 
     @property
-    def stream(self):  # type: ignore[override]
+    def stream(self):
         return sys.stdout
 
     @stream.setter

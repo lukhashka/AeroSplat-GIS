@@ -20,7 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 # torch must match your CUDA build — see requirements.txt / README for the index URL.
 train = ["torch>=2.2", "torchvision>=0.17"]
-dev = ["pytest", "ruff"]
+dev = ["pytest", "ruff", "mypy", "httpx"]
 
 [project.scripts]
 aerosplat = "starter:cli"
@@ -41,3 +41,13 @@ extend-exclude = ["legacy", "diff-gaussian-rasterization", "venv", "data"]
 [tool.ruff.lint]
 # Start narrow (real errors only); widen gradually as legacy modules are cleaned up.
 select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src:src/reconstruction:src/telemetry"
+explicit_package_bases = true
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+exclude = ["legacy/", "venv/", "diff-gaussian-rasterization/", "data/", "tools/", "tests/"]
