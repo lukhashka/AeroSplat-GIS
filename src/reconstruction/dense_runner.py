@@ -5,15 +5,7 @@ import sys
 import time
 
 
-def _fix_console_encoding():
-    """Avoid UnicodeEncodeError on Windows consoles using cp1251/cp866 locales."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 def _run(cmd, step_label):

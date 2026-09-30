@@ -64,10 +64,8 @@
 """
 
 import os
-import sys
 import math
 import time
-import json
 import struct
 import argparse
 from dataclasses import dataclass
@@ -1375,19 +1373,7 @@ def _save(model: GaussianModel, path: str):
 #  ТОЧКА ВХОДУ
 # ═══════════════════════════════════════════════════════════════════
 
-def _fix_console_encoding() -> None:
-    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
-    (cp1252 etc) — this trainer logs almost entirely in Cyrillic + emoji
-    (log(), the theory header, per-iteration progress), so this is the
-    single most important place in the whole pipeline to have this fix:
-    it's the longest-running stage, and a crash here loses the run."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 if __name__ == "__main__":

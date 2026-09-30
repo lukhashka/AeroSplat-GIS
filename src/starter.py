@@ -20,12 +20,13 @@ footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from aerosplat.config import RunConfig, build_config
 
 # --------------------------------------------------------------------------
 # Layout
@@ -37,106 +38,10 @@ DATA_DIR = PROJECT_DIR / "data"
 STAGES = ["geo", "exif", "sfm", "dense", "parse", "train"]
 
 # --------------------------------------------------------------------------
-# ГОЛОВНИЙ БЛОК ПАРАМЕТРІВ — міняй тут, або через CLI / --config
+# Параметри: src/aerosplat/config.py (RunConfig, валідація pydantic).
+# Перекриття: --config run.yaml|json, прапорці CLI, --set KEY=VALUE.
 # --------------------------------------------------------------------------
-CONFIG: dict = {
-    "dataset": "dataset_v6",
-
-    # ── джерело кадрів ────────────────────────────────────────────────────
-    # відносно PROJECT_DIR, або абсолютний шлях
-    "footage_dir": "data/dataset_v6/footage",
-
-    # ── джерело камер: "synthetic" (старий орбітальний EXIF-інжектор,
-    #    auto_photo.py-стиль) чи "earthstudio_json" (реальний рендер +
-    #    Earth Studio 3D-tracking-data export -- реальні позиції/повороти,
-    #    що йдуть в стадію "geo" замість синтетичного EXIF) ─────────────────
-    # "auto" → "earthstudio_json", якщо існує data/<dataset>/<dataset>.json
-    # (або заданий json_path), інакше "synthetic". "synthetic" — лише явно.
-    "camera_source": "auto",
-    # Шлях до Earth Studio JSON; None → data/<dataset>/<dataset>.json
-    "json_path": None,
-    # Реальні пози COLMAP: point_triangulator + bundle_adjuster замість
-    # incremental mapper (тільки якщо camera_source=="earthstudio_json")
-    "known_poses": True,
-    "refine_known_poses": True,
-
-    # ── EXIF / телеметрія (тільки camera_source=="synthetic") ──────────────
-    # Якщо є CSV з телеметрією (lat,lon,alt[,heading][,filename]) — вкажи його.
-    # Якщо None — GPS синтезується по колу навколо (lat, lon).
-    "telemetry_csv": None,
-    "lat": 47.0052,
-    "lon": 34.9164,
-    "altitude": 441.0,      # м над рівнем моря
-    "radius": 250.0,        # радіус орбіти, м
-    "arc": 360.0,           # градусів дуги
-    "start_bearing": 0.0,
-    "counter_clockwise": False,
-    "hfov": None,           # градуси; якщо задано → пишеться FocalLength35mm
-    "camera_make": "GoogleEarthStudio",
-    "camera_model": "OrbitVirtualCam",
-    "colmap_geo": True,     # писати geo-registration txt поруч
-
-    # ── SfM (sfm_runner.py) ───────────────────────────────────────────────
-    "fresh": True,          # чистий прогін (видалити старий colmap_output_*)
-    "matcher": "sequential",  # exhaustive | sequential | spatial
-    "seq_overlap": 10,
-    "vocab_tree": None,
-    "spatial_neighbors": 30,
-    "spatial_max_distance": 200.0,
-    "mapper": "colmap",     # colmap | glomap
-    "sfm_max_image_size": 1600,
-    # Фокус заморожується в BA лише якщо він справді відомий (--set known_intrinsics=true
-    # разом з правильним fov_deg); хибне значення псує всю реконструкцію.
-    "known_intrinsics": False,
-    "image_width": 1920,
-    "image_height": 1080,
-    "fov_deg": 60.0,
-
-    # ── Dense MVS (dense_runner.py) ───────────────────────────────────────
-    "gpu_index": "0",
-    "dense_max_image_size": 2000,
-    "window_step": 2,
-    "num_samples": 10,
-    "num_iterations": 3,
-    "cache_size": 6,
-    "min_num_pixels": 8,
-    "max_reproj_error": 1.5,
-    "skip_undistort": False,
-    "skip_stereo": False,
-
-    # ── Парсинг хмари в .pt ───────────────────────────────────────────────
-    # "dense" → ply_parser.py (fused.ply, MVS)
-    # "sparse" → colmap_parser.py (points3D.bin, SfM)
-    "cloud_source": "dense",
-    "mad_k": 0.0,           # >0 → відкидати викиди за MAD
-    "max_points": None,     # прорідити хмару
-    "recenter": False,
-    "cloud_seed": 0,
-    "max_error": None,      # тільки для sparse
-    "min_track": None,      # тільки для sparse
-
-    # ── 3DGS (gs_trainer_v3.py) ───────────────────────────────────────────
-    "iterations": 5500,
-    "rasterizer": "auto",   # auto | cuda | torch
-    "max_res": 1024,
-    "max_gaussians": 2_000_000,
-    "init_headroom": 0.7,
-    "init_scale": None,
-    "densify_from": 500,
-    "densify_until_frac": 0.5,
-    "densify_interval": 100,
-    "opacity_reset": 3000,
-    "grad_threshold": 0.0002,
-    "chunk": 64,
-    "raster_checkpoint": False,
-    "warmup_iters": 0,
-    "warmup_scale": 0.25,
-    "save_every": 0,
-    "train_seed": 0,
-
-    # ── бінарники ─────────────────────────────────────────────────────────
-    "colmap_bin": "colmap",
-}
+CONFIG: dict = RunConfig().to_dict()
 
 
 # --------------------------------------------------------------------------
@@ -501,23 +406,32 @@ def _coerce(text: str):
 
 
 def resolve_config(args) -> dict:
-    cfg = dict(CONFIG)
-    if args.config:
-        cfg.update(json.loads(Path(args.config).read_text(encoding="utf-8")))
+    overrides: dict = {}
     for key in ("dataset", "camera_source", "footage_dir", "telemetry_csv", "lat", "lon",
                 "altitude", "radius", "cloud_source", "iterations",
                 "max_gaussians", "rasterizer", "colmap_bin"):
         val = getattr(args, key, None)
         if val is not None:
-            cfg[key] = val
+            overrides[key] = val
     for item in args.set:
         if "=" not in item:
             raise SystemExit(f"--set очікує KEY=VALUE, отримано: {item}")
         k, v = item.split("=", 1)
-        if k not in cfg:
-            raise SystemExit(f"Невідомий ключ CONFIG: {k}")
-        cfg[k] = _coerce(v)
-    return cfg
+        if k not in RunConfig.model_fields:
+            raise SystemExit(f"Невідомий ключ конфігу: {k}")
+        overrides[k] = _coerce(v)
+    # _coerce("none") -> None is a meaningful override (Optional fields), so apply
+    # --set values after the None-filtering done in build_config.
+    none_keys = [k for k, v in overrides.items() if v is None]
+    try:
+        cfg = build_config(args.config, {k: v for k, v in overrides.items() if v is not None})
+        if none_keys:
+            data = cfg.to_dict()
+            data.update({k: None for k in none_keys})
+            cfg = RunConfig(**data)
+    except Exception as e:  # pydantic.ValidationError / bad file
+        raise SystemExit(f"❌ Невалідний конфіг: {e}")
+    return cfg.to_dict()
 
 
 def resolve_stages(args) -> list:
@@ -592,17 +506,7 @@ def cli() -> int:
     raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve")
 
 
-def _fix_console_encoding() -> None:
-    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
-    (cp1252 etc). This script prints box-drawing/emoji from the very first
-    preflight() line onward."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 if __name__ == "__main__":

@@ -74,6 +74,10 @@ def read_points3d_bin(path: Path) -> Points3D:
         offsets.append(o)
         track_len = int.from_bytes(buf[o + 43:o + 51], "little")
         o += _P3D_FIXED + track_len * 8
+    if o > total:
+        raise ValueError(
+            f"{path} is truncated: the last record's track list runs "
+            f"{o - total} bytes past the end of the file")
     if o != total:
         # Not fatal, but it means the layout assumption drifted somewhere.
         print(f"  warning: {total - o:+d} trailing bytes after the last record")

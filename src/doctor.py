@@ -23,12 +23,10 @@ doctor.py — діагностика даних пайплайну AeroSplat-GIS
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sqlite3
 import struct
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -389,7 +387,7 @@ def check_sparse(sparse_dir: Path, n_input_images: int | None):
             bad("  (fusion потребує підтвердження точки з ≥3 ракурсів)")
         if tracks:
             c = Counter(tracks)
-            say(INFO, f"  розподіл треків: "
+            say(INFO, "  розподіл треків: "
                       + "  ".join(f"{k}:{c[k]}" for k in sorted(c)[:6]))
 
 

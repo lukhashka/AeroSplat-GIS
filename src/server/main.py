@@ -48,7 +48,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 import threading
 import time
 from collections import OrderedDict
@@ -61,20 +60,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 
-def _fix_console_encoding() -> None:
-    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
-    (cp1252 etc). This module prints emoji (⚠️/✅/📐/...) starting at import
-    time (_warn_dataset_path_collisions below runs unconditionally, not just
-    under __main__ — see its own comment), so this has to run before that,
-    not be gated behind `if __name__ == "__main__"` the way a plain script
-    could get away with."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 _fix_console_encoding()

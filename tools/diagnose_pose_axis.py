@@ -29,7 +29,6 @@ Usage:
 import argparse
 import os
 import sqlite3
-import struct
 import sys
 
 import numpy as np

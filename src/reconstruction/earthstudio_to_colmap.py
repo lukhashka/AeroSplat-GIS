@@ -78,7 +78,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import numpy as np
 
 EARTH_R = 6371008.8  # IUGG mean radius, meters -- confirmed model, see header
@@ -305,7 +304,7 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
         exif_ok = False
         if write_exif:
             try:
-                import piexif
+                import piexif  # noqa: F401  (availability probe)
                 exif_ok = True
             except ImportError:
                 print("Note: piexif not installed -- copying footage without "
@@ -369,16 +368,7 @@ def _write_gps_exif(path, lat, lon, alt):
     piexif.insert(piexif.dump(exif_dict), path)
 
 
-def _fix_console_encoding() -> None:
-    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
-    (cp1252 etc) — this script's warning prints include a non-ASCII char."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 if __name__ == "__main__":

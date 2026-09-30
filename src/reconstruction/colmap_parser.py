@@ -96,16 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _fix_console_encoding() -> None:
-    """Avoid UnicodeEncodeError on Windows consoles using legacy codepages
-    (cp1252 etc) — this script's error prints include em dashes."""
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
-        if hasattr(stream, "reconfigure"):
-            try:
-                stream.reconfigure(encoding="utf-8")
-            except Exception:
-                pass
+from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
 if __name__ == "__main__":
