@@ -76,3 +76,19 @@ def test_pose_errors_zero_and_rotation():
     r = pose_errors(known, {"a": {"q": q90, "t": t}})
     assert r and r["rot_max_deg"] == pytest.approx(90.0, abs=1e-4)
     assert pose_errors(known, {"b": {"q": q, "t": t}}) is None
+
+
+def test_camera_sampler_covers_every_camera_each_epoch():
+    from aerosplat.gs.trainer import CameraSampler
+    s = CameraSampler(7)
+    for _ in range(3):
+        assert sorted(s.next() for _ in range(7)) == list(range(7))
+
+
+def test_anisotropy_penalty_only_above_ratio():
+    import math, torch
+    from aerosplat.gs.trainer import anisotropy_penalty
+    ok = torch.tensor([[0.0, math.log(5), 0.0]])
+    needle = torch.tensor([[0.0, math.log(30), 0.0]])
+    assert anisotropy_penalty(ok, 10.0).item() == 0.0
+    assert anisotropy_penalty(needle, 10.0).item() > 0.0

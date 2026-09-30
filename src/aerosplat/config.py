@@ -93,6 +93,9 @@ class RunConfig(BaseModel):
     raster_checkpoint: bool = False
     warmup_iters: int = Field(0, ge=0)
     warmup_scale: float = Field(0.25, gt=0, le=1)
+    max_screen_radius: float = Field(20.0, ge=0)
+    scale_reg: float = Field(0.01, ge=0)
+    max_aniso_ratio: float = Field(10.0, gt=1)
     save_every: int = Field(0, ge=0)
     train_seed: int = 0
 

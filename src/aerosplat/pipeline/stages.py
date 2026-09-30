@@ -132,7 +132,8 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
          "--rasterizer", cfg["rasterizer"]]
     for k in ("iterations", "max_res", "max_gaussians", "init_headroom", "init_scale",
               "densify_from", "densify_until_frac", "densify_interval", "opacity_reset",
-              "grad_threshold", "chunk", "warmup_iters", "warmup_scale", "save_every"):
+              "grad_threshold", "chunk", "warmup_iters", "warmup_scale", "save_every", "max_screen_radius",
+              "scale_reg", "max_aniso_ratio"):
         _flag("--" + k.replace("_", "-"), cfg[k], a)
     _switch("--raster-checkpoint", cfg["raster_checkpoint"], a)
     _flag("--seed", cfg["train_seed"], a)
@@ -189,6 +190,7 @@ _TRAIN = ("cloud_source", "iterations", "rasterizer", "max_res", "max_gaussians"
           "init_headroom", "init_scale", "densify_from", "densify_until_frac",
           "densify_interval", "opacity_reset", "grad_threshold", "chunk",
           "raster_checkpoint", "warmup_iters", "warmup_scale", "save_every", "train_seed",
+          "max_screen_radius", "scale_reg", "max_aniso_ratio",
           "known_poses", "eval_every", "eval_interval")
 _EVAL = ("eval_every", "eval_lpips", "max_res", "rasterizer", "known_poses",
          "refine_known_poses")

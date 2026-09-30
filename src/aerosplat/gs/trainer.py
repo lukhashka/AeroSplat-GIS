@@ -1159,6 +1159,27 @@ def build_synthetic_dataset(device, n_views: int = 24, H: int = 128, W: int = 12
     return cams
 
 
+class CameraSampler:
+    """Epoch-wise shuffle: every train camera is seen once per epoch (vs. randint,
+    which leaves some frames under-sampled in short runs)."""
+
+    def __init__(self, n: int, generator: Optional[torch.Generator] = None):
+        self.n = n
+        self.gen = generator
+        self._order: List[int] = []
+
+    def next(self) -> int:
+        if not self._order:
+            self._order = torch.randperm(self.n, generator=self.gen).tolist()
+        return self._order.pop()
+
+
+def anisotropy_penalty(scaling_log: Tensor, max_ratio: float = 10.0) -> Tensor:
+    """Mean hinge on max/min axis ratio above `max_ratio` — suppresses needle splats."""
+    ratio = torch.exp(scaling_log.max(dim=-1).values - scaling_log.min(dim=-1).values)
+    return torch.relu(ratio - max_ratio).mean()
+
+
 def train(
     pt_path: str,
     output_path: str,
@@ -1184,6 +1205,9 @@ def train(
     self_test: bool = False,
     eval_every: int = 0,
     eval_interval: int = 1000,
+    max_screen_radius: float = 20.0,
+    scale_reg: float = 0.01,
+    max_aniso_ratio: float = 10.0,
     # ── сумісність зі старою сигнатурою v3 (якщо train() кличуть з коду) ──
     use_cuda_rasterizer: Optional[bool] = None,
     H: Optional[int] = None,
@@ -1317,13 +1341,14 @@ def train(
     # (F.interpolate на кожному кроці — це зайвий resize усього кадру).
     cams_warm = [c.scaled(warmup_scale) for c in train_cams] if warmup_iters else None
 
+    sampler = CameraSampler(len(train_cams))
     losses: List[float] = []
     t_loop = time.time()
 
     for iteration in range(1, num_iterations + 1):
         lr_xyz = update_xyz_lr(optimizer, iteration, num_iterations, extent)
 
-        pick = int(torch.randint(len(train_cams), (1,)).item())
+        pick = sampler.next()
         cam = (cams_warm[pick] if (cams_warm is not None and iteration <= warmup_iters)
                else train_cams[pick])
         assert cam.image is not None
@@ -1340,6 +1365,8 @@ def train(
                                           bg_color, screen_pts=screen_pts)
 
         loss = photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1))
+        if scale_reg:
+            loss = loss + scale_reg * anisotropy_penalty(model._scaling, max_aniso_ratio)
         loss.backward()
 
         densifier.update_stats(screen_pts, aux)
@@ -1351,7 +1378,8 @@ def train(
                 and iteration % densify_interval == 0):
             densifier.densify_and_prune(
                 optimizer, extent=extent, max_gaussians=max_gaussians,
-                max_screen_radius=None if iteration < 1000 else float(max_res))
+                max_screen_radius=(float(max_screen_radius)
+                                   if max_screen_radius and iteration >= 1000 else None))
 
         if (opacity_reset_interval and iteration % opacity_reset_interval == 0
                 and iteration < densify_until):
@@ -1453,6 +1481,11 @@ def main(argv=None) -> int:
                         help="кожен N-й кадр — test (не тренується); 0 = усі кадри в train")
     parser.add_argument("--eval-interval", type=int, default=1000,
                         help="як часто рахувати test PSNR під час тренування")
+    parser.add_argument("--max-screen-radius", type=float, default=20.0,
+                        help="prune сплатів ширших за N px на екрані (0 = вимкнено)")
+    parser.add_argument("--scale-reg", type=float, default=0.01,
+                        help="вага штрафу за анізотропію сплатів (0 = вимкнено)")
+    parser.add_argument("--max-aniso-ratio", type=float, default=10.0)
     args = parser.parse_args(argv)
     if not args.self_test and not (args.input and args.colmap and args.images):
         parser.error("--input, --colmap і --images обов'язкові "
@@ -1490,6 +1523,9 @@ def main(argv=None) -> int:
         self_test=args.self_test,
         eval_every=args.eval_every,
         eval_interval=args.eval_interval,
+        max_screen_radius=args.max_screen_radius,
+        scale_reg=args.scale_reg,
+        max_aniso_ratio=args.max_aniso_ratio,
     )
     return 0
 

@@ -233,6 +233,10 @@ tools/
 | Епохи з перестановкою камер замість `randint` | рівномірне покриття кадрів |
 | `max_screen_radius` ≈ 20 px (зараз = `max_res`, фактично вимкнено) | прибирає роздуті сплати |
 
+**Статус (2026-10-01):** зроблено — перестановка камер, `max_screen_radius`=20 px, scale-регуляризація
+(CLI/конфіг: `--max-screen-radius`, `--scale-reg`, `--max-aniso-ratio`; див. BASELINE.md).
+Лишилось: gsplat (SH3, AA, MCMC), appearance embedding, маски, depth-регуляризація, checkpoint/resume, TensorBoard.
+
 Опційно пізніше: **2DGS** (surfel-и, краща поверхня для DSM/мешу),
 **Scaffold-GS / Octree-GS** для великих територій.
 
