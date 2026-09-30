@@ -37,3 +37,9 @@ Test PSNR за ітераціями: 1000 → 25.52, 2000 → 26.81, 3000 → 27
 Різниця з baseline (−0.13 dB) менша за поріг шуму (4 test-кадри) — **покращення не виявлено**,
 регресії теж. Бюджет 2M вичерпується в обох випадках, тож ефект `max_screen_radius`
 на цій сцені замаскований. Справжня перевірка — після MCMC/SH/AA.
+
+## gsplat на Windows (перевірено 2026-10-01)
+
+`gsplat 1.5.3` збирається (JIT, ~4 хв першого разу) і проходить smoke-тест: SH3 + `antialiased`
+на RTX 4060. Рецепт — [tools/gsplat_env.bat](../tools/gsplat_env.bat): VS 2022 BuildTools
+(не VS 18), `CUDA_HOME`=v12.6 і одноразовий патч `-Wno-attributes` у `_backend.py`.
