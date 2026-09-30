@@ -96,6 +96,12 @@ class RunConfig(BaseModel):
     save_every: int = Field(0, ge=0)
     train_seed: int = 0
 
+    # -- evaluation (Фаза 2.1) ---------------------------------------------
+    # Кожен N-й кадр — test (не тренується). 0 = без спліту і без стадії eval.
+    eval_every: int = Field(8, ge=0)
+    eval_interval: int = Field(1000, ge=1)
+    eval_lpips: bool = True
+
     colmap_bin: str = "colmap"
 
     @model_validator(mode="after")

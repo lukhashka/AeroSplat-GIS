@@ -109,7 +109,8 @@ def argv_parse(cfg: Cfg, L: RunLayout) -> list[str]:
     return a
 
 
-def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
+def train_inputs(cfg: Cfg, L: RunLayout) -> tuple[Path, Path]:
+    """(colmap sparse dir, images dir) that train AND eval must share (same frames/intrinsics)."""
     colmap_dir, images_dir = L.sparse, L.geotagged
     if not _known_poses(cfg):
         # SIMPLE_RADIAL has distortion the trainer ignores → train on the
@@ -121,6 +122,11 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
         else:
             log.warning("  ⚠️  dense/images не знайдено (стадія dense не виконувалась) — "
                         "тренування на сирих кадрах без корекції дисторсії")
+    return colmap_dir, images_dir
+
+
+def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
+    colmap_dir, images_dir = train_inputs(cfg, L)
     a = ["--input", str(L.cloud_in), "--output", str(L.splat_pt),
          "--colmap", str(colmap_dir), "--images", str(images_dir),
          "--rasterizer", cfg["rasterizer"]]
@@ -130,6 +136,20 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
         _flag("--" + k.replace("_", "-"), cfg[k], a)
     _switch("--raster-checkpoint", cfg["raster_checkpoint"], a)
     _flag("--seed", cfg["train_seed"], a)
+    _flag("--eval-every", cfg["eval_every"], a)
+    _flag("--eval-interval", cfg["eval_interval"], a)
+    return a
+
+
+def argv_eval(cfg: Cfg, L: RunLayout) -> list[str]:
+    colmap_dir, images_dir = train_inputs(cfg, L)
+    a = ["--splat", str(L.splat_pt), "--colmap", str(colmap_dir), "--images", str(images_dir),
+         "--out-dir", str(L.run_dir), "--eval-every", str(cfg["eval_every"]),
+         "--max-res", str(cfg["max_res"]), "--rasterizer", cfg["rasterizer"],
+         "--manifest", str(L.manifest_path)]
+    _switch("--no-lpips", not cfg["eval_lpips"], a)
+    if _known_poses(cfg) and cfg["refine_known_poses"]:
+        a += ["--known-poses-dir", str(L.known_poses_dir)]
     return a
 
 
@@ -169,7 +189,9 @@ _TRAIN = ("cloud_source", "iterations", "rasterizer", "max_res", "max_gaussians"
           "init_headroom", "init_scale", "densify_from", "densify_until_frac",
           "densify_interval", "opacity_reset", "grad_threshold", "chunk",
           "raster_checkpoint", "warmup_iters", "warmup_scale", "save_every", "train_seed",
-          "known_poses")
+          "known_poses", "eval_every", "eval_interval")
+_EVAL = ("eval_every", "eval_lpips", "max_res", "rasterizer", "known_poses",
+         "refine_known_poses")
 
 
 def _geo_skip(cfg: Cfg) -> str | None:
@@ -185,36 +207,42 @@ def _exif_skip(cfg: Cfg) -> str | None:
 
 
 STAGES: dict[str, Stage] = {s.name: s for s in [
-    Stage("geo", "0/5  Earth Studio JSON → відомі пози COLMAP + raw_images_<ds>",
+    Stage("geo", "0/6  Earth Studio JSON → відомі пози COLMAP + raw_images_<ds>",
           lambda c: "aerosplat.geo.earthstudio_to_colmap", argv_geo,
           lambda c, L: [L.json_path],
           lambda c, L: [L.known_poses_dir, L.geotagged],
           ("camera_source",), _geo_skip),
-    Stage("exif", "1/5  EXIF GPS injection",
+    Stage("exif", "1/6  EXIF GPS injection",
           lambda c: "aerosplat.geo.exif_injector", argv_exif,
           lambda c, L: [L.footage],
           lambda c, L: [L.geotagged],
           ("camera_source",) + _SYNTH, _exif_skip),
-    Stage("sfm", "2/5  COLMAP SfM (sparse)",
+    Stage("sfm", "2/6  COLMAP SfM (sparse)",
           lambda c: "aerosplat.sfm.sfm_runner", argv_sfm,
           lambda c, L: [L.geotagged],
           lambda c, L: [L.sparse],
           ("camera_source",) + _SFM),
-    Stage("dense", "3/5  COLMAP Dense MVS",
+    Stage("dense", "3/6  COLMAP Dense MVS",
           lambda c: "aerosplat.sfm.dense_runner", argv_dense,
           lambda c, L: [L.sparse],
           lambda c, L: [L.fused_ply],
           _DENSE),
-    Stage("parse", "4/5  point cloud → .pt",
+    Stage("parse", "4/6  point cloud → .pt",
           lambda c: ("aerosplat.io.ply_parser" if c["cloud_source"] == "dense"
                   else "aerosplat.io.colmap_parser"),
           argv_parse,
           lambda c, L: [L.fused_ply if c["cloud_source"] == "dense" else L.points3d],
           lambda c, L: [L.cloud_in],
           _PARSE),
-    Stage("train", "5/5  3D Gaussian Splatting (aerosplat.gs.trainer)",
+    Stage("train", "5/6  3D Gaussian Splatting (aerosplat.gs.trainer)",
           lambda c: "aerosplat.gs.trainer", argv_train,
           lambda c, L: [L.cloud_in],
           lambda c, L: [L.splat_pt],
           _TRAIN),
+    Stage("eval", "6/6  Оцінка якості на test-кадрах (metrics.json + report.html)",
+          lambda c: "aerosplat.gs.evaluate", argv_eval,
+          lambda c, L: [L.splat_pt],
+          lambda c, L: [L.metrics_json, L.report_html],
+          _EVAL,
+          lambda c: ("eval_every=0 — test-спліту немає" if not c["eval_every"] else None)),
 ]}

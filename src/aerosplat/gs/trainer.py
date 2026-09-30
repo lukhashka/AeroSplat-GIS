@@ -422,6 +422,20 @@ def attach_images(cams: List[Camera], images_dir: str, max_res: int = 1024) -> L
     return out
 
 
+def split_cameras(cams: List[Camera], every: int = 8) -> Tuple[List[Camera], List[Camera]]:
+    """
+    Train/test split за протоколом Mip-NeRF 360: кожен `every`-й кадр (за
+    відсортованим іменем) — test. every<=0 або замало кадрів → без спліту.
+    Детермінований, тож trainer і evaluate завжди бачать однаковий test-набір.
+    """
+    if every <= 0 or len(cams) < 2 * every:
+        return cams, []
+    ordered = sorted(cams, key=lambda c: c.name)
+    test = [c for i, c in enumerate(ordered) if i % every == 0]
+    train_ = [c for i, c in enumerate(ordered) if i % every != 0]
+    return train_, test
+
+
 def scene_extent(cams: List[Camera]) -> float:
     """Радіус сцени = відстань від центроїда камер до найдальшої камери.
     Використовується для масштабування lr позицій (як у Kerbl et al.)."""
@@ -1168,6 +1182,8 @@ def train(
     warmup_iters: int = 0,
     seed: int = 0,
     self_test: bool = False,
+    eval_every: int = 0,
+    eval_interval: int = 1000,
     # ── сумісність зі старою сигнатурою v3 (якщо train() кличуть з коду) ──
     use_cuda_rasterizer: Optional[bool] = None,
     H: Optional[int] = None,
@@ -1234,7 +1250,19 @@ def train(
         log("  ⚠️  початкової хмари. Це перевірка що pipeline живий, НЕ тренування.")
         cams = build_synthetic_dataset(device)
 
-    extent = scene_extent(cams)
+    # Test-камери не беруть участі ні в тренуванні, ні в extent/densification.
+    train_cams: List[Camera] = cams
+    test_cams: List[Camera] = []
+    if eval_every and not self_test:
+        train_cams, test_cams = split_cameras(cams, eval_every)
+        if test_cams:
+            log(f"  Split: {len(train_cams)} train / {len(test_cams)} test "
+                f"(кожен {eval_every}-й кадр)")
+        else:
+            log(f"  ⚠️  Замало кадрів ({len(cams)}) для спліту кожен {eval_every}-й — "
+                f"тренування на всіх.")
+
+    extent = scene_extent(train_cams)
     log(f"  Радіус сцени: {extent:.3f}")
 
     # ── 3. Модель ───────────────────────────────────────────────────
@@ -1287,7 +1315,7 @@ def train(
 
     # Зменшені копії кадрів для warmup будуємо ОДИН раз, а не щоітерації
     # (F.interpolate на кожному кроці — це зайвий resize усього кадру).
-    cams_warm = [c.scaled(warmup_scale) for c in cams] if warmup_iters else None
+    cams_warm = [c.scaled(warmup_scale) for c in train_cams] if warmup_iters else None
 
     losses: List[float] = []
     t_loop = time.time()
@@ -1295,9 +1323,9 @@ def train(
     for iteration in range(1, num_iterations + 1):
         lr_xyz = update_xyz_lr(optimizer, iteration, num_iterations, extent)
 
-        pick = int(torch.randint(len(cams), (1,)).item())
+        pick = int(torch.randint(len(train_cams), (1,)).item())
         cam = (cams_warm[pick] if (cams_warm is not None and iteration <= warmup_iters)
-               else cams[pick])
+               else train_cams[pick])
         assert cam.image is not None
 
         gt = cam.image.to(device, non_blocking=True)
@@ -1340,6 +1368,12 @@ def train(
                 f"PSNR {psnr_val:5.2f} | N {model.n_gaussians:,} | "
                 f"lr_xyz {lr_xyz:.2e} | {per_it*1000:6.1f} ms/it | "
                 f"ETA {eta/60:.1f} min")
+
+        if test_cams and eval_interval and iteration % eval_interval == 0:
+            from aerosplat.gs.evaluate import mean_test_psnr
+            test_psnr = mean_test_psnr(model.get_params(with_cov=(rasterizer_kind == "torch")),
+                                       rasterizer, test_cams, device)
+            log(f"    Test PSNR @ {iteration}: {test_psnr:.2f} dB ({len(test_cams)} кадрів)")
 
         if save_every and iteration % save_every == 0:
             _save(model, output_path)
@@ -1415,6 +1449,10 @@ def main(argv=None) -> int:
     parser.add_argument("--warmup-scale", type=float, default=0.25)
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eval-every", type=int, default=0,
+                        help="кожен N-й кадр — test (не тренується); 0 = усі кадри в train")
+    parser.add_argument("--eval-interval", type=int, default=1000,
+                        help="як часто рахувати test PSNR під час тренування")
     args = parser.parse_args(argv)
     if not args.self_test and not (args.input and args.colmap and args.images):
         parser.error("--input, --colmap і --images обов'язкові "
@@ -1450,6 +1488,8 @@ def main(argv=None) -> int:
         warmup_iters=args.warmup_iters,
         seed=args.seed,
         self_test=args.self_test,
+        eval_every=args.eval_every,
+        eval_interval=args.eval_interval,
     )
     return 0
 

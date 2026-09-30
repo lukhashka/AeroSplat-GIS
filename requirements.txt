@@ -15,3 +15,6 @@ uvicorn>=0.28
 # Built from ./diff-gaussian-rasterization; without it the trainer falls back to
 # the pure-PyTorch tile rasterizer (slower).
 ninja
+
+# Optional: LPIPS metric in the eval stage (without it mean_lpips = null).
+# lpips

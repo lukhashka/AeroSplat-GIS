@@ -36,6 +36,8 @@ class RunLayout:
     geo_registration_json: Path
     run_dir: Path
     manifest_path: Path
+    metrics_json: Path
+    report_html: Path
     log_path: Path
 
     @classmethod
@@ -73,5 +75,7 @@ class RunLayout:
             geo_registration_json=data_dir / ds / f"{ds}_geo_registration.json",
             run_dir=run_dir,
             manifest_path=run_dir / "manifest.json",
+            metrics_json=run_dir / "metrics.json",
+            report_html=run_dir / "report.html",
             log_path=run_dir / "run.log",
         )

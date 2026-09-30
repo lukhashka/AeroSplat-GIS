@@ -28,7 +28,7 @@ from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import DATA_DIR, RunLayout, abs_path
 from aerosplat.pipeline.runner import StageError, preflight, run_stages
 
-STAGES = ["geo", "exif", "sfm", "dense", "parse", "train"]
+STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval"]
 
 # Параметри: src/aerosplat/config.py (RunConfig, валідація pydantic).
 # Перекриття: --config run.yaml|json, прапорці CLI, --set KEY=VALUE.
