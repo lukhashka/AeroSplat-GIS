@@ -1376,6 +1376,7 @@ def _save(model: GaussianModel, path: str):
 # ═══════════════════════════════════════════════════════════════════
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
+from aerosplat.paths import PROJECT_DIR
 
 
 def main(argv=None) -> int:
@@ -1419,7 +1420,7 @@ def main(argv=None) -> int:
         parser.error("--input, --colmap і --images обов'язкові "
                      "(або --self-test для синтетичної перевірки)")
 
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    project_dir = str(PROJECT_DIR)
 
     def resolve(p):
         if p is None:

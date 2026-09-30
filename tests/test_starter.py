@@ -43,4 +43,4 @@ def test_recenter_with_train_forbidden():
 def test_dry_run_builds_train_command(capsys):
     assert starter.main(["--dry-run", "--only", "train", "--camera-source", "synthetic"]) == 0
     out = capsys.readouterr().out
-    assert "gs_trainer_v3.py" in out and "--colmap" in out
+    assert "aerosplat.gs.trainer" in out and "--colmap" in out

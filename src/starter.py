@@ -5,7 +5,7 @@ starter.py — єдина точка входу в пайплайн AeroSplat-GI
 
 footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat
 
-Кладеться в src/ (поруч з reconstruction/ і telemetry/).
+Кладеться в src/; стадії — у пакеті aerosplat (io/, geo/, sfm/, gs/).
 
 Приклади:
     python src/starter.py                          # весь пайплайн, дефолтний датасет

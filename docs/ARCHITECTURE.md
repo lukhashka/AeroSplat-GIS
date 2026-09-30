@@ -30,7 +30,7 @@ flowchart TD
     subgraph ORCH["src/starter.py — оркестратор (in-process)"]
         direction TB
         G["geo<br/>earthstudio_to_colmap.py"]
-        E["exif<br/>telemetry/exif_injector.py"]
+        E["exif<br/>geo/exif_injector.py"]
         S["sfm<br/>sfm_runner.py → COLMAP"]
         D["dense<br/>dense_runner.py → COLMAP MVS"]
         P["parse<br/>ply_parser.py / colmap_parser.py<br/>(cloud_io.py)"]
@@ -91,8 +91,8 @@ flowchart TD
 
 | Модуль | Роль |
 |---|---|
-| `reconstruction/earthstudio_to_colmap.py` | Earth Studio JSON → `cameras.txt` / `images.txt` / `points3D.txt` у **локальній ENU-системі (метри)** + `geo_registration.json` (ENU-origin, lat/lon/alt кожного кадру). Модель Землі — сфера R=6371008.8 м (емпірично підтверджено). Копіює кадри в `raw_images_<ds>` і пише GPS EXIF. |
-| `telemetry/exif_injector.py` | Синтетичний GPS EXIF (коло навколо точки або CSV-телеметрія), `piexif.insert` без перекодування JPEG, опційно файл для `model_aligner`. |
+| `aerosplat/geo/earthstudio_to_colmap.py` | Earth Studio JSON → `cameras.txt` / `images.txt` / `points3D.txt` у **локальній ENU-системі (метри)** + `geo_registration.json` (ENU-origin, lat/lon/alt кожного кадру). Модель Землі — сфера R=6371008.8 м (емпірично підтверджено). Копіює кадри в `raw_images_<ds>` і пише GPS EXIF. |
+| `aerosplat/geo/exif_injector.py` | Синтетичний GPS EXIF (коло навколо точки або CSV-телеметрія), `piexif.insert` без перекодування JPEG, опційно файл для `model_aligner`. |
 | `scripts/auto_photo.py` | Легасі: знімає скріншоти Google Earth через `pyautogui` + пише CSV. |
 
 ### 3.3 Фотограмметрія (COLMAP як зовнішній бінарник)
@@ -104,13 +104,13 @@ flowchart TD
 * `dense_runner.py` — `image_undistorter` → `patch_match_stereo` → `stereo_fusion`.
   Шляхи виводить **сам** із `--dataset` (не приймає `--images-dir/--output-dir`).
 
-### 3.4 Хмара точок — `cloud_io.py`, `ply_parser.py`, `colmap_parser.py`
+### 3.4 Хмара точок — `aerosplat/io/{cloud_io,ply_parser,colmap_parser}.py`
 
 * Векторизоване читання `points3D.bin` та PLY (NumPy).
 * Фільтри: non-finite, reprojection error, track length, MAD-викиди, субсемплінг.
 * Вихідний контракт `.pt`: `{"xyz": f32[N,3], "rgb": f32[N,3] ∈ [0,1], "meta": {...}}`.
 
-### 3.5 3D Gaussian Splatting — `reconstruction/gs_trainer_v3.py`
+### 3.5 3D Gaussian Splatting — `aerosplat/gs/trainer.py`
 
 * Модель: `xyz`, `log scale`, кватерніон `(w,x,y,z)`, `logit opacity`,
   `logit rgb` (**без сферичних гармонік** — колір не залежить від ракурсу).
@@ -229,13 +229,14 @@ AeroSplat-GIS/
 ├── src/
 │   ├── starter.py                 # оркестратор
 │   ├── doctor.py                  # діагностика
-│   ├── telemetry/exif_injector.py
-│   ├── reconstruction/
-│   │   ├── earthstudio_to_colmap.py, sfm_runner.py, dense_runner.py
-│   │   ├── cloud_io.py, ply_parser.py, colmap_parser.py
-│   │   ├── gs_trainer_v3.py       # АКТИВНИЙ тренер
-│   │   ├── gs_trainer_v2.py, trips_trainer.py, colmap_loader.py   # не в пайплайні
-│   │   └── compare_poses.py, diagnose_pose_axis.py, validate_convention.py, inspector_matches.py
+│   ├── aerosplat/                 # пакет
+│   │   ├── config.py, paths.py, logging_utils.py
+│   │   ├── pipeline/              # stages, runner, layout (RunLayout), manifest
+│   │   ├── geo/                   # earthstudio_to_colmap.py, exif_injector.py
+│   │   ├── sfm/                   # sfm_runner.py, dense_runner.py
+│   │   ├── io/                    # cloud_io.py, ply_parser.py, colmap_parser.py
+│   │   └── gs/trainer.py          # АКТИВНИЙ тренер (був gs_trainer_v3)
+│   │                              # (gs_trainer_v2, trips_trainer, colmap_loader — у legacy/)
 │   ├── optimization/gs_trainer.py, gs_compressor.py               # легасі v0.1
 │   ├── server/main.py (активний), mainG.py (легасі)
 │   ├── scripts/auto_photo.py      # легасі
@@ -256,8 +257,8 @@ AeroSplat-GIS/
 
 | README каже | Насправді |
 |---|---|
-| `exif_injector.py` у `reconstruction/` | у `telemetry/` |
-| тренер `optimization/gs_trainer.py` | активний — `reconstruction/gs_trainer_v3.py` |
+| `exif_injector.py` у `reconstruction/` | у `aerosplat/geo/` |
+| тренер `optimization/gs_trainer.py` | активний — `aerosplat/gs/trainer.py` |
 | `web/app.js`, `orbit_controls.js` | `appGLSL.js`, OrbitControls з CDN; `app.js` видалено |
 | кадри в `data/raw_images_3d/` | `data/<ds>/footage/` → `data/raw_images_<ds>/` |
 | запуск 5 скриптів вручну | є `starter.py` |

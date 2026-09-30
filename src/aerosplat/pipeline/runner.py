@@ -57,7 +57,7 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
 
         if dry_run:
             printable = " ".join(f'"{a}"' if " " in a else a for a in argv)
-            log.info(f"$ python {stage.script(cfg)} {printable}\n")
+            log.info(f"$ python -m {stage.module(cfg)} {printable}\n")
             continue
 
         if resume and not upstream_ran and manifest.is_fresh(name, fp, outputs):

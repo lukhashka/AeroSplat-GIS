@@ -8,16 +8,15 @@ traceback instead of an opaque subprocess exit code.
 from __future__ import annotations
 
 import importlib
-import sys
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from aerosplat.logging_utils import get_logger
-from aerosplat.pipeline.layout import PROJECT_DIR, RunLayout, abs_path
+from aerosplat.pipeline.layout import RunLayout, abs_path
 
 Cfg = dict[str, Any]
-SRC_DIR = PROJECT_DIR / "src"
 
 log = get_logger()
 
@@ -147,15 +146,12 @@ class Stage:
     skip_reason: Callable[[Cfg], str | None] = lambda cfg: None
 
     def script(self, cfg: Cfg) -> Path:
-        mod = self.module(cfg)
-        sub = "telemetry" if mod == "exif_injector" else "reconstruction"
-        return SRC_DIR / sub / f"{mod}.py"
+        spec = importlib.util.find_spec(self.module(cfg))
+        if spec is None or spec.origin is None:
+            raise ModuleNotFoundError(self.module(cfg))
+        return Path(spec.origin)
 
     def entry(self, cfg: Cfg) -> Callable[[list[str]], Any]:
-        for sub in ("reconstruction", "telemetry"):
-            d = str(SRC_DIR / sub)
-            if d not in sys.path:
-                sys.path.insert(0, d)
         return importlib.import_module(self.module(cfg)).main
 
 
@@ -190,33 +186,34 @@ def _exif_skip(cfg: Cfg) -> str | None:
 
 STAGES: dict[str, Stage] = {s.name: s for s in [
     Stage("geo", "0/5  Earth Studio JSON → відомі пози COLMAP + raw_images_<ds>",
-          lambda c: "earthstudio_to_colmap", argv_geo,
+          lambda c: "aerosplat.geo.earthstudio_to_colmap", argv_geo,
           lambda c, L: [L.json_path],
           lambda c, L: [L.known_poses_dir, L.geotagged],
           ("camera_source",), _geo_skip),
     Stage("exif", "1/5  EXIF GPS injection",
-          lambda c: "exif_injector", argv_exif,
+          lambda c: "aerosplat.geo.exif_injector", argv_exif,
           lambda c, L: [L.footage],
           lambda c, L: [L.geotagged],
           ("camera_source",) + _SYNTH, _exif_skip),
     Stage("sfm", "2/5  COLMAP SfM (sparse)",
-          lambda c: "sfm_runner", argv_sfm,
+          lambda c: "aerosplat.sfm.sfm_runner", argv_sfm,
           lambda c, L: [L.geotagged],
           lambda c, L: [L.sparse],
           ("camera_source",) + _SFM),
     Stage("dense", "3/5  COLMAP Dense MVS",
-          lambda c: "dense_runner", argv_dense,
+          lambda c: "aerosplat.sfm.dense_runner", argv_dense,
           lambda c, L: [L.sparse],
           lambda c, L: [L.fused_ply],
           _DENSE),
     Stage("parse", "4/5  point cloud → .pt",
-          lambda c: "ply_parser" if c["cloud_source"] == "dense" else "colmap_parser",
+          lambda c: ("aerosplat.io.ply_parser" if c["cloud_source"] == "dense"
+                  else "aerosplat.io.colmap_parser"),
           argv_parse,
           lambda c, L: [L.fused_ply if c["cloud_source"] == "dense" else L.points3d],
           lambda c, L: [L.cloud_in],
           _PARSE),
-    Stage("train", "5/5  3D Gaussian Splatting (gs_trainer_v3)",
-          lambda c: "gs_trainer_v3", argv_train,
+    Stage("train", "5/5  3D Gaussian Splatting (aerosplat.gs.trainer)",
+          lambda c: "aerosplat.gs.trainer", argv_train,
           lambda c, L: [L.cloud_in],
           lambda c, L: [L.splat_pt],
           _TRAIN),

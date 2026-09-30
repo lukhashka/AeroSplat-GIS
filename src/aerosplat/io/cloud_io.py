@@ -14,7 +14,7 @@ gs_trainer_v3.py): a dict saved via torch.save with
 
 plus a new 'meta' dict that downstream code is free to ignore.
 
-Place at: src/reconstruction/cloud_io.py
+Place at: src/aerosplat/io/cloud_io.py
 """
 
 from __future__ import annotations

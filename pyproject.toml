@@ -28,7 +28,8 @@ aerosplat = "starter:cli"
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = ["starter", "doctor"]
-packages = ["aerosplat", "aerosplat.pipeline"]
+packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
+            "aerosplat.sfm", "aerosplat.gs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -44,7 +45,7 @@ select = ["E9", "F"]
 
 [tool.mypy]
 python_version = "3.10"
-mypy_path = "src:src/reconstruction:src/telemetry"
+mypy_path = "src"
 explicit_package_bases = true
 ignore_missing_imports = true
 check_untyped_defs = false

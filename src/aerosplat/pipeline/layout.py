@@ -6,8 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-PROJECT_DIR = Path(__file__).resolve().parents[3]
-DATA_DIR = PROJECT_DIR / "data"
+from aerosplat.paths import DATA_DIR, PROJECT_DIR
 
 
 def abs_path(p: str | Path, root: Path = PROJECT_DIR) -> Path:

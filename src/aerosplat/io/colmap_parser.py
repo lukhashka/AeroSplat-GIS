@@ -5,8 +5,8 @@ colmap_parser.py — AeroSplat-GIS
 COLMAP sparse `points3D.bin` -> `.pt` point cloud for the GS trainer / server.
 
 Usage:
-    python src/reconstruction/colmap_parser.py --dataset zaporizhzhia
-    python src/reconstruction/colmap_parser.py \
+    python -m aerosplat.io.colmap_parser --dataset zaporizhzhia
+    python -m aerosplat.io.colmap_parser \
         --input data/colmap_output/sparse/0/points3D.bin \
         --output data/zaporizhzhia_cloud.pt \
         --max-error 2.0 --min-track 3 --mad-k 20
@@ -18,9 +18,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from cloud_io import filter_cloud, read_points3d_bin, save_cloud
+from aerosplat.io.cloud_io import filter_cloud, read_points3d_bin, save_cloud
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+from aerosplat.paths import PROJECT_DIR
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
 
     save_cloud(out, xyz, rgb, source=inp, stats=stats, recenter=args.recenter,
                extra_meta={"kind": "colmap_sparse"})
-    print("next: python src/reconstruction/dense_runner.py "
+    print("next: python -m aerosplat.sfm.dense_runner "
           "(or gs_trainer_v3.py to train on the sparse cloud)")
     return 0
 

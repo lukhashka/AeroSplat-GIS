@@ -27,14 +27,11 @@ Usage:
         --dataset Untitled
 """
 import argparse
-import os
 import sqlite3
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "reconstruction"))
-from earthstudio_to_colmap import EARTH_R, load_frames, rot_x, rot_y, rot_z  # noqa: E402
+from aerosplat.geo.earthstudio_to_colmap import EARTH_R, load_frames, rot_x, rot_y, rot_z  # noqa: E402
 
 # The only 4 axis remaps that keep a proper (determinant +1) rotation --
 # i.e. an even number of sign flips. Odd-flip combinations are reflections,

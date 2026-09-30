@@ -43,6 +43,8 @@ from pathlib import Path
 
 import piexif
 
+from aerosplat.paths import PROJECT_DIR
+
 JPEG_SUFFIXES = {".jpg", ".jpeg"}
 
 
@@ -353,7 +355,7 @@ def write_colmap_geo(path: Path, written: list[tuple[Path, tuple]]) -> None:
 # --------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    project_dir = Path(__file__).resolve().parents[2]
+    project_dir = PROJECT_DIR
     p = argparse.ArgumentParser(
         description="Inject synthetic orbital GPS EXIF into Earth Studio frames.")
     p.add_argument("--images-dir", type=Path,
@@ -494,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         write_colmap_geo(args.colmap_geo, written)
         print(f"Wrote COLMAP reference file: {args.colmap_geo}")
 
-    print("next: python src/reconstruction/sfm_runner.py")
+    print("next: python -m aerosplat.sfm.sfm_runner")
     return 0
 
 

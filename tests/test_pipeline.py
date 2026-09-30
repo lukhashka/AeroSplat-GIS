@@ -71,3 +71,12 @@ def test_skipped_stage_not_run(layout, monkeypatch):
     _fake_stage(monkeypatch, calls)
     runner.run_stages(dict(cfg, camera_source="earthstudio_json"), L, ["exif"])
     assert calls == []
+
+
+@pytest.mark.parametrize("cloud_source", ["dense", "sparse"])
+def test_every_stage_entry_resolves(cloud_source):
+    """Real (unmocked) lookup: each stage's module exists and exposes main(argv)."""
+    cfg = RunConfig(cloud_source=cloud_source).to_dict()
+    for stage in STAGES.values():
+        assert callable(stage.entry(cfg)), stage.name
+        assert stage.script(cfg).is_file(), stage.name

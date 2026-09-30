@@ -32,6 +32,7 @@ import time
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
+from aerosplat.paths import PROJECT_DIR
 
 
 def log(msg):
@@ -245,7 +246,7 @@ def verify_sparse_output(sparse_dir):
 
 
 def run_colmap_sfm(args):
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    project_dir = str(PROJECT_DIR)
     dataset = args.dataset or os.environ.get("AEROSPLAT_DATASET", "zaporizhzhia")
     images_dir = args.images_dir or os.path.join(project_dir, "data", f"raw_images_{dataset}")
     output_dir = args.output_dir or os.path.join(project_dir, "data", f"colmap_output_{dataset}")

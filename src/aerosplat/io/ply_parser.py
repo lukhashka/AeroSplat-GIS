@@ -11,8 +11,8 @@ that is what you are pointing at, use colmap_parser.py on points3D.bin
 instead, which also gives you reprojection error and track length to filter on.
 
 Usage:
-    python src/reconstruction/ply_parser.py --dataset zaporizhzhia
-    python src/reconstruction/ply_parser.py \
+    python -m aerosplat.io.ply_parser --dataset zaporizhzhia
+    python -m aerosplat.io.ply_parser \
         --input data/colmap_output/dense/0/fused.ply \
         --output data/zaporizhzhia_dense.pt --mad-k 20
 """
@@ -25,9 +25,9 @@ from pathlib import Path
 
 import numpy as np
 
-from cloud_io import filter_cloud, read_ply, save_cloud
+from aerosplat.io.cloud_io import filter_cloud, read_ply, save_cloud
 
-PROJECT_DIR = Path(__file__).resolve().parents[2]
+from aerosplat.paths import PROJECT_DIR
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     save_cloud(out, xyz, rgb, source=inp, stats=stats, recenter=args.recenter,
                extra_meta={"kind": "colmap_dense",
                            "ply_properties": [n for n, _ in hdr.props]})
-    print("next: python src/reconstruction/gs_trainer_v3.py")
+    print("next: python -m aerosplat.gs.trainer")
     return 0
 
 

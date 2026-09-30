@@ -3,7 +3,7 @@ import struct
 import numpy as np
 import pytest
 
-from cloud_io import filter_cloud, read_points3d_bin
+from aerosplat.io.cloud_io import filter_cloud, read_points3d_bin
 
 
 def _write_points3d_bin(path, pts):
@@ -75,7 +75,7 @@ def test_filter_all_dropped_raises():
 
 def test_save_cloud_contract(tmp_path):
     torch = pytest.importorskip("torch")
-    from cloud_io import save_cloud
+    from aerosplat.io.cloud_io import save_cloud
     xyz, rgb = _cloud(50)
     out = tmp_path / "c.pt"
     meta = save_cloud(out, xyz, rgb, source=tmp_path, stats={}, recenter=True)

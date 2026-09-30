@@ -5,6 +5,7 @@ import time
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
+from aerosplat.paths import PROJECT_DIR
 
 
 def _run(cmd, step_label):
@@ -58,7 +59,7 @@ def parse_args(argv=None):
 def run_colmap_dense(argv=None):
     args = parse_args(argv)
 
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    project_dir = str(PROJECT_DIR)
     images_dir = os.path.join(project_dir, "data", f"raw_images_{args.dataset}")
     sparse_dir = os.path.join(project_dir, "data", f"colmap_output_{args.dataset}", "sparse", "0")
     dense_dir = os.path.join(project_dir, "data", f"colmap_output_{args.dataset}", "dense")
@@ -132,6 +133,11 @@ def run_colmap_dense(argv=None):
     print(f"💾 Суцільний 3D-скелет збережено в: {fused_ply_path}")
 
 
+def main(argv=None) -> int:
+    run_colmap_dense(argv)
+    return 0
+
+
 if __name__ == "__main__":
     _fix_console_encoding()
-    run_colmap_dense()
+    raise SystemExit(main())

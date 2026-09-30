@@ -141,9 +141,12 @@ Dense Point Cloud       3D Gaussian Splatting
     ├── src/
     │   ├── starter.py            # оркестратор (`aerosplat run`)
     │   ├── doctor.py             # діагностика (`aerosplat doctor`)
-    │   ├── telemetry/            # exif_injector.py
-    │   ├── reconstruction/       # earthstudio_to_colmap, sfm_runner, dense_runner,
-    │   │                         # ply_parser, colmap_parser, cloud_io, gs_trainer_v3
+    │   ├── aerosplat/            # пакет: config, paths, logging_utils
+    │   │   ├── pipeline/         # стадії, RunLayout, manifest.json
+    │   │   ├── geo/              # earthstudio_to_colmap, exif_injector
+    │   │   ├── sfm/              # sfm_runner, dense_runner
+    │   │   ├── io/               # cloud_io, ply_parser, colmap_parser
+    │   │   └── gs/               # trainer (3DGS)
     │   └── server/main.py        # FastAPI (`aerosplat serve`)
     ├── web/                      # власний WebGL-в'ювер
     ├── tools/                    # дослідницькі/діагностичні скрипти

@@ -4,7 +4,7 @@ import json
 import numpy as np
 
 from conftest import FIXTURES
-from earthstudio_to_colmap import convert, mat_to_quat_wxyz, rot_x, rot_y, rot_z
+from aerosplat.geo.earthstudio_to_colmap import convert, mat_to_quat_wxyz, rot_x, rot_y, rot_z
 
 
 def _quat_to_mat(q):
