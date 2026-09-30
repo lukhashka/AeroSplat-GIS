@@ -22,13 +22,28 @@ def fix_console_encoding() -> None:
                 pass
 
 
+class _StdoutHandler(logging.StreamHandler):
+    """Always writes to the *current* sys.stdout (survives reconfigure / capture)."""
+
+    def __init__(self) -> None:
+        super().__init__(sys.stdout)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value) -> None:
+        pass
+
+
 def get_logger(name: str = "aerosplat", log_file: Path | None = None,
                level: int = logging.INFO) -> logging.Logger:
     """Console logger (plain message format) with an optional run-directory file."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
     if not logger.handlers:
-        console = logging.StreamHandler(sys.stdout)
+        console = _StdoutHandler()
         console.setFormatter(logging.Formatter("%(message)s"))
         logger.addHandler(console)
     if log_file is not None:

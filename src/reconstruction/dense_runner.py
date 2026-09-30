@@ -1,7 +1,6 @@
 import argparse
 import os
 import subprocess
-import sys
 import time
 
 
@@ -17,11 +16,10 @@ def _run(cmd, step_label):
     elapsed = time.perf_counter() - start
     print(f"   ⏱  {elapsed:.1f}s")
     if result.returncode != 0:
-        print(f"❌ Крок провалився (код {result.returncode}): {step_label}", file=sys.stderr)
-        sys.exit(result.returncode)
+        raise RuntimeError(f"Крок провалився (код {result.returncode}): {step_label}")
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="COLMAP dense reconstruction (MVS) runner")
     parser.add_argument(
         "--dataset",
@@ -54,12 +52,11 @@ def parse_args():
     parser.add_argument("--max-reproj-error", type=float, default=1.5, help="StereoFusion.max_reproj_error (default 2 upstream)")
     parser.add_argument("--skip-undistort", action="store_true", help="Skip step 1 if already done")
     parser.add_argument("--skip-stereo", action="store_true", help="Skip step 2 if depth maps already exist")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def run_colmap_dense():
-    _fix_console_encoding()
-    args = parse_args()
+def run_colmap_dense(argv=None):
+    args = parse_args(argv)
 
     project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     images_dir = os.path.join(project_dir, "data", f"raw_images_{args.dataset}")
@@ -71,11 +68,9 @@ def run_colmap_dense():
     # cryptic COLMAP error after the subprocess has already spawned. ---
     if not args.skip_undistort:
         if not os.path.isdir(images_dir):
-            print(f"❌ Не знайдено директорію зображень: {images_dir}", file=sys.stderr)
-            sys.exit(1)
+            raise FileNotFoundError(f"Не знайдено директорію зображень: {images_dir}")
         if not os.path.isdir(sparse_dir):
-            print(f"❌ Не знайдено sparse-реконструкцію: {sparse_dir}", file=sys.stderr)
-            sys.exit(1)
+            raise FileNotFoundError(f"Не знайдено sparse-реконструкцію: {sparse_dir}")
 
     os.makedirs(dense_dir, exist_ok=True)
 
@@ -138,4 +133,5 @@ def run_colmap_dense():
 
 
 if __name__ == "__main__":
+    _fix_console_encoding()
     run_colmap_dense()

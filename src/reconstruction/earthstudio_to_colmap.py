@@ -371,8 +371,7 @@ def _write_gps_exif(path, lat, lon, alt):
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
-if __name__ == "__main__":
-    _fix_console_encoding()
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("json_path")
     ap.add_argument("--dataset", required=True,
@@ -388,7 +387,13 @@ if __name__ == "__main__":
                          "convention sfm_runner.py/dense_runner.py expect).")
     ap.add_argument("--no-copy-images", dest="copy_images", action="store_false")
     ap.add_argument("--no-exif", dest="write_exif", action="store_false")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     convert(args.json_path, args.dataset, args.out_dir,
             footage_dir=args.footage_dir, images_out_dir=args.images_out_dir,
             copy_images=args.copy_images, write_exif=args.write_exif)
+    return 0
+
+
+if __name__ == "__main__":
+    _fix_console_encoding()
+    raise SystemExit(main())

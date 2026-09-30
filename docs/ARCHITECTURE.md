@@ -27,7 +27,7 @@ flowchart TD
         CSV[flight_telemetry.csv<br/>опційно]
     end
 
-    subgraph ORCH["src/starter.py — оркестратор (subprocess)"]
+    subgraph ORCH["src/starter.py — оркестратор (in-process)"]
         direction TB
         G["geo<br/>earthstudio_to_colmap.py"]
         E["exif<br/>telemetry/exif_injector.py"]
@@ -72,11 +72,15 @@ flowchart TD
 ### 3.1 Оркестрація — `src/starter.py`
 
 * Єдина точка входу. Стадії: `geo → exif → sfm → dense → parse → train`.
-* Кожна стадія — окремий Python-процес (`subprocess.run`), параметри
-  передаються через CLI-флаги. Конфіг — словник `CONFIG` у самому файлі,
-  перекривається `--config file.json` та `--set KEY=VALUE`.
-* Клас `Paths` — єдине місце, де виводяться шляхи з імені датасету
-  (конвенція `data/raw_images_<ds>`, `data/colmap_output_<ds>`, `data/<ds>_*.pt`).
+* Стадії — реєстр у `aerosplat/pipeline/stages.py`: кожна будує argv і викликає
+  `main(argv)` свого модуля **в тому ж процесі** (скрипти лишаються придатними
+  для окремого запуску), тож збій дає звичайний traceback. Конфіг — валідований
+  `RunConfig` (`aerosplat/config.py`), перекривається `--config` та `--set KEY=VALUE`.
+* `RunLayout` (`aerosplat/pipeline/layout.py`) — єдине місце, де виводяться шляхи
+  з імені датасету (`data/raw_images_<ds>`, `data/colmap_output_<ds>`, `data/<ds>_*.pt`).
+* `data/<ds>/run/manifest.json` + `run.log`: конфіг, версія/коміт, статус, час,
+  входи/виходи кожної стадії. `--resume` пропускає стадії, що вже успішно пройшли
+  з тим самим конфігом і чиї виходи існують (зміна стадії інвалідує наступні).
 * Два режими джерела камер (`camera_source`):
   * `synthetic` — пози невідомі, GPS синтезується по колу (exif-стадія),
     COLMAP сам шукає пози (incremental `mapper` / GLOMAP);

@@ -28,7 +28,7 @@ aerosplat = "starter:cli"
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = ["starter", "doctor"]
-packages = ["aerosplat"]
+packages = ["aerosplat", "aerosplat.pipeline"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

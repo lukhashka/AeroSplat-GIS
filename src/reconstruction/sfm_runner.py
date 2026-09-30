@@ -489,8 +489,11 @@ def build_arg_parser():
     return p
 
 
+def main(argv=None) -> int:
+    success = run_colmap_sfm(build_arg_parser().parse_args(argv))
+    return 0 if success else 1
+
+
 if __name__ == "__main__":
     _fix_console_encoding()
-    cli_args = build_arg_parser().parse_args()
-    success = run_colmap_sfm(cli_args)
-    sys.exit(0 if success else 1)
+    sys.exit(main())

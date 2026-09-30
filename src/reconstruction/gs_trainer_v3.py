@@ -1376,8 +1376,7 @@ def _save(model: GaussianModel, path: str):
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 
 
-if __name__ == "__main__":
-    _fix_console_encoding()
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="3D Gaussian Splatting Trainer (AeroSplat-GIS)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -1413,7 +1412,7 @@ if __name__ == "__main__":
     parser.add_argument("--warmup-scale", type=float, default=0.25)
     parser.add_argument("--save-every", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not args.self_test and not (args.input and args.colmap and args.images):
         parser.error("--input, --colmap і --images обов'язкові "
                      "(або --self-test для синтетичної перевірки)")
@@ -1449,3 +1448,9 @@ if __name__ == "__main__":
         seed=args.seed,
         self_test=args.self_test,
     )
+    return 0
+
+
+if __name__ == "__main__":
+    _fix_console_encoding()
+    raise SystemExit(main())
