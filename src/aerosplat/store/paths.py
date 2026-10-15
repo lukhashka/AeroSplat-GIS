@@ -21,6 +21,8 @@
             │       ├── sfm/ mvs/ gs/
             │       └── reports/         registration.json, metrics.json, report.html
             ├── authored/                AUTHORED: never written by the pipeline
+            │   ├── access_points.json   drawn/confirmed features (ACCESS_POINTS §3.1)
+            │   └── audit.jsonl          append-only: who changed what, and what it was
             └── missions/
 """
 
@@ -33,6 +35,8 @@ from pathlib import Path
 from aerosplat.paths import PROJECT_DIR
 
 CATALOG_FILE = "catalog.db"
+ACCESS_POINTS_JSON = "access_points.json"
+AUDIT_JSONL = "audit.jsonl"
 
 
 def default_projects_root() -> Path:
@@ -125,6 +129,16 @@ class SiteDirs:
     @property
     def authored(self) -> Path:
         return self.root / "authored"
+
+    @property
+    def access_points(self) -> Path:
+        """Authored access points: current state, rewritten atomically (ACCESS_POINTS §3.5)."""
+        return self.authored / ACCESS_POINTS_JSON
+
+    @property
+    def audit_log(self) -> Path:
+        """Append-only record of who changed what in `authored/`."""
+        return self.authored / AUDIT_JSONL
 
     @property
     def missions(self) -> Path:

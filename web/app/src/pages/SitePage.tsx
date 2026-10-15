@@ -70,6 +70,14 @@ export function SitePage() {
           <button className="btn" disabled={!data.scene} onClick={() => navigate(`/render/${s.project_id}/${s.id}`)}>
             <Icon name="camera" /> Вид із камери
           </button>
+          <button
+            className="btn"
+            disabled={!data.scene}
+            title="Фасади, ортофото й точки доступу (вікна, двері)"
+            onClick={() => navigate(`/facades/${s.project_id}/${s.id}`)}
+          >
+            <Icon name="map" /> Фасади
+          </button>
           <button className="btn primary" disabled={!data.scene} onClick={() => navigate(`/viewer/${s.project_id}/${s.id}`)}>
             <Icon name="cube" /> Відкрити 3D
           </button>

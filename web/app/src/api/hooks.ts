@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api, upload } from "./client";
+import { api, api2, upload } from "./client";
 import type {
+  AccessPoint,
+  AccessPointCreate,
+  AccessPointPatch,
+  AddressOut,
+  AuditEntry,
   CaptureOut,
   CaptureSource,
   ImageRec,
@@ -18,6 +23,9 @@ import type {
   SiteSummary,
   SystemInfo,
   GeoPoint,
+  FacadeDetail,
+  SemanticsOut,
+  TaxonomyOut,
 } from "./types";
 
 export const keys = {
@@ -167,3 +175,87 @@ export function useDiagnostic() {
 }
 
 export const refreshScenes = () => api.post<{ scenes: string[]; changed: string[] }>("/scenes/refresh");
+
+// ── semantics, taxonomy and authored access points (ACCESS_POINTS §3-§5) ──
+export const semanticKeys = {
+  semantics: (p: string, s: string) => ["semantics", p, s] as const,
+  facade: (p: string, s: string, f: string) => ["facade", p, s, f] as const,
+  taxonomy: (p: string, s: string) => ["taxonomy", p, s] as const,
+  features: (p: string, s: string, f: string | null) => ["access-points", p, s, f ?? ""] as const,
+  audit: (p: string, s: string) => ["audit", p, s] as const,
+};
+
+export const useSemantics = (project: string, site: string) =>
+  useQuery({
+    queryKey: semanticKeys.semantics(project, site),
+    queryFn: () => api.get<SemanticsOut>(`/sites/${project}/${site}/semantics`),
+    retry: false,
+    staleTime: 30_000,
+  });
+
+export const useFacade = (project: string, site: string, facadeId: string | null) =>
+  useQuery({
+    queryKey: semanticKeys.facade(project, site, facadeId ?? ""),
+    queryFn: () => api.get<FacadeDetail>(`/sites/${project}/${site}/facades/${facadeId}`),
+    enabled: !!facadeId,
+    staleTime: 30_000,
+  });
+
+export const useTaxonomy = (project: string, site: string) =>
+  useQuery({
+    queryKey: semanticKeys.taxonomy(project, site),
+    queryFn: () => api.get<TaxonomyOut>(`/sites/${project}/${site}/taxonomy`),
+    staleTime: 5 * 60_000,
+  });
+
+export const useAccessPoints = (project: string, site: string, facadeId: string | null) =>
+  useQuery({
+    queryKey: semanticKeys.features(project, site, facadeId),
+    queryFn: () => {
+      const q = facadeId ? `?facade=${encodeURIComponent(facadeId)}` : "";
+      return api.get<AccessPoint[]>(`/sites/${project}/${site}/access-points${q}`);
+    },
+    staleTime: 2000,
+  });
+
+export const useAudit = (project: string, site: string, limit = 50) =>
+  useQuery({
+    queryKey: semanticKeys.audit(project, site),
+    queryFn: () => api.get<AuditEntry[]>(`/sites/${project}/${site}/audit?limit=${limit}`),
+    staleTime: 2000,
+  });
+
+/** Create, change and delete authored features. Nothing here is ever automatic (ADR-0009). */
+export function useAccessPointEdits(project: string, site: string, facadeId: string | null) {
+  const qc = useQueryClient();
+  const base = `/sites/${project}/${site}/access-points`;
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["access-points", project, site] });
+    qc.invalidateQueries({ queryKey: ["facade", project, site] });
+    qc.invalidateQueries({ queryKey: semanticKeys.semantics(project, site) });
+    qc.invalidateQueries({ queryKey: semanticKeys.audit(project, site) });
+  };
+  return {
+    create: useMutation({
+      mutationFn: (body: AccessPointCreate) => api.post<AccessPoint>(base, body),
+      onSuccess: refresh,
+    }),
+    update: useMutation({
+      mutationFn: ({ id, ...body }: AccessPointPatch & { id: string }) =>
+        api2.patch<AccessPoint>(`${base}/${id}`, body),
+      onSuccess: refresh,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => api2.del<AccessPoint>(`${base}/${id}`),
+      onSuccess: refresh,
+    }),
+    address: useMutation({
+      mutationFn: (body: { floor_offset?: number; by?: string }) =>
+        api.post<AddressOut>(
+          `/sites/${project}/${site}/facades/${facadeId}/address`,
+          body,
+        ),
+      onSuccess: refresh,
+    }),
+  };
+}

@@ -23,6 +23,12 @@ F64 = NDArray[np.float64]
 UP = np.array([0.0, 0.0, 1.0])
 OCTANTS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 
+# What the stage writes into its output directory. Here rather than in `stage.py` so a
+# reader (the API, the editor) can name the files without importing the stage's deps.
+SEMANTICS_JSON = "semantics.json"
+TERRAIN_NPZ = "terrain.npz"
+COVERAGE_NPZ = "coverage.npz"
+
 
 def octant_of(azimuth_deg: float) -> str:
     """Compass octant of an azimuth (0 = north, 90 = east)."""

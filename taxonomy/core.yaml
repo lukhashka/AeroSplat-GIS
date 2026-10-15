@@ -1,0 +1,136 @@
+# Базовий пакет таксономії точок доступу (ACCESS_POINTS §2.2, ADR-0007).
+#
+# Класи — це дані, не код: новий клас додається тут, а не релізом (§2.1).
+# Формат класу — §2.4; валідація — aerosplat.taxonomy.
+#
+# Числа в `handover` — плейсхолдери з §7.1, доки не відоме обладнання
+# замовника (§13). Вони задають, звідки дрон передає вантаж, а не те,
+# що він зробить у останні метри: це задача бортового наведення (ADR-0009).
+pack: core
+version: 1.0.0
+
+# Атрибути, на які можуть посилатися класи цього й залежних пакетів (§2.3).
+# `dynamic` — значення залежить від епохи (вікно відчинили) і не переноситься
+# між run-ами без нової зйомки.
+attributes:
+  - id: state
+    labels: {uk: "Стан", en: "State"}
+    values: [open, closed, unknown]
+    default: unknown
+    dynamic: true
+  - id: glazing
+    labels: {uk: "Скління", en: "Glazing"}
+    values: [glass, opaque, none, unknown]
+    default: unknown
+  - id: obstruction
+    labels: {uk: "Перепона", en: "Obstruction"}
+    values: [none, grille, bars, net, awning, ac_unit, unknown]
+    default: unknown
+  - id: balcony
+    labels: {uk: "Балкон", en: "Balcony"}
+    values: [none, open, glazed, unknown]
+    default: unknown
+  - id: label_text
+    labels: {uk: "Напис", en: "Label text"}
+    free_text: true
+  - id: surface
+    labels: {uk: "Покриття", en: "Surface"}
+    values: [concrete, metal, membrane, gravel, grass, asphalt, unknown]
+    default: unknown
+  - id: hazard
+    labels: {uk: "Небезпека", en: "Hazard"}
+    values: [none, power_line, antenna, chimney, water, traffic, unknown]
+    default: unknown
+
+classes:
+  # ── отвори ────────────────────────────────────────────────────────────
+  - id: opening.window
+    labels: {uk: "Вікно", en: "Window"}
+    prompts: ["window", "building window", "apartment window"]
+    orientation: vertical
+    size_prior_m: {width: [0.5, 2.6], height: [0.5, 2.6]}
+    attributes: [state, glazing, obstruction, balcony, label_text]
+    handover:
+      allowed: [hover_handoff]
+      default: hover_handoff
+      standoff_m: 3.0
+      min_clearance_m: 1.5
+      approach_cone_deg: 30
+    citygml: Window
+
+  - id: opening.door
+    labels: {uk: "Двері", en: "Door"}
+    prompts: ["door", "entrance door", "building entrance"]
+    orientation: vertical
+    size_prior_m: {width: [0.7, 3.0], height: [1.8, 3.2]}
+    attributes: [state, glazing, obstruction, label_text]
+    handover:
+      allowed: [hover_handoff, pickup]
+      default: hover_handoff
+      standoff_m: 3.0
+      min_clearance_m: 1.5
+      approach_cone_deg: 30
+    citygml: Door
+
+  # ── придатні горизонтальні ділянки ────────────────────────────────────
+  - id: pad.roof_flat
+    labels: {uk: "Плаский дах", en: "Flat roof"}
+    prompts: ["flat roof", "rooftop"]
+    orientation: horizontal
+    size_prior_m: {width: [2.0, 200.0], height: [2.0, 200.0]}
+    attributes: [surface, hazard]
+    handover:
+      allowed: [land, tether_lower, drop]
+      default: land
+      standoff_m: 5.0
+      min_clearance_m: 2.0
+      approach_cone_deg: 20
+    citygml: RoofSurface
+
+  - id: pad.roof_pitched
+    labels: {uk: "Схилий дах", en: "Pitched roof"}
+    prompts: ["pitched roof", "sloped roof", "gable roof"]
+    orientation: horizontal
+    size_prior_m: {width: [2.0, 200.0], height: [2.0, 200.0]}
+    attributes: [surface, hazard]
+    # Схилий дах — не майданчик для посадки: лишається тільки скид, і то
+    # під питанням. Він у core, щоб даховий отвір мав носія.
+    handover:
+      allowed: [drop]
+      default: drop
+      standoff_m: 6.0
+      min_clearance_m: 3.0
+      approach_cone_deg: 15
+    citygml: RoofSurface
+
+  - id: pad.ground
+    labels: {uk: "Ділянка на землі", en: "Ground pad"}
+    prompts: ["open ground", "paved area", "courtyard"]
+    orientation: horizontal
+    size_prior_m: {width: [2.0, 500.0], height: [2.0, 500.0]}
+    attributes: [surface, hazard]
+    handover:
+      allowed: [land, tether_lower, drop]
+      default: tether_lower
+      standoff_m: 5.0
+      min_clearance_m: 3.0
+      approach_cone_deg: 20
+
+  # ── обмеження: не цілі, але впливають на підліт (§1) ──────────────────
+  - id: constraint.obstacle
+    labels: {uk: "Перешкода", en: "Obstacle"}
+    prompts: ["antenna", "chimney", "mast", "air conditioner", "street light"]
+    orientation: any
+    attributes: [hazard]
+
+  - id: constraint.vegetation
+    labels: {uk: "Рослинність", en: "Vegetation"}
+    prompts: ["tree", "tree canopy", "bush", "hedge"]
+    orientation: any
+    attributes: []
+
+  - id: constraint.no_go
+    labels: {uk: "Заборонена зона", en: "No-go zone"}
+    prompts: []
+    orientation: any
+    attributes: [hazard]

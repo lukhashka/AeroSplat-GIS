@@ -250,6 +250,8 @@ export interface RenderMeta {
   run: string | null;
   mode: RenderMode;
   frame: string;
+  width: number;
+  height: number;
   render_ms: number;
   gaussians: number;
   sh_degree: number | null;
@@ -266,4 +268,283 @@ export interface RenderStatus {
   vram_allocated_mb?: number;
   idle_unload_s?: number;
   loaded?: { scene: string; gaussians: number; idle_s: number }[];
+}
+
+// ── semantics: facades, taxonomy, authored access points ───────────────
+// (aerosplat/semantics/models.py, aerosplat/taxonomy, aerosplat/authored,
+//  aerosplat/server/api_semantics.py). ACCESS_POINTS §2-§5.
+export type SurfaceKind = "wall" | "roof_flat" | "roof_pitched" | "ground";
+export type ApKind = "opening" | "pad" | "marker" | "constraint";
+export type Lifecycle = "candidate" | "verified" | "rejected" | "stale";
+export type HandoverMode = "hover_handoff" | "tether_lower" | "drop" | "land" | "pickup" | "enter";
+
+export type Vec3 = [number, number, number];
+
+/** How well the captures see a facade. Without coverage a detection is not evidence (§5.3). */
+export interface Coverage {
+  cell_m: number;
+  cells: number;
+  visible: number;
+  covered: number;
+  mean_views: number;
+  max_gsd_cm: number;
+  best_gsd_cm: number | null;
+  median_angle_deg: number | null;
+  occlusion_tested: boolean;
+}
+
+export interface Facade {
+  id: string;
+  building_id: string;
+  kind: SurfaceKind;
+  origin: Vec3;
+  normal: Vec3;
+  u_axis: Vec3;
+  azimuth_deg: number;
+  u_min: number;
+  u_max: number;
+  v_ground: number;
+  v_max: number;
+  plane_rms_m: number;
+  n_points: number;
+  coverage: Coverage | null;
+}
+
+export interface BuildingRec {
+  id: string;
+  footprint: [number, number][];
+  area_m2: number;
+  ground_z: number;
+  roof_z: number;
+  height_m: number;
+  facade_ids: string[];
+}
+
+export interface TerrainModel {
+  res_m: number;
+  x0: number;
+  y0: number;
+  rows: number;
+  cols: number;
+  n_points: number;
+  filled_cells: number;
+}
+
+/** `views[j][i]`: column i, row j, **row 0 at the bottom** of the wall. 0 = the splat invented it. */
+export interface CoverageGrid {
+  cell_m: number;
+  nu: number;
+  nv: number;
+  u_min: number;
+  v_min: number;
+  max_gsd_cm: number;
+  max_views: number;
+  views: number[][];
+}
+
+export interface FacadeDetail {
+  facade: Facade;
+  building: BuildingRec | null;
+  coverage_grid: CoverageGrid | null;
+  run_id: string;
+  epoch_id: string;
+  features: number;
+}
+
+export interface SemanticsOut {
+  run_id: string;
+  epoch_id: string;
+  finished_at: string | null;
+  frame: string;
+  terrain: TerrainModel;
+  buildings: BuildingRec[];
+  facades: Facade[];
+  warnings: string[];
+  params: Record<string, unknown>;
+  features_by_facade: Record<string, number>;
+  scene: string | null;
+}
+
+export interface TaxonomyAttribute {
+  id: string;
+  labels: { uk: string; en: string };
+  values: string[];
+  default: string | null;
+  free_text: boolean;
+  dynamic: boolean;
+}
+
+export interface TaxonomyClass {
+  id: string;
+  parent: string | null;
+  kind: ApKind;
+  pack: string;
+  labels: { uk: string; en: string };
+  orientation: "vertical" | "horizontal" | "any";
+  size_prior_m: { width: [number, number]; height: [number, number] } | null;
+  attributes: TaxonomyAttribute[];
+  handover: {
+    allowed: HandoverMode[];
+    default: HandoverMode;
+    standoff_m: number;
+    min_clearance_m: number;
+    approach_cone_deg: number;
+  } | null;
+  citygml: string | null;
+}
+
+export interface TaxonomyOut {
+  version: string;
+  packs: { pack: string; version: string }[];
+  classes: TaxonomyClass[];
+}
+
+/** Pixel ↔ (u, v) of a facade orthophoto: the facade's answer to `ground_grid`. */
+export interface FacadeGrid {
+  facade_id: string;
+  m_per_px: number;
+  pixel00_uv: [number, number];
+  du_uv: [number, number];
+  dv_uv: [number, number];
+  u_min: number;
+  u_max: number;
+  v_min: number;
+  v_max: number;
+  origin_enu: Vec3;
+  u_axis: Vec3;
+  normal: Vec3;
+  v_ground: number;
+  azimuth_deg: number;
+}
+
+export interface FacadeOrthoMeta extends RenderMeta {
+  facade_grid: FacadeGrid;
+  facade: {
+    id: string;
+    building_id: string;
+    azimuth_deg: number;
+    length_m: number;
+    height_m: number;
+    v_ground: number;
+    u_min: number;
+    u_max: number;
+    v_max: number;
+    plane_rms_m: number;
+  };
+  gsd_cm: number;
+}
+
+export interface OrthoRequest {
+  gsd_cm?: number;
+  margin_m?: number;
+  standoff_m?: number;
+  output?: RenderOutput;
+  run_id?: string | null;
+}
+
+export interface ApGeometry {
+  frame: string;
+  polygon_uv: [number, number][];
+  center: Vec3;
+  normal: Vec3;
+  u_axis: Vec3;
+  width: number;
+  height: number;
+  u_center: number;
+  v_center: number;
+}
+
+export interface ApAddress {
+  floor_index: number | null;
+  floor_label: string | null;
+  column: number | null;
+  ordinal_on_floor: number | null;
+  floor_ambiguous: boolean;
+  canonical: string | null;
+}
+
+export interface ApHost {
+  facade_id: string;
+  building_id: string;
+  origin: Vec3;
+  normal: Vec3;
+  u_axis: Vec3;
+  v_ground: number;
+  azimuth_deg: number;
+}
+
+export interface ApProvenance {
+  origin: "pipeline" | "manual";
+  run_id: string | null;
+  epoch_id: string | null;
+  model: string | null;
+  support_views: number | null;
+  evidence: string[];
+  created_by: string;
+  created_at: string;
+  edits: { by: string; at: string; what: string }[];
+}
+
+export interface AccessPoint {
+  id: string;
+  site_key: string;
+  class: string;
+  kind: ApKind;
+  taxonomy: string;
+  host: ApHost;
+  geometry: ApGeometry;
+  attributes: Record<string, string>;
+  address: ApAddress | null;
+  confidence: number | null;
+  lifecycle: Lifecycle;
+  provenance: ApProvenance;
+  notes: string;
+}
+
+export interface AccessPointCreate {
+  facade_id: string;
+  class: string;
+  polygon_uv: [number, number][];
+  attributes?: Record<string, string>;
+  lifecycle?: Lifecycle;
+  notes?: string;
+  by?: string;
+}
+
+export interface AccessPointPatch {
+  class?: string;
+  polygon_uv?: [number, number][];
+  attributes?: Record<string, string>;
+  lifecycle?: Lifecycle;
+  notes?: string;
+  by?: string;
+}
+
+export interface AddressRow {
+  floor_index: number;
+  floor_label: string;
+  v_center: number;
+  v_bottom: number;
+  members: string[];
+}
+
+export interface AddressOut {
+  facade_id: string;
+  rows: AddressRow[];
+  column_centres: number[];
+  floor_height_m: number | null;
+  ambiguous: boolean;
+  reasons: string[];
+  features: AccessPoint[];
+}
+
+export interface AuditEntry {
+  at: string;
+  by: string;
+  op: string;
+  feature_id: string;
+  site_key: string;
+  what: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
 }

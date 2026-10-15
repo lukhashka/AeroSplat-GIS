@@ -29,14 +29,11 @@ from aerosplat.logging_utils import fix_console_encoding, get_logger
 from aerosplat.semantics.buildings import find_buildings
 from aerosplat.semantics.coverage import facade_coverage, transform_pose
 from aerosplat.semantics.facades import facades_of_building
-from aerosplat.semantics.models import Facade, SemanticsResult
+from aerosplat.semantics.models import (COVERAGE_NPZ, SEMANTICS_JSON, TERRAIN_NPZ, Facade,
+                                        SemanticsResult)
 from aerosplat.semantics.terrain import build_terrain
 
 log = get_logger()
-
-SEMANTICS_JSON = "semantics.json"
-TERRAIN_NPZ = "terrain.npz"
-COVERAGE_NPZ = "coverage.npz"
 
 
 def load_cloud_xyz(path: Path) -> np.ndarray:

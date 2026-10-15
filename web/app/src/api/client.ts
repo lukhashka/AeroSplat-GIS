@@ -1,4 +1,4 @@
-import type { RenderMeta, RenderRequest } from "./types";
+import type { FacadeOrthoMeta, OrthoRequest, RenderMeta, RenderRequest } from "./types";
 
 export const API = "/api/v2";
 
@@ -108,3 +108,41 @@ export async function renderSite(
   const meta = JSON.parse(res.headers.get("X-Render-Meta") ?? "{}") as RenderMeta;
   return { url: URL.createObjectURL(await res.blob()), meta };
 }
+
+/** Render one facade head-on; resolves to the PNG plus the (u, v) ↔ pixel grid. */
+export async function renderFacadeOrtho(
+  project: string,
+  site: string,
+  facadeId: string,
+  body: OrthoRequest,
+  signal?: AbortSignal,
+): Promise<{ url: string; meta: FacadeOrthoMeta }> {
+  const res = await fetch(`${API}/sites/${project}/${site}/facades/${facadeId}/ortho`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: unknown = text;
+    try {
+      detail = JSON.parse(text).detail ?? text;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const meta = JSON.parse(res.headers.get("X-Render-Meta") ?? "{}") as FacadeOrthoMeta;
+  return { url: URL.createObjectURL(await res.blob()), meta };
+}
+
+export const api2 = {
+  patch: <T>(path: string, body: unknown) =>
+    fetch(API + path, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => parse<T>(r)),
+  del: <T>(path: string) => fetch(API + path, { method: "DELETE" }).then((r) => parse<T>(r)),
+};

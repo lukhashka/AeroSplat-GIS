@@ -26,6 +26,7 @@ CLOUD = "cloud"            # gs/{dense,cloud}.pt (whichever the run trained from
 SPLAT_RECON = "splat_recon"
 CLOUD_RECON = "cloud_recon"
 REGISTRATION = "registration_report"
+SEMANTICS = "semantics"    # semantics/ of the run: terrain, buildings, facades, coverage
 WGS84 = "wgs84"
 
 

@@ -1020,3 +1020,162 @@ table.list tr.click:hover td {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── facade editor (ACCESS_POINTS §5.3, §10.4) ───────────────────────── */
+.cov-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.cov-bar > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+}
+.panel-sub {
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.class-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.class-row,
+.ap-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.class-row:hover,
+.ap-row:hover {
+  background: var(--panel-2);
+}
+.class-row.on,
+.ap-row.on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.ap-row .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.ap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 34vh;
+  overflow: auto;
+}
+.draft-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+kbd {
+  padding: 1px 5px;
+  font: 500 11px/1.5 var(--mono);
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+}
+.kbd-help {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 6px 18px;
+  font-size: 13px;
+}
+.cov-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.cov-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cov-legend i {
+  width: 11px;
+  height: 11px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+}
+/* The orthophoto fills the stage: at 5 cm/px a 20 m wall is only ~440 px wide, and
+   drawing an opening to the centimetre needs screen pixels, not source pixels. */
+.facade-img {
+  width: 100%;
+  cursor: crosshair;
+  user-select: none;
+}
+.cov-cell {
+  min-width: 190px;
+}
+.cov-cell small {
+  display: block;
+  line-height: 1.35;
+}
+/* No max-height here on purpose: the SVG overlay is `inset: 0` of this container, so
+   the container's box has to stay exactly the image's box. Letterboxing it would put
+   every drawn rectangle a few pixels off the wall. A tall facade scrolls instead. */
+.facade-img img {
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  height: auto;
+}
+/* The coverage map: cells stay square-edged on purpose, so the operator sees how
+   coarse the evidence actually is instead of a smooth gradient. */
+.facade-cov,
+.facade-overlay {
+  position: absolute;
+  pointer-events: none;
+}
+.facade-cov {
+  image-rendering: pixelated;
+}
+.facade-overlay {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.facade-overlay .ap {
+  fill: rgba(61, 219, 196, 0.08);
+  pointer-events: all;
+  cursor: pointer;
+}
+.facade-overlay .ap.on {
+  fill: rgba(61, 219, 196, 0.2);
+}
+.facade-overlay .ap.draft {
+  fill: rgba(124, 184, 255, 0.16);
+  stroke: var(--blue);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
