@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import RunLayout
@@ -15,6 +15,11 @@ from aerosplat.pipeline.stages import STAGES, Stage
 
 class StageError(RuntimeError):
     """A stage reported failure without raising (non-zero return / SystemExit)."""
+
+
+# Called with {"stage", "label", "state": started|skipped|done|failed, "index", "total", ...}
+# (aerosplat.jobs turns these into job events; the CLI passes nothing).
+StageCallback = Callable[[dict[str, Any]], None]
 
 
 def _fingerprint(stage: Stage, cfg: dict[str, Any], L: RunLayout) -> str:
@@ -39,8 +44,15 @@ def _invoke(stage: Stage, argv: list[str], cfg: dict[str, Any]) -> None:
 
 
 def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
-               dry_run: bool = False, resume: bool = False) -> None:
+               dry_run: bool = False, resume: bool = False,
+               on_event: Optional[StageCallback] = None) -> None:
     log = get_logger(log_file=None if dry_run else L.log_path)
+
+    def emit(stage: Stage, index: int, state: str, **extra: Any) -> None:
+        if on_event is not None and not dry_run:
+            on_event({"stage": stage.name, "label": stage.label, "state": state,
+                      "index": index, "total": len(names), **extra})
+
     manifest = Manifest.load(L.manifest_path)
     if not dry_run:
         site_info = None
@@ -50,13 +62,14 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
         manifest.start_run(L.dataset, cfg, L.project_dir, extra=site_info)
     upstream_ran = False
 
-    for name in names:
+    for index, name in enumerate(names, 1):
         stage = STAGES[name]
         log.info(f"\n{'=' * 70}\n▶  {stage.label}\n{'=' * 70}")
 
         reason = stage.skip_reason(cfg)
         if reason:
             log.info(f"⏭  [{name}] {reason}, пропущено\n")
+            emit(stage, index, "skipped", reason=reason)
             continue
 
         argv = stage.argv(cfg, L)
@@ -70,22 +83,27 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
 
         if resume and not upstream_ran and manifest.is_fresh(name, fp, outputs):
             log.info(f"⏭  [{name}] вже виконано з тим самим конфігом (--resume), пропущено\n")
+            emit(stage, index, "skipped", reason="resume: up to date")
             continue
 
         upstream_ran = True
+        emit(stage, index, "started")
         t0 = time.perf_counter()
         try:
             _invoke(stage, argv, cfg)
         except BaseException as e:
+            dt = time.perf_counter() - t0
             manifest.record(name, status="failed", fingerprint=fp,
-                            seconds=time.perf_counter() - t0, inputs=inputs,
+                            seconds=dt, inputs=inputs,
                             outputs=outputs, error=f"{type(e).__name__}: {e}")
-            log.error(f"\n❌ Стадія '{name}' впала після {time.perf_counter() - t0:.1f}s")
+            log.error(f"\n❌ Стадія '{name}' впала після {dt:.1f}s")
+            emit(stage, index, "failed", seconds=round(dt, 2), error=f"{type(e).__name__}: {e}")
             raise
         dt = time.perf_counter() - t0
         manifest.record(name, status="ok", fingerprint=fp, seconds=dt,
                         inputs=inputs, outputs=outputs)
         log.info(f"\n✅ {stage.label} — {dt:.1f}s")
+        emit(stage, index, "done", seconds=round(dt, 2))
 
 
 def preflight(cfg: dict[str, Any], L: RunLayout, names: list[str]) -> None:

@@ -40,10 +40,12 @@ from typing import Dict, Optional, Tuple
 import torch
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
+from aerosplat.server import api_v2
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
 from aerosplat.store.paths import default_projects_root
 from aerosplat.store.scenes import SceneSource, discover_scenes
@@ -918,15 +920,56 @@ def reload_caches(dataset: Optional[str] = Query(None)):
             "scenes": sorted(k for k, s in SCENES.items() if k == s.name)}
 
 
+def refresh_scenes() -> Dict[str, object]:
+    """Re-read the catalog; drop cached payloads only of scenes whose files changed.
+
+    Workers finish runs in other processes, so the API (aerosplat.server.api_v2)
+    calls this before the UI opens a scene instead of restarting uvicorn.
+    """
+    with _lock:
+        old = {n: (s.run, s.cloud, s.splat) for n, s in SCENES.items() if n == s.name}
+        load_scenes()
+        new = {n: (s.run, s.cloud, s.splat) for n, s in SCENES.items() if n == s.name}
+        changed = sorted(n for n in old.keys() | new.keys() if old.get(n) != new.get(n))
+        for name in changed:
+            for key in [k for k in _PAYLOADS if k[0] == name]:
+                del _PAYLOADS[key]
+            _FRAMES.pop(name, None)
+    return {"scenes": sorted(new), "changed": changed, "default": DEFAULT_DATASET}
+
+
+app.state.refresh_scenes = refresh_scenes
+app.include_router(api_v2.router)
+
 app.mount(
     "/web",
     StaticFiles(directory=os.path.join(project_dir, "web"), html=True),
     name="web",
 )
 
-if __name__ == "__main__":
-    import uvicorn
+# Web UI (web/app, Vite build). Client-side routes under /app/* all get
+# index.html; hashed assets are served as files. Without a build, / falls back
+# to the classic viewer.
+UI_DIST = PROJECT_DIR / "web" / "app" / "dist"
 
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/app/" if (UI_DIST / "index.html").is_file() else "/web/")
+
+
+@app.get("/app", include_in_schema=False)
+@app.get("/app/{path:path}", include_in_schema=False)
+def web_app(path: str = "") -> Response:
+    index = UI_DIST / "index.html"
+    if not index.is_file():
+        return _error(404, "web UI is not built: cd web/app && npm ci && npm run build")
+    target = (UI_DIST / path).resolve()
+    if path and target.is_file() and target.is_relative_to(UI_DIST.resolve()):
+        return FileResponse(target)
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
+def describe_scenes() -> None:
     print(f"🌍 [Server] Каталог: {PROJECTS_ROOT}; legacy: {LEGACY_DATA_DIR}")
     print(f"   Датасет за замовчуванням: {DEFAULT_DATASET}")
     for name, src in SCENES.items():
@@ -938,4 +981,11 @@ if __name__ == "__main__":
         print(f"   {name}: {where}, {metric}{aliases}")
         print(f"   {' ' * len(name)}  cloud={src.cloud}")
         print(f"   {' ' * len(name)}  splat={src.splat}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    describe_scenes()
+    # localhost only: the API has no authentication yet (ADR-0010).
     uvicorn.run(app, host="127.0.0.1", port=8000)

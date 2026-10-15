@@ -24,12 +24,13 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from typing import Callable, Optional
 
 from aerosplat.config import RunConfig, build_config
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
 from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import DATA_DIR, RunLayout, abs_path
-from aerosplat.pipeline.runner import StageError, preflight, run_stages
+from aerosplat.pipeline.runner import StageCallback, StageError, preflight, run_stages
 
 STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval", "georef"]
 
@@ -149,7 +150,10 @@ def resolve_stages(args) -> list:
     return chosen
 
 
-def main(argv=None) -> int:
+def main(argv=None, on_event: Optional[StageCallback] = None,
+         on_run: Optional[Callable[[str, str], None]] = None) -> int:
+    """`aerosplat run`. Job processes (aerosplat.jobs.child) pass `on_event` for stage
+    progress and `on_run(site_key, run_id)` to learn the run before its stages start."""
     args = build_parser().parse_args(argv)
     log = get_logger()
     cfg = resolve_config(args)
@@ -188,8 +192,11 @@ def main(argv=None) -> int:
     t0 = time.perf_counter()
     if site_run is not None and not args.dry_run:
         site_run.begin(cfg)
+        if on_run is not None:
+            on_run(site_run.site.key, site_run.run_id)
     try:
-        run_stages(cfg, layout, stages, dry_run=args.dry_run, resume=args.resume)
+        run_stages(cfg, layout, stages, dry_run=args.dry_run, resume=args.resume,
+                   on_event=on_event)
     except StageError as e:
         if site_run is not None and not args.dry_run:
             site_run.end(cfg, ok=False)
@@ -220,7 +227,7 @@ def main(argv=None) -> int:
 
 
 def cli() -> int:
-    """Console-script entry point: `aerosplat [run|doctor|serve] ...`."""
+    """Console-script entry point: `aerosplat [run|doctor|serve|catalog|worker|up] ...`."""
     _fix_console_encoding()
     argv = sys.argv[1:]
     cmd = argv[0] if argv and not argv[0].startswith("-") else "run"
@@ -238,7 +245,13 @@ def cli() -> int:
         sys.argv = ["aerosplat serve", *rest]
         runpy.run_module("aerosplat.server.main", run_name="__main__")
         return 0
-    raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve, catalog")
+    if cmd == "worker":
+        from aerosplat.jobs import worker
+        return worker.main(rest)
+    if cmd == "up":
+        from aerosplat.server import up
+        return up.main(rest)
+    raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve, catalog, worker, up")
 
 
 

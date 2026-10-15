@@ -1,4 +1,4 @@
-# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-1-foundation`, стан на 2026-10-15, + S1)
+# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-6-platform`, стан на 2026-10-15: S1 + S2)
 
 > Документ описує **фактичний** стан коду, а не README. Там, де README
 > розходиться з кодом, правдою вважається код (див. §8).
@@ -284,6 +284,56 @@ flowchart TD
 Далі в ділянці: run `20261015-023347` (`wgs84`, пози переведено у WGS84 на вході — неузгоджені
 з кадрами, §4) і run `20261015-031843` (`sphere-enu+affine`, поточний «latest», його показує сервер).
 
+### 3.10 Черга задач і воркери — `aerosplat/jobs/` (S2, ADR-0010)
+
+* **Таблиці в каталозі** (міграція `0002`): `jobs` (kind, resource `gpu|cpu`, status
+  `queued → running → succeeded|failed|cancelled`, priority, site_key, payload, result,
+  error, cancel_requested, worker_id, часи), `job_events` (append-only; `pk` — курсор
+  стріму; типи `status`, `stage`, `log`, `result`), `workers` (heartbeat). SQLite у режимі
+  **WAL** з `busy_timeout`, бо в один файл пишуть API, воркери й процеси задач.
+* **`JobQueue`** (`jobs/queue.py`): `claim` — один умовний `UPDATE … WHERE status='queued'`,
+  тож задачу не забирають двічі; для `gpu` в тому ж операторі перевірка «жодної `gpu`-задачі
+  в `running`» → одночасно **одна** GPU-задача, скільки б GPU-воркерів не було. FIFO в межах
+  пріоритету — за автоінкрементним `pk`. `request_cancel`: `queued` → одразу `cancelled`,
+  `running` → прапорець для воркера. `recover_orphans`: `running`-задачі зупиненого або
+  мовчазного (> 45 с) воркера → `failed`.
+* **Воркер** (`jobs/worker.py`, `aerosplat worker [--resource gpu|cpu] [--once]`): забирає
+  задачу і запускає **окремий процес** `python -m aerosplat.jobs.child` у власній групі
+  процесів. Читає його stdout/stderr і пише пачками (0.5 с / 500 рядків) як `log`-події,
+  щосекунди перевіряє скасування (тоді вбиває все дерево — `taskkill /T` на Windows,
+  `killpg` на POSIX, тобто й COLMAP), шле heartbeat. Код виходу 0 → `succeeded`, інакше
+  `failed` з останніми 20 рядками виводу в `error`. Якщо процес задачі не закрив свій run у
+  каталозі (вбитий, OOM), воркер ставить run у `failed`. На старті прибирає «мертвих»
+  воркерів цього хоста (pid не живий) і їхні задачі.
+* **Процес задачі** (`jobs/child.py`): `pipeline` → `starter.main(spec.argv())` з колбеками
+  `on_run(site, run_id)` (→ `result`) і `on_event` (→ `stage`-події від `run_stages`:
+  `started|skipped|done|failed`, index/total, секунди); `diagnostic` — фіктивні кроки для
+  перевірки воркера і стріму.
+* **`PipelineSpec`** (`jobs/models.py`): site, epoch, capture, run_id, stages або
+  from/to, resume, overrides (ключі `RunConfig`, повна валідація при постановці; `dataset`,
+  `footage_dir`, `json_path` заборонені — їх визначає ділянка).
+
+### 3.11 API v2 і веб-UI — `aerosplat/server/api_v2.py`, `web/app/` (S2)
+
+* **API v2** (без torch): `projects`, `sites` (створення з origin, зведення, деталі),
+  `captures` (multipart-завантаження через ті самі адаптери ingest, що й CLI; мініатюри —
+  лише для каталогізованих імен), `runs` (`POST` → `gpu`-задача; деталі зі `manifest.json`,
+  `metrics.json`, звіт), `jobs` (список, деталі, скасування, події з курсора,
+  **WebSocket** `/jobs/{id}/stream` — опитує `job_events` кожні 0.4 с і закривається після
+  термінального статусу), `system` (воркери, черга, `nvidia-smi`), `pipeline` (стадії, схема
+  і дефолти `RunConfig`), `scenes/refresh` — перечитує каталог у процесі сервера (run-и
+  завершують воркери в інших процесах) і скидає кеш лише змінених сцен. OpenAPI — `/docs`.
+* **Веб-UI** (`web/app`, Vite + React + TypeScript, TanStack Query, MapLibre GL;
+  збірка `npm run build` → `web/app/dist`, сервер віддає її з `/app/` з SPA-fallback,
+  `/` перенаправляє туди або на класичний в'ювер `/web/`): огляд ділянок на карті,
+  створення ділянки кліком (origin), сторінка ділянки (позиції камер на карті, захоплення
+  з мініатюрами, run-и з деталями й метриками), завантаження захоплень з прогресом,
+  діалог запуску run-а (стадії, параметри), монітор задачі (стадії, живий лог, скасування),
+  список задач, 3D — класичний в'ювер у рамці до Фази 4.2. Підкладки — лише безключові:
+  OSM (у темній темі — інверсія яскравості растру) і супутник Esri World Imagery.
+* **`aerosplat up`** (`server/up.py`): сервер + GPU- і CPU-воркер однією командою;
+  воркери зупиняються разом із сервером. API слухає лише `127.0.0.1` (автентифікації немає).
+
 ---
 
 ## 4. Системи координат (ключове для GIS)
@@ -439,8 +489,10 @@ AeroSplat-GIS/
 │   ├── sfm/                       # sfm_runner, dense_runner
 │   ├── io/                        # cloud_io, ply_parser, colmap_parser
 │   ├── gs/                        # trainer (активний), evaluate, report
-│   └── server/main.py             # FastAPI
-├── web/                           # index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
+│   ├── jobs/                      # models, queue, worker, child, proctree (черга задач, S2)
+│   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, up.py (`aerosplat up`)
+├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
+│   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored)
 ├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)
 ├── tests/                         # CPU-тести + golden-фікстури Earth Studio
 ├── tools/                         # дослідницькі скрипти, gsplat_env.bat, migrate_dataset.py
@@ -449,7 +501,7 @@ AeroSplat-GIS/
 ├── diff-gaussian-rasterization/   # сторонній репо (ignored, non-commercial)
 ├── data/                          # legacy-датасети (ignored; у git лише data/README.md)
 ├── projects/                      # дерево проєктів + catalog.db (ignored, ADR-0006)
-└── pyproject.toml, requirements.txt, package.json (eslint)
+└── pyproject.toml, requirements.txt, package.json (eslint для web/)
 ```
 
 ---

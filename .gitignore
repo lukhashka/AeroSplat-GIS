@@ -35,3 +35,7 @@ diff-gaussian-rasterization/
 
 # Node
 node_modules/
+
+# Web UI build output (web/app: npm run build)
+web/app/dist/
+*.tsbuildinfo

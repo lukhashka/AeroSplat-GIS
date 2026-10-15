@@ -283,3 +283,39 @@ def test_no_scenes_is_404_and_creates_nothing(env):
     r = client.get("/api/v1/scene-meta")
     assert r.status_code == 404 and "No scenes" in r.text
     assert not projects.exists()          # the server never creates a catalog
+
+
+def test_v2_router_and_scene_refresh(server, env):
+    client, mod = server
+    projects, _ = env
+    assert client.get("/api/v2/sites").status_code == 200
+    first = client.post("/api/v2/scenes/refresh").json()
+    assert first["changed"] == [] and "demo/t" in first["scenes"]
+    # A worker finishing a run of a new site in another process is picked up
+    # on refresh, without restarting the server.
+    add_site_run(projects, "fresh")
+    assert "demo/fresh" not in mod.SCENES
+    second = client.post("/api/v2/scenes/refresh").json()
+    assert second["changed"] == ["demo/fresh"] and "demo/fresh" in mod.SCENES
+    for cat in mod.api_v2._CATALOGS.values():
+        cat.close()
+    mod.api_v2._CATALOGS.clear()
+
+
+def test_root_redirect_and_ui_fallback(server, tmp_path, monkeypatch):
+    client, mod = server
+    monkeypatch.setattr(mod, "UI_DIST", tmp_path / "no-build")
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/web/"
+    assert client.get("/app/sites/x").status_code == 404
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>ui</title>")
+    (dist / "assets" / "a.js").write_text("console.log(1)")
+    monkeypatch.setattr(mod, "UI_DIST", dist)
+    assert client.get("/", follow_redirects=False).headers["location"] == "/app/"
+    assert "<title>ui</title>" in client.get("/app/sites/demo/t").text   # SPA route
+    assert client.get("/app/assets/a.js").text == "console.log(1)"
+    for escape in ("/app/../../pyproject.toml", "/app/..%2F..%2F..%2Fpyproject.toml"):
+        r = client.get(escape)
+        assert "[project]" not in r.text            # never a file outside dist/

@@ -7,6 +7,7 @@ import pytest
 import yaml
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 from sqlalchemy import exc, select, text
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from aerosplat.geo.crs import GeoPoint
 from aerosplat.store import (BBox, Capture, CaptureSource, Catalog, CatalogError, Epoch, Image,
                              NotFoundError, RunStatus, Site)
+from aerosplat.store.catalog import alembic_config
 from aerosplat.store.db import Base, OriginImmutableError, SiteRow
 
 ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
@@ -26,10 +28,17 @@ def _site(cat, sid="s1", project="demo", origin=ORIGIN):
 
 
 def test_migrations_match_models(catalog):
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
     with catalog.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={"compare_type": True})
         assert compare_metadata(ctx, Base.metadata) == []
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
+
+
+def test_catalog_db_is_wal(catalog):
+    # API, workers and job processes share the file (aerosplat.store.db.make_engine).
+    with catalog.engine.connect() as conn:
+        assert conn.execute(text("PRAGMA journal_mode")).scalar() == "wal"
 
 
 def test_reopen_keeps_data(tmp_path):
@@ -150,3 +159,43 @@ def test_model_validation():
         BBox(west=1, south=0, east=0, north=1)
     with pytest.raises(ValidationError):
         Image(name="x", sha256="nothex", bytes=1)
+
+
+_OPEN_CATALOG = """
+import sys
+from aerosplat.store import Catalog
+Catalog.open(sys.argv[1]).close()
+"""
+
+
+@pytest.mark.parametrize("start_at", [None, "0001"])
+def test_concurrent_open_migrates_once(tmp_path, start_at):
+    # `aerosplat up` starts the server and two workers at once; each opens the
+    # catalog and runs pending migrations. They must not race (one used to die
+    # with "table jobs already exists").
+    import os
+    import subprocess
+    import sys
+
+    from aerosplat.store.catalog import upgrade
+    from aerosplat.store.db import make_engine
+    from aerosplat.store.paths import StorePaths
+
+    root = tmp_path / "projects"
+    root.mkdir()
+    if start_at:
+        engine = make_engine(StorePaths(root).catalog_db)
+        upgrade(engine, start_at)
+        engine.dispose()
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    procs = [subprocess.Popen([sys.executable, "-c", _OPEN_CATALOG, str(root)], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for _ in range(6)]
+    outputs = [p.communicate(timeout=120)[0] for p in procs]
+    failed = [out for p, out in zip(procs, outputs) if p.returncode != 0]
+    assert not failed, failed[0][-1500:]
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
+    cat = Catalog.open(root)
+    with cat.engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
+    cat.close()

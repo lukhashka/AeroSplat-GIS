@@ -14,6 +14,7 @@ uvicorn>=0.28
 pyproj>=3.6
 sqlalchemy>=2.0
 alembic>=1.13
+python-multipart>=0.0.9
 
 # Optional: CUDA rasterizer (Inria, NON-COMMERCIAL licence — see docs/DECISIONS.md).
 # Built from ./diff-gaussian-rasterization; without it the trainer falls back to
