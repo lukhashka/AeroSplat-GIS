@@ -3,7 +3,8 @@ import globals from "globals";
 
 // web/ has no bundler: classic <script> files sharing globals, plus a Worker.
 export default [
-  { ignores: ["node_modules/**"] },
+  // web/app is TypeScript (checked by tsc in its own package); dist/ is build output.
+  { ignores: ["node_modules/**", "web/app/**"] },
   js.configs.recommended,
   {
     files: ["web/**/*.js"],

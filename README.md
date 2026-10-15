@@ -213,6 +213,26 @@ synthetic-режим. Тренер без `--self-test` вимагає явні 
 
 ------------------------------------------------------------------------
 
+#  Web UI and job queue
+
+Веб-UI керує ділянками, завантаженням зйомок, запуском реконструкцій і показує
+прогрес наживо. Одноразово зібрати UI (потрібен Node.js 20+):
+
+``` bash
+cd web/app && npm ci && npm run build
+```
+
+Сервер разом із GPU- і CPU-воркером:
+
+``` bash
+aerosplat up            # http://127.0.0.1:8000/  →  веб-UI на /app/
+```
+
+Задачі виконують воркери з черги в каталозі (`projects/catalog.db`), по одній
+GPU-задачі за раз. Окремо: `aerosplat worker --resource gpu`, `aerosplat serve`.
+Для розробки UI з hot reload: `cd web/app && npm run dev` (проксіює API на :8000).
+Архітектура — [docs/ARCHITECTURE.md §3.10–3.11](docs/ARCHITECTURE.md).
+
 #  Launch Visualization Server
 
 ``` bash

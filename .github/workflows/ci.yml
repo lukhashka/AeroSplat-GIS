@@ -26,7 +26,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/app/package-lock.json
       - name: Lint web (eslint)
         run: npm ci && npm run lint
+      - name: Web UI (typecheck + build)
+        working-directory: web/app
+        run: npm ci && npm run build
       - name: Tests (CPU only)
         run: pytest -q
