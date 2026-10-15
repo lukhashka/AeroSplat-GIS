@@ -928,6 +928,66 @@ table.list tr.click:hover td {
   display: block;
 }
 
+.render-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+.render-controls .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.render-controls .field {
+  min-width: 0;
+}
+.render-controls input,
+.render-controls select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.render-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.render-img {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #000;
+  overflow: hidden;
+  line-height: 0;
+  align-self: flex-start;
+}
+.render-img img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 190px);
+  height: auto;
+  width: auto;
+}
+.render-busy,
+.render-readout {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
+  pointer-events: none;
+}
+.render-busy {
+  top: 10px;
+}
+.render-readout {
+  bottom: 10px;
+}
+
 .kv {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -954,6 +1014,9 @@ table.list tr.click:hover td {
     padding: 18px 16px 40px;
   }
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .render-layout {
     grid-template-columns: 1fr;
   }
 }

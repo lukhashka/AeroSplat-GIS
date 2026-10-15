@@ -34,7 +34,7 @@ package-dir = {"" = "src"}
 packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
             "aerosplat.sfm", "aerosplat.gs", "aerosplat.server", "aerosplat.store",
             "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
-            "aerosplat.ingest", "aerosplat.jobs"]
+            "aerosplat.ingest", "aerosplat.jobs", "aerosplat.render"]
 
 [tool.setuptools.package-data]
 "aerosplat.store.migrations" = ["script.py.mako"]

@@ -229,7 +229,7 @@ def main(argv=None, on_event: Optional[StageCallback] = None,
 
 
 def cli() -> int:
-    """Console-script entry point: `aerosplat [run|doctor|serve|catalog|worker|up] ...`."""
+    """Console-script entry point: `aerosplat [run|doctor|serve|catalog|worker|up|render-service] ...`."""
     _fix_console_encoding()
     argv = sys.argv[1:]
     cmd = argv[0] if argv and not argv[0].startswith("-") else "run"
@@ -253,7 +253,11 @@ def cli() -> int:
     if cmd == "up":
         from aerosplat.server import up
         return up.main(rest)
-    raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve, catalog, worker, up")
+    if cmd == "render-service":
+        from aerosplat.render import service
+        return service.main(rest)
+    raise SystemExit(f"Невідома команда '{cmd}'. "
+                     f"Доступні: run, doctor, serve, catalog, worker, up, render-service")
 
 
 

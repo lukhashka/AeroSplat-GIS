@@ -1,10 +1,10 @@
 """`aerosplat up`: the whole platform on one workstation — API + web UI and workers.
 
-    aerosplat up                      # http://127.0.0.1:8000 , GPU worker + CPU worker
-    aerosplat up --no-cpu-worker
+    aerosplat up                      # http://127.0.0.1:8000 , GPU + CPU workers, render service :8001
+    aerosplat up --no-cpu-worker --no-render
     aerosplat up --projects-root D:/aerosplat/projects
 
-Workers run as separate processes (a crashed or OOM-killed job never touches the
+Workers and the render service run as separate processes (a crashed or OOM-killed job never touches the
 API). A worker that exits is restarted with a growing delay, so the UI never
 silently loses its GPU slot; all workers stop together with the server.
 """
@@ -22,18 +22,36 @@ from typing import Optional
 
 from aerosplat.jobs.proctree import group_kwargs, kill_tree
 from aerosplat.logging_utils import fix_console_encoding
+from aerosplat.paths import PROJECT_DIR
 
 RESTART_DELAYS_S = (2.0, 5.0, 15.0, 30.0, 60.0)
 HEALTHY_AFTER_S = 120.0     # a worker that lived this long resets its restart backoff
 POLL_S = 1.0
 
 
-class WorkerSupervisor(threading.Thread):
-    """Keep one worker process per resource class alive until stop()."""
+RENDER = "render"           # the render service is supervised like a worker
 
-    def __init__(self, resources: list[str]):
+
+def render_service_command(port: int) -> list[str]:
+    """Command line of the render service. On Windows gsplat is JIT-built, which only works
+    inside tools/gsplat_env.bat (VS 2022 + the CUDA toolkit torch was built for)."""
+    cmd = [sys.executable, "-m", "aerosplat.render.service", "--port", str(port)]
+    env_bat = PROJECT_DIR / "tools" / "gsplat_env.bat"
+    if os.name == "nt" and env_bat.is_file():
+        try:
+            from gsplat import csrc  # noqa: F401  (prebuilt: no toolchain needed)
+        except ImportError:
+            return ["cmd.exe", "/c", str(env_bat), *cmd]
+    return cmd
+
+
+class WorkerSupervisor(threading.Thread):
+    """Keep one process per resource class (and the render service) alive until stop()."""
+
+    def __init__(self, resources: list[str], commands: Optional[dict[str, list[str]]] = None):
         super().__init__(name="worker-supervisor", daemon=True)
         self.resources = resources
+        self.commands = commands or {}
         self.procs: dict[str, subprocess.Popen] = {}
         self.started: dict[str, float] = {}
         self.failures: dict[str, int] = {r: 0 for r in resources}
@@ -42,9 +60,10 @@ class WorkerSupervisor(threading.Thread):
         self._lock = threading.Lock()
 
     def _spawn(self, resource: str) -> None:
+        cmd = self.commands.get(resource) or [
+            sys.executable, "-m", "aerosplat.jobs.worker", "--resource", resource]
         self.procs[resource] = subprocess.Popen(
-            [sys.executable, "-m", "aerosplat.jobs.worker", "--resource", resource],
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **group_kwargs())
+            cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **group_kwargs())
         self.started[resource] = time.monotonic()
 
     def start_all(self) -> None:
@@ -67,13 +86,13 @@ class WorkerSupervisor(threading.Thread):
                         lived = now - self.started[r]
                         self.failures[r] = 0 if lived > HEALTHY_AFTER_S else self.failures[r] + 1
                         delay = RESTART_DELAYS_S[min(self.failures[r], len(RESTART_DELAYS_S) - 1)]
-                        print(f"⚠️  {r.upper()}-воркер завершився (код {proc.returncode}) — "
+                        print(f"⚠️  {r.upper()} завершився (код {proc.returncode}) — "
                               f"перезапуск через {delay:.0f} с", flush=True)
                         self.procs.pop(r)
                         self.next_start[r] = now + delay
                     elif now >= self.next_start.get(r, 0.0):
                         self._spawn(r)
-                        print(f"🔄 {r.upper()}-воркер перезапущено", flush=True)
+                        print(f"🔄 {r.upper()} перезапущено", flush=True)
 
     def stop(self) -> None:
         with self._lock:
@@ -91,6 +110,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--projects-root", type=Path, default=None)
     ap.add_argument("--no-gpu-worker", action="store_true")
     ap.add_argument("--no-cpu-worker", action="store_true")
+    ap.add_argument("--no-render", action="store_true", help="do not start the render service")
+    ap.add_argument("--render-port", type=int, default=8001)
     args = ap.parse_args(argv)
 
     if args.projects_root is not None:
@@ -106,7 +127,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     resources = [r for r, off in (("gpu", args.no_gpu_worker), ("cpu", args.no_cpu_worker))
                  if not off]
-    supervisor = WorkerSupervisor(resources)
+    commands: dict[str, list[str]] = {}
+    if not args.no_render:
+        resources.append(RENDER)
+        commands[RENDER] = render_service_command(args.render_port)
+        os.environ.setdefault("AEROSPLAT_RENDER_URL", f"http://127.0.0.1:{args.render_port}")
+    supervisor = WorkerSupervisor(resources, commands)
     supervisor.start_all()
     try:
         import uvicorn
@@ -115,7 +141,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         describe_scenes()
         print(f"\n🚀 AeroSplat-GIS: http://{args.host}:{args.port}/   "
-              f"(воркери: {', '.join(resources) or '—'})\n", flush=True)
+              f"(процеси: {', '.join(resources) or '—'})\n", flush=True)
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
         supervisor.stop()

@@ -8,6 +8,7 @@ import type {
   Job,
   JobStatus,
   PipelineInfo,
+  RenderStatus,
   Project,
   RunDetail,
   RunRequest,
@@ -33,6 +34,9 @@ export const keys = {
 
 export const useSystem = () =>
   useQuery({ queryKey: keys.system, queryFn: () => api.get<SystemInfo>("/system"), refetchInterval: 3000 });
+
+export const useRenderStatus = () =>
+  useQuery({ queryKey: ["render-status"], queryFn: () => api.get<RenderStatus>("/render/status"), refetchInterval: 4000 });
 
 export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: () => api.get<Project[]>("/projects") });
 

@@ -57,3 +57,44 @@ def test_supervisor_real_process_stops(tmp_path, monkeypatch):
     assert proc.poll() is None
     sup.stop()
     assert proc.poll() is not None
+
+
+def test_render_service_is_supervised_like_a_worker(monkeypatch):
+    spawned = []
+
+    class FakeProc:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kw):
+        spawned.append(cmd)
+        return FakeProc()
+
+    monkeypatch.setattr(up.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(up, "kill_tree", lambda p: None)
+    sup = up.WorkerSupervisor(["cpu", up.RENDER], {up.RENDER: ["render-cmd", "--port", "9"]})
+    sup.start_all()
+    sup.stop()
+    sup.join(timeout=2)
+    assert ["render-cmd", "--port", "9"] in spawned
+    assert any(c[-2:] == ["--resource", "cpu"] for c in spawned)       # plain workers keep their command
+
+
+def test_render_command_uses_the_gsplat_env_script_only_when_needed(monkeypatch, tmp_path):
+    env_bat = tmp_path / "tools" / "gsplat_env.bat"
+    env_bat.parent.mkdir()
+    env_bat.write_text("@echo off\n")
+    monkeypatch.setattr(up, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(up.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "gsplat", type(sys)("gsplat"))     # a gsplat without csrc: JIT build
+    cmd = up.render_service_command(8123)
+    assert cmd[:3] == ["cmd.exe", "/c", str(env_bat)]
+    assert cmd[-2:] == ["--port", "8123"] and "aerosplat.render.service" in cmd
+    csrc = type(sys)("gsplat.csrc")
+    monkeypatch.setitem(sys.modules, "gsplat.csrc", csrc)               # prebuilt: no toolchain wrapper
+    monkeypatch.setattr(sys.modules["gsplat"], "csrc", csrc, raising=False)
+    assert up.render_service_command(8123)[0] == sys.executable
+    monkeypatch.setattr(up.os, "name", "posix")
+    assert up.render_service_command(8123)[0] == sys.executable

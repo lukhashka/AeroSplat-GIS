@@ -221,3 +221,49 @@ export interface RunRequest {
   overrides?: Record<string, unknown>;
   priority?: number;
 }
+
+// ── render service (aerosplat/render/models.py) ─────────────────────────
+export type RenderMode = "persp" | "ortho";
+export type RenderOutput = "rgb" | "depth" | "alpha";
+
+export interface RenderPosition {
+  e: number;
+  n: number;
+  u?: number;
+}
+
+export interface RenderRequest {
+  mode: RenderMode;
+  position: RenderPosition;
+  yaw_deg: number;
+  pitch_deg: number;
+  roll_deg: number;
+  width: number;
+  height: number;
+  fov_deg: number;
+  extent_m: number;
+  output: RenderOutput;
+}
+
+export interface RenderMeta {
+  scene: string;
+  run: string | null;
+  mode: RenderMode;
+  frame: string;
+  render_ms: number;
+  gaussians: number;
+  sh_degree: number | null;
+  camera_enu: [number, number, number];
+  camera_geo?: { lat: number; lon: number; h: number };
+  scene_bounds_enu: { min: [number, number, number]; max: [number, number, number] };
+  ground_grid?: { m_per_px: number; pixel00_enu: [number, number]; du_enu: [number, number]; dv_enu: [number, number] };
+  depth?: { max_m: number };
+}
+
+export interface RenderStatus {
+  online: boolean;
+  device?: string;
+  vram_allocated_mb?: number;
+  idle_unload_s?: number;
+  loaded?: { scene: string; gaussians: number; idle_s: number }[];
+}
