@@ -141,6 +141,11 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
               "scale_reg", "max_aniso_ratio"):
         _flag("--" + k.replace("_", "-"), cfg[k], a)
     _switch("--raster-checkpoint", cfg["raster_checkpoint"], a)
+    if cfg["rasterizer"] == "gsplat":
+        for k in _GSPLAT:
+            if k != "absgrad":
+                _flag("--" + k.replace("_", "-"), cfg[k], a)
+        _switch("--absgrad", cfg["absgrad"], a)
     _flag("--seed", cfg["train_seed"], a)
     _flag("--eval-every", cfg["eval_every"], a)
     _flag("--eval-interval", cfg["eval_interval"], a)
@@ -179,6 +184,12 @@ class Stage:
     # Bumped when the stage's output convention changes, so `--resume` redoes
     # it (and everything downstream) instead of reusing incompatible outputs.
     version: str = ""
+    # Keys that matter only for some configs; left out otherwise, so adding
+    # options does not change the fingerprints of runs that do not use them.
+    extra_keys: Callable[[Cfg], tuple[str, ...]] = lambda cfg: ()
+
+    def keys_for(self, cfg: Cfg) -> tuple[str, ...]:
+        return self.keys + self.extra_keys(cfg)
 
     def script(self, cfg: Cfg) -> Path:
         spec = importlib.util.find_spec(self.module(cfg))
@@ -200,6 +211,9 @@ _DENSE = ("dense_max_image_size", "window_step", "num_samples", "num_iterations"
           "skip_stereo", "gpu_index", "colmap_bin")
 _PARSE = ("cloud_source", "mad_k", "max_points", "recenter", "cloud_seed", "max_error",
           "min_track")
+_GSPLAT = ("sh_degree", "sh_degree_interval", "rasterize_mode", "densify_strategy", "absgrad",
+           "absgrad_threshold", "mcmc_opacity_reg", "mcmc_scale_reg", "mcmc_noise_lr",
+           "appearance")
 _TRAIN = ("cloud_source", "iterations", "rasterizer", "max_res", "max_gaussians",
           "init_headroom", "init_scale", "densify_from", "densify_until_frac",
           "densify_interval", "opacity_reset", "grad_threshold", "chunk",
@@ -214,6 +228,10 @@ def _geo_skip(cfg: Cfg) -> str | None:
     if cfg["camera_source"] != "earthstudio_json":
         return "camera_source='synthetic' — нічого конвертувати"
     return None
+
+
+def _gsplat_keys(cfg: Cfg) -> tuple[str, ...]:
+    return _GSPLAT if cfg["rasterizer"] == "gsplat" else ()
 
 
 def _georef_skip(cfg: Cfg) -> str | None:
@@ -260,7 +278,7 @@ STAGES: dict[str, Stage] = {s.name: s for s in [
           lambda c: "aerosplat.gs.trainer", argv_train,
           lambda c, L: [L.cloud_in],
           lambda c, L: [L.splat_pt],
-          _TRAIN),
+          _TRAIN, extra_keys=_gsplat_keys),
     Stage("eval", "6/7  Оцінка якості на test-кадрах (metrics.json + report.html)",
           lambda c: "aerosplat.gs.evaluate", argv_eval,
           lambda c, L: [L.splat_pt],

@@ -18,7 +18,7 @@ class StageError(RuntimeError):
 
 
 def _fingerprint(stage: Stage, cfg: dict[str, Any], L: RunLayout) -> str:
-    values = {k: cfg[k] for k in stage.keys}
+    values = {k: cfg[k] for k in stage.keys_for(cfg)}
     values.update(dataset=L.dataset, footage=str(L.footage), json=str(L.json_path))
     if L.origin is not None:   # absent for legacy runs, keeping their old fingerprints
         values["origin"] = L.origin.as_tuple()

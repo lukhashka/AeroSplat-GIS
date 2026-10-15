@@ -90,6 +90,19 @@ class AffineMap:
         """Vectors / offsets (..., 3) -> A v (no translation)."""
         return np.asarray(v, dtype=np.float64) @ self.A.T
 
+    def rotation(self) -> F64:
+        """Rotation part of A (polar decomposition A = R P, P symmetric positive definite).
+
+        Directions map as d -> A d / |A d|; for a similarity that is exactly R d,
+        otherwise R is the closest rotation (the stretch P only bends directions).
+        """
+        U, _, Vt = np.linalg.svd(self.A)
+        return U @ Vt                  # det = +1: from_dict requires det A > 0
+
+    def rotation_deg(self) -> float:
+        R = self.rotation()
+        return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1.0, 1.0))))
+
     def apply_gaussians(self, xyz: ArrayLike, scale: ArrayLike, quat: ArrayLike
                         ) -> tuple[F64, F64, F64]:
         """Means, per-axis scales (N, 3, > 0) and rotations (N, 4, w x y z) of 3D Gaussians.

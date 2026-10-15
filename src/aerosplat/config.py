@@ -79,7 +79,9 @@ class RunConfig(BaseModel):
 
     # -- 3DGS --------------------------------------------------------------
     iterations: int = Field(5500, ge=1)
-    rasterizer: Literal["auto", "cuda", "torch"] = "auto"
+    # "auto": Inria CUDA if built, else the PyTorch tile rasterizer. "gsplat" only
+    # when asked for: it JIT-builds on first use (Windows: tools/gsplat_env.bat).
+    rasterizer: Literal["auto", "cuda", "torch", "gsplat"] = "auto"
     max_res: int = Field(1024, ge=64)
     max_gaussians: int = Field(2_000_000, ge=1)
     init_headroom: float = Field(0.7, gt=0, le=1)
@@ -98,6 +100,21 @@ class RunConfig(BaseModel):
     max_aniso_ratio: float = Field(10.0, gt=1)
     save_every: int = Field(0, ge=0)
     train_seed: int = 0
+
+    # -- 3DGS, rasterizer="gsplat" only (Фаза 2.2, aerosplat.gs.gsplat_backend) --
+    sh_degree: int = Field(3, ge=0, le=3)
+    sh_degree_interval: int = Field(1000, ge=0)        # +1 SH band every N iterations
+    rasterize_mode: Literal["classic", "antialiased"] = "antialiased"
+    # "mcmc": 3DGS-MCMC, fixed budget (+0.56 dB on dataset_v6, docs/BASELINE.md);
+    # "default": Kerbl et al. capped at max_gaussians.
+    densify_strategy: Literal["default", "mcmc"] = "mcmc"
+    absgrad: bool = False                              # AbsGS gradients ("default" only)
+    absgrad_threshold: float = Field(0.0008, gt=0)
+    mcmc_opacity_reg: float = Field(0.01, ge=0)
+    mcmc_scale_reg: float = Field(0.01, ge=0)
+    mcmc_noise_lr: float = Field(5e5, ge=0)
+    # "exposure": per-train-image colour affine, training only (mixed sources).
+    appearance: Literal["none", "exposure"] = "none"
 
     # -- evaluation (Фаза 2.1) ---------------------------------------------
     # Кожен N-й кадр — test (не тренується). 0 = без спліту і без стадії eval.

@@ -65,7 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cloud-source", choices=["dense", "sparse"])
     ap.add_argument("--iterations", type=int)
     ap.add_argument("--max-gaussians", type=int)
-    ap.add_argument("--rasterizer", choices=["auto", "cuda", "torch"])
+    ap.add_argument("--rasterizer", choices=["auto", "cuda", "torch", "gsplat"],
+                    help="gsplat: SH, antialiased, MCMC (--set sh_degree=..., densify_strategy=...); "
+                         "на Windows запускати через tools\\gsplat_env.bat")
     ap.add_argument("--colmap-bin")
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="перекрити будь-який ключ CONFIG, напр. --set chunk=32")
