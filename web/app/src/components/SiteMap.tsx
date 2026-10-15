@@ -1,4 +1,18 @@
-import maplibregl, { type GeoJSONSource, type StyleSpecification } from "maplibre-gl";
+import type { FeatureCollection } from "geojson";
+import {
+  type GeoJSONSource,
+  LngLatBounds,
+  Map as MapLibreMap,
+  Marker,
+  NavigationControl,
+  Popup,
+  ScaleControl,
+  setWorkerUrl,
+  type StyleSpecification,
+} from "maplibre-gl";
+// MapLibre 6 resolves its worker at run time (new URL(name, import.meta.url)),
+// which a bundler cannot see; ship the file as a hashed asset and point at it.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 
@@ -14,6 +28,8 @@ export interface MapPoint {
   lat: number;
   lon: number;
 }
+
+setWorkerUrl(maplibreWorkerUrl);
 
 type Basemap = "scheme" | "satellite";
 
@@ -50,8 +66,8 @@ function rasterStyle(basemap: Basemap): StyleSpecification {
 
 const UKRAINE: [number, number] = [31.2, 48.6];
 
-function addPointsLayer(map: maplibregl.Map, points: MapPoint[]) {
-  const data: GeoJSON.FeatureCollection = {
+function addPointsLayer(map: MapLibreMap, points: MapPoint[]) {
+  const data: FeatureCollection = {
     type: "FeatureCollection",
     features: points.map((p) => ({
       type: "Feature",
@@ -108,9 +124,9 @@ export function SiteMap({
   hint?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
-  const markers = useRef<maplibregl.Marker[]>([]);
-  const pickMarker = useRef<maplibregl.Marker | null>(null);
+  const mapRef = useRef<MapLibreMap | null>(null);
+  const markers = useRef<Marker[]>([]);
+  const pickMarker = useRef<Marker | null>(null);
   const pointsRef = useRef(points);
   const fitted = useRef<string>("");
   const onPickRef = useRef(onPick);
@@ -124,7 +140,7 @@ export function SiteMap({
 
   useEffect(() => {
     if (!box.current) return;
-    const map = new maplibregl.Map({
+    const map = new MapLibreMap({
       container: box.current,
       style: rasterStyle("scheme"),
       center: UKRAINE,
@@ -138,8 +154,8 @@ export function SiteMap({
         "CooperativeGesturesHandler.MobileHelpText": "Двома пальцями — рух карти",
       },
     });
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-right");
-    map.addControl(new maplibregl.ScaleControl({ unit: "metric" }), "bottom-right");
+    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(new ScaleControl({ unit: "metric" }), "bottom-right");
     map.on("click", (e) => onPickRef.current?.({ lat: e.lngLat.lat, lon: e.lngLat.lng }));
     map.on("style.load", () => addPointsLayer(map, pointsRef.current));
     map.on("load", () => setReady(true));
@@ -171,18 +187,18 @@ export function SiteMap({
         ev.stopPropagation();
         onSiteRef.current?.(s.key);
       });
-      const popup = new maplibregl.Popup({ offset: 14, closeButton: false }).setHTML(
+      const popup = new Popup({ offset: 14, closeButton: false }).setHTML(
         `<b>${escapeHtml(s.name)}</b><br/><span style="opacity:.7;font-family:var(--mono);font-size:12px">${escapeHtml(s.key)}</span>`,
       );
       el.addEventListener("mouseenter", () => popup.setLngLat([s.lon, s.lat]).addTo(map));
       el.addEventListener("mouseleave", () => popup.remove());
-      return new maplibregl.Marker({ element: el }).setLngLat([s.lon, s.lat]).addTo(map);
+      return new Marker({ element: el }).setLngLat([s.lon, s.lat]).addTo(map);
     });
     if (origin) {
       const el = document.createElement("div");
       el.className = "site-marker origin";
       el.title = "ENU-початок ділянки (фіксований)";
-      markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([origin.lon, origin.lat]).addTo(map));
+      markers.current.push(new Marker({ element: el }).setLngLat([origin.lon, origin.lat]).addTo(map));
     }
   }, [sites, origin]);
 
@@ -204,7 +220,7 @@ export function SiteMap({
     if (!pickMarker.current) {
       const el = document.createElement("div");
       el.className = "site-marker origin";
-      pickMarker.current = new maplibregl.Marker({ element: el }).setLngLat([pick.lon, pick.lat]).addTo(map);
+      pickMarker.current = new Marker({ element: el }).setLngLat([pick.lon, pick.lat]).addTo(map);
     } else pickMarker.current.setLngLat([pick.lon, pick.lat]);
   }, [pick]);
 
@@ -220,7 +236,7 @@ export function SiteMap({
       map.flyTo({ center: [all[0]!.lon, all[0]!.lat], zoom: 15, speed: 1.6 });
       return;
     }
-    const b = new maplibregl.LngLatBounds();
+    const b = new LngLatBounds();
     all.forEach((p) => b.extend([p.lon, p.lat]));
     map.fitBounds(b, { padding: 70, maxZoom: 16.5, duration: 900 });
   }, [sites, points, origin]);
