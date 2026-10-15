@@ -33,8 +33,9 @@ Earth Studio — поточне джерело, але пайплайн має �
 3. **GPS-пріор у BA:** `--Mapper.use_prior_position` / `model_aligner`.
 4. **Камера:** self-calibration (не заморожувати fx), `OPENCV` для широкого кута;
    вибір кадрів з відео (різкість, перекриття).
-5. **WGS84 vs сфера:** в `aerosplat.geo` (Фаза 3.1) явна опція
-   `earth_model: sphere|wgs84` (Earth Studio = `sphere`, дрони = `wgs84` + геоїд для MSL).
+5. **WGS84 vs сфера:** `Run.earth_model` уже є (ADR-0006): Earth Studio =
+   `sphere-enu+affine` (реконструкція у сферичному ENU, продукти → WGS84 стадією `georef`);
+   дрони реконструюватимуться одразу у WGS84 Site ENU (`wgs84`, georef не потрібен) + геоїд для MSL.
 6. **Appearance embedding / exposure** у тренері (Фаза 2.2).
 7. **Тестовий реальний датасет** (10–20 кадрів) для регресій; відкриті: Mill-19, UrbanScene3D.
 

@@ -1,0 +1,10 @@
+# Preset: Earth Studio render with known poses (see docs/DECISIONS.md).
+# Usage: aerosplat run --config configs/earthstudio.yaml
+dataset: dataset_v6
+footage_dir: data/dataset_v6/footage
+camera_source: earthstudio_json
+known_poses: true
+refine_known_poses: true
+cloud_source: dense
+iterations: 5500
+max_gaussians: 2000000

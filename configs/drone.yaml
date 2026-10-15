@@ -1,0 +1,8 @@
+# Preset skeleton for real UAV imagery (no known poses). See docs/REAL_DRONES.md.
+# Georeferencing from EXIF GPS is not implemented yet (Phase 3.1).
+dataset: my_flight
+footage_dir: data/my_flight/footage
+camera_source: synthetic   # TODO: replace with a drone adapter
+matcher: spatial
+known_intrinsics: false
+cloud_source: dense

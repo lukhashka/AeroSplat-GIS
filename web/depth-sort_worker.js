@@ -15,16 +15,8 @@
 //  by one bucket's worth of depth, which at 65536 buckets is
 //  negligible for anything but pathological point distributions.
 //
-//  Two changes against AeroSplat-viewer-review.md §3.1:
-//
-//  §C3  Every 'sort' message is now answered, including rejections.
-//       A silent return left the main thread's sortInFlight
-//       back-pressure flag stuck true, and no further sort was ever
-//       requested — a latent hang whose only symptom is "the splats
-//       stopped sorting".
-//  §3.1 The scratch buffers are hoisted to module scope and sized
-//       once on init, instead of ~20 MB of fresh allocation per sort
-//       at 1.2M splats.
+//  Every 'sort' message is answered, including rejections (ADR-0005 §C3),
+//  and scratch buffers are sized once on init (ADR-0003 §3.1).
 //
 //  Output type change: the sorted order is emitted as a Float32Array,
 //  not Uint32Array, because the viewer now consumes it as a per-instance

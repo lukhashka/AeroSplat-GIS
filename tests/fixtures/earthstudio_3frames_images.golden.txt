@@ -1,0 +1,11 @@
+# Image list with two lines of data per image:
+#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME
+#   POINTS2D[] (empty here -- filled by feature extraction / matching)
+# Poses are KNOWN (from Earth Studio ground truth), sphere ENU frame (R=6371008.8 m); products -> WGS84 Site ENU via geo_registration.json.
+# ENU origin: lat=40.89420000 lon=-74.21730000 alt=233.000
+1 0.0000022802 -0.0000080427 0.8360274896 -0.5486875582 80.522948 -4.689925 10.815222 1 frame_0000.jpeg
+
+2 -0.0647659473 -0.0984668148 0.8296545592 -0.5456949430 -6.632681 -2.014388 4.670369 1 frame_0001.jpeg
+
+3 -0.1217795432 -0.1845361075 0.8139997232 -0.5371411532 -83.805944 -6.967103 16.288293 1 frame_0002.jpeg
+

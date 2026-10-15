@@ -11,18 +11,51 @@ dependencies = [
     "numpy>=1.26",
     "pillow>=10",
     "piexif==1.1.3",
+    "pydantic>=2",
+    "pyyaml>=6",
     "fastapi>=0.110",
     "uvicorn>=0.28",
+    "pyproj>=3.6",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
 # torch must match your CUDA build — see requirements.txt / README for the index URL.
 train = ["torch>=2.2", "torchvision>=0.17"]
-dev = ["pytest"]
+dev = ["pytest", "ruff", "mypy", "httpx"]
 
 [project.scripts]
-aerosplat = "starter:cli"
+aerosplat = "aerosplat.starter:cli"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["starter", "doctor"]
+packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
+            "aerosplat.sfm", "aerosplat.gs", "aerosplat.server", "aerosplat.store",
+            "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
+            "aerosplat.ingest"]
+
+[tool.setuptools.package-data]
+"aerosplat.store.migrations" = ["script.py.mako"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["legacy", "diff-gaussian-rasterization", "venv", "data"]
+
+[tool.ruff.lint]
+# Start narrow (real errors only); widen gradually as legacy modules are cleaned up.
+select = ["E9", "F"]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+explicit_package_bases = true
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+exclude = ["legacy/", "venv/", "diff-gaussian-rasterization/", "data/", "tools/", "tests/"]

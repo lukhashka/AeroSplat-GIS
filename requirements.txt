@@ -6,10 +6,19 @@ torchvision>=0.17
 numpy>=1.26
 pillow>=10
 piexif==1.1.3
+pydantic>=2
+pyyaml>=6
 fastapi>=0.110
 uvicorn>=0.28
+# Site catalog + geodesy (ADR-0006)
+pyproj>=3.6
+sqlalchemy>=2.0
+alembic>=1.13
 
 # Optional: CUDA rasterizer (Inria, NON-COMMERCIAL licence — see docs/DECISIONS.md).
 # Built from ./diff-gaussian-rasterization; without it the trainer falls back to
 # the pure-PyTorch tile rasterizer (slower).
 ninja
+
+# Optional: LPIPS metric in the eval stage (without it mean_lpips = null).
+# lpips

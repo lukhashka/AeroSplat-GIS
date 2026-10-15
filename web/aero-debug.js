@@ -17,7 +17,7 @@
 //      W·Σ·Wᵀ → Jacobian → Σ' chain, in JS, on a sample of splats,
 //      reporting how many land in the frustum, how big they project,
 //      and what peak alpha they reach. This is the verification
-//      harness AeroSplat-viewer-review.md §5 asked for, and it is
+//      harness the review (§5) asked for, and it is
 //      what turns "nothing renders" into a specific sentence.
 //   3. A SYNTHETIC TEST SCENE. Seven hand-built Gaussians with known
 //      geometry. If they render and your data doesn't, the shader is
@@ -51,9 +51,8 @@
     function look(name) {
         if (name in overrides) return overrides[name]();
         try {
-            // eslint-disable-next-line no-eval
             return (0, eval)(name);
-        } catch (e) {
+        } catch {
             return undefined;
         }
     }
@@ -114,7 +113,7 @@
         console[kind] = function (...args) {
             const text = args.map(a => {
                 if (a instanceof Error) return a.message;
-                if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+                if (typeof a === 'object') { try { return JSON.stringify(a); } catch { return String(a); } }
                 return String(a);
             }).join(' ');
             state.logs.push({ t: performance.now(), level: kind, msg: text.slice(0, 2000) });
