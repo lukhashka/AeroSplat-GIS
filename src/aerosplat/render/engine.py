@@ -73,7 +73,13 @@ def _load_params(path: str, device: torch.device) -> tuple[dict[str, Tensor], st
     if act.get("scale_is_log") or act.get("opacity_is_logit"):
         raise RenderError("splat.pt with raw (pre-activation) values is not supported")
     keys = ("xyz", "scale", "rotation", "opacity") + (("sh",) if "sh" in scene else ("rgb",))
-    params = {k: scene[k].to(device).float().contiguous() for k in keys}
+    cpu = {k: scene[k].float() for k in keys}
+    # Same row filter as the viewer's server: one NaN mean poisons the scene bounds
+    # (ortho default height) and a zero quaternion has no rotation.
+    keep = cpu["rotation"].norm(dim=1) > 1e-8
+    for t in cpu.values():
+        keep &= torch.isfinite(t.reshape(t.shape[0], -1)).all(dim=1)
+    params = {k: t[keep].to(device).contiguous() for k, t in cpu.items()}
     mode = (scene.get("render") or {}).get("rasterize_mode", "classic")
     return params, mode if mode in RASTERIZE_MODES else "classic"
 

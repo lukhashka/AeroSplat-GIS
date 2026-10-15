@@ -234,7 +234,7 @@ _PARSE = ("cloud_source", "mad_k", "max_points", "recenter", "cloud_seed", "max_
           "min_track")
 _GSPLAT = ("sh_degree", "sh_degree_interval", "rasterize_mode", "densify_strategy", "absgrad",
            "absgrad_threshold", "mcmc_opacity_reg", "mcmc_scale_reg", "mcmc_noise_lr",
-           "appearance")
+           "mcmc_refine_stop_frac", "appearance")
 _TRAIN = ("cloud_source", "iterations", "rasterizer", "max_res", "max_gaussians",
           "init_headroom", "init_scale", "densify_from", "densify_until_frac",
           "densify_interval", "opacity_reset", "grad_threshold", "chunk",

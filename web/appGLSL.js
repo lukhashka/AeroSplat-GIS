@@ -50,11 +50,10 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050a0f);
 
 // ── Scene root: where the up-axis flip and scene scale live (§A3) ──
-// COLMAP/trainer space is Z-up; WebGL is Y-up. The server used to apply
-// (x, −z, y) to positions and leave the rotation quaternions in COLMAP
-// space, misorienting every splat by 90° about X on top of §A1. Putting
-// the same map here instead means mat3(modelViewMatrix) carries it into
-// the covariance transform automatically.
+// Georeferenced scenes are ENU (Z-up); WebGL is Y-up. scene-meta says which
+// rotation maps the scene's up to +Y (Rx(−90°) for ENU, Rx(+90°) for a free
+// COLMAP frame). Applying it here rather than on the server means
+// mat3(modelViewMatrix) carries it into the covariance transform as well.
 const sceneRoot = new THREE.Group();
 scene.add(sceneRoot);
 
@@ -170,6 +169,8 @@ renderer.domElement.addEventListener('webglcontextlost', (e) => {
 });
 renderer.domElement.addEventListener('webglcontextrestored', () => {
     console.info('AeroSplat-GIS: WebGL context restored. Reloading scene data.');
+    const banner = document.getElementById('fatal-banner');
+    if (banner) banner.remove();
     hasFramedCamera = false;
     loadSpatialData();
 });
@@ -259,7 +260,10 @@ const SORT_MOVE_FRAC = 0.005;                 // of scene radius
 
 if (sortWorker) {
     sortWorker.onmessage = (e) => {
-        sortInFlight = false;                     // cleared for 'sorted' and 'rejected' alike
+        // Cleared for 'sorted' and 'rejected' alike — but only by a reply to
+        // the current data: a stale one arriving after buildSplatMesh reset
+        // the flag would otherwise let a second job queue behind the first.
+        if (e.data.generation === sortGeneration) sortInFlight = false;
         // Hook 5 (see aero-debug.js): reports the round trip, and
         // msg.workerMs (added to the worker) separates algorithm time
         // from postMessage/structured-clone overhead.
@@ -303,6 +307,10 @@ const vertexShaderGS = `
     // Change the target radius and the two silently diverge. Now driven
     // by the same value the camera itself uses — set from frameCamera().
     uniform float uNearCull;
+    // 1.0 = the model was trained "antialiased" (gsplat): Mip-Splatting opacity
+    // compensation for the dilation. 0.0 = "classic" (Inria, torch, gsplat
+    // classic): dilation only. Must match training — see step 4.
+    uniform float uAntialiased;
 
     varying vec3  vColor;
     varying float vOpacity;
@@ -329,7 +337,9 @@ const vertexShaderGS = `
     // symmetric-positive-definite downstream, nothing NaNs, and every
     // anisotropic Gaussian points the wrong way.
     mat3 quatToMat(vec4 q) {
-        q = normalize(q);
+        // normalize(vec4(0)) is NaN, and a NaN alpha passes the 1/255 discard.
+        float n2 = dot(q, q);
+        q = n2 < 1e-12 ? vec4(1.0, 0.0, 0.0, 0.0) : q * inversesqrt(n2);
         float w = q.x, x = q.y, y = q.z, z = q.w;
         return mat3(
             // column 0
@@ -429,20 +439,22 @@ const vertexShaderGS = `
                        - fx * fy * x_c * inv_z2 * inv_z * cov3d_cam[2][1]
                        + fx * fy * x_c * y_c * inv_z2 * inv_z2 * cov3d_cam[2][2];
 
-        // ── 4. Дилатація + компенсація непрозорості ──────────────
-        // The 0.3px dilation is the screen-space low-pass that stops
-        // sub-pixel Gaussians aliasing into flicker, but it enlarges the
-        // footprint without reducing peak alpha, making small/distant
-        // splats systematically too opaque — read as haze and lost
-        // contrast at altitude, where nearly every splat is small.
-        // Compensate by the ratio of determinants so total integrated
-        // alpha is preserved (Mip-Splatting, Yu et al. 2024) — §C2.
+        // ── 4. Дилатація (+ компенсація непрозорості) ─────────────
+        // The 0.3px dilation is the screen-space low-pass every 3DGS
+        // rasterizer applies. An "antialiased" model (gsplat) was trained
+        // with the Mip-Splatting compensation sqrt(det/det_dilated) on top
+        // (Yu et al. 2024, §C2), a "classic" one (Inria) without it, and
+        // the opacities learned the difference: drawing a classic model
+        // compensated fades every small splat (measured against the gsplat
+        // reference at one pose: 22 dB compensated vs 50 dB matched).
         float det_orig = cov2d_00 * cov2d_11 - cov2d_01 * cov2d_01;
         cov2d_00 += DILATION;
         cov2d_11 += DILATION;
         float det_dilated = cov2d_00 * cov2d_11 - cov2d_01 * cov2d_01;
 
-        vOpacity = t0.w * sqrt(max(det_orig, 0.0) / max(det_dilated, 1e-9));
+        vOpacity = uAntialiased > 0.5
+            ? t0.w * sqrt(max(det_orig, 0.0) / max(det_dilated, 1e-9))
+            : t0.w;
 
         // ── 5. Інверсія Σ' аналітично ─────────────────────────────
         // [a b]⁻¹ = 1/(ad-bc) · [d -b; -c a]
@@ -630,6 +642,12 @@ function showFatal(message) {
     el.innerText = message;
 }
 
+function renderInfoText(mode) {
+    return mode === 'splat'
+        ? 'Рендер: еліптичний Гаусіан · Маланобіс · alpha blending'
+        : 'Рендер: point cloud · MVS реконструкція';
+}
+
 function injectModeSelector() {
     if (document.getElementById('mode-selector-wrapper')) return;
 
@@ -651,7 +669,7 @@ function injectModeSelector() {
             <option value="dense" ${currentMode === 'dense' ? 'selected' : ''}>Варіант А: Dense Cloud (MVS)</option>
         </select>
         <div id="render-info" style="color:#666;font-family:monospace;font-size:10px;margin-top:6px;">
-            Рендер: еліптичний Гаусіан · Маланобіс · alpha blending
+            ${renderInfoText(currentMode)}
         </div>
         <div id="scale-debug-row" style="margin-top:10px; ${currentMode === 'splat' ? '' : 'display:none;'}">
             <label style="color:#00ff33;font-family:monospace;display:block;margin-bottom:4px;font-size:11px;font-weight:bold;letter-spacing:1px;">
@@ -684,9 +702,7 @@ function injectModeSelector() {
 
     document.getElementById('mode-select-dropdown').addEventListener('change', (e) => {
         currentMode = e.target.value;
-        setHudText('render-info', currentMode === 'splat'
-            ? 'Рендер: еліптичний Гаусіан · Маланобіс · alpha blending'
-            : 'Рендер: point cloud · MVS реконструкція');
+        setHudText('render-info', renderInfoText(currentMode));
         scaleDebugRow.style.display = currentMode === 'splat' ? '' : 'none';
         loadSpatialData();
     });
@@ -755,6 +771,11 @@ function buildSplatMesh(floatArr, meta) {
         throw new Error(`splat payload is ${floatArr.length} floats, not a multiple of ${stride}`);
     }
     const paddedCount = floatArr.length / stride;
+    if (N > paddedCount) {
+        // scene-meta and spatial-chunk are two requests; a reload between
+        // them can pair one file's count with another file's payload.
+        throw new Error(`scene-meta says ${N} splats but the payload holds ${paddedCount} — reload`);
+    }
     const texH = paddedCount / perRow;
     if (!Number.isInteger(texH)) {
         throw new Error(`splat payload is not padded to whole texture rows (${paddedCount} splats, ${perRow}/row)`);
@@ -852,6 +873,7 @@ function buildSplatMesh(floatArr, meta) {
             uViewport:        { value: viewportPx.clone() },
             uScaleMultiplier: { value: debugScaleMultiplier },
             uNearCull:        { value: Math.max(sceneRadius * nearCullFraction, 0.01) },
+            uAntialiased:     { value: meta.rasterize_mode === 'antialiased' ? 1.0 : 0.0 },
             uDebugMode:       { value: 0 }   // aero-debug.js debug modes
         }
     });
@@ -878,15 +900,15 @@ function buildDenseMesh(floatArr, meta) {
     geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(interleaved, 3, 0));
     geometry.setAttribute('aColor',   new THREE.InterleavedBufferAttribute(interleaved, 3, 3));
 
-    // Point spacing, estimated as if N samples were spread over a sphere
-    // of the scene's radius — MVS output is essentially a shell over
-    // visible surfaces. Computed in *scaled* units, because mvPosition in
+    // Point spacing, estimated as if N samples were spread over a disk of
+    // the scene's radius — an aerial MVS cloud is essentially one surface
+    // seen from above (a sphere's 4πR² made every point ~2× too wide). Computed in *scaled* units, because mvPosition in
     // the shader has already been through sceneRoot: a size quantity has
     // to follow the position transform, which is the same class of bug
     // §A3 describes for rotation.
     const R = meta.extent * meta.scene_scale;
     const COVERAGE = 1.5;   // so neighbours overlap slightly rather than just touch
-    const spacing = Math.sqrt((4.0 * Math.PI * R * R) / Math.max(N, 1)) * COVERAGE;
+    const spacing = Math.sqrt((Math.PI * R * R) / Math.max(N, 1)) * COVERAGE;
 
     const pointSizeRange = glCtx.getParameter(glCtx.ALIASED_POINT_SIZE_RANGE);
 
@@ -975,8 +997,13 @@ async function loadSpatialData() {
         if (stale()) return;
         if (!resp.ok) throw new Error(`spatial-chunk HTTP ${resp.status}`);
 
+        const servedCount = resp.headers.get('X-Gaussians-Count');
+        if (servedCount !== null && Number(servedCount) !== meta.count) {
+            throw new Error(`scene-meta (${meta.count}) and payload (${servedCount}) describe different files — reload`);
+        }
         setHudText('latency-val', (resp.headers.get('X-Processing-Time-Ms') || '?') + ' ms');
         setHudText('count-val', meta.count.toLocaleString());
+        setHudText('target-val', meta.dataset + (meta.rasterize_mode ? ` · ${meta.rasterize_mode}` : ''));
 
         const floatArr = new Float32Array(await resp.arrayBuffer());
         if (stale()) return;   // check after every await, not just some
@@ -1083,10 +1110,10 @@ function handleResize() {
 
     // uViewport is constant between resizes; recompute it here instead of
     // 60×/second inside animate().
-    viewportPx.set(
-        window.innerWidth  * renderer.getPixelRatio(),
-        window.innerHeight * renderer.getPixelRatio()
-    );
+    // The drawing buffer, not innerWidth × ratio: three floors the product
+    // and the browser may cap the backing store; focal length and the
+    // pixel-space covariance must use the size actually rasterized.
+    renderer.getDrawingBufferSize(viewportPx);
     if (activeMesh && activeMesh.material.uniforms && activeMesh.material.uniforms.uViewport) {
         activeMesh.material.uniforms.uViewport.value.copy(viewportPx);
     }

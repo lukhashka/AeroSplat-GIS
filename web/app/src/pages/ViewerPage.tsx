@@ -16,13 +16,21 @@ export function ViewerPage() {
 
   useEffect(() => {
     // Runs finished by a worker are new to the server process: re-read the catalog first.
+    // A quick switch between scenes must not let the older answer win, nor keep its error.
+    let cancelled = false;
     setReady(false);
+    setError(null);
     refreshScenes()
       .then((r) => {
         if (!r.scenes.includes(scene)) throw new Error(`Сцени ${scene} ще немає: потрібен успішний run зі splat/cloud.`);
-        setReady(true);
+        if (!cancelled) setReady(true);
       })
-      .catch(setError);
+      .catch((e) => {
+        if (!cancelled) setError(e);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [scene]);
 
   return (

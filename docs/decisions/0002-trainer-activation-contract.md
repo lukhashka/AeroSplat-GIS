@@ -37,7 +37,9 @@ fallback для старих файлів, а в `scene-meta.activations` вид
 * `render` = `{rasterizer: "gsplat", rasterize_mode: "classic"|"antialiased"}` —
   як рендерили під час тренування. Стадія `eval` з `rasterizer=gsplat` бере
   `rasterize_mode` звідси; для `antialiased` непрозорість навчена з компенсацією
-  Mip-Splatting, яку в'ювер і так застосовує (ADR-0004 §C2).
+  Mip-Splatting, і в'ювер вмикає її лише тоді (ADR-0004, доповнення 2026-10-15).
+  Inria/torch-тренер пише `{rasterizer: "cuda"|"torch", rasterize_mode: "classic"}`;
+  файл без `render` читається як classic.
 * `appearance` (лише `appearance=exposure`) — афінні корекції кольору train-кадрів;
   до сплата не застосовуються.
 

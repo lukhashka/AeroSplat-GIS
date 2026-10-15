@@ -335,6 +335,9 @@
         const tanFovY = 1 / proj[5];
 
         const mult = (mesh.material.uniforms.uScaleMultiplier || { value: 1 }).value;
+        // Same cull plane and opacity rule as the vertex shader.
+        const nearCull = (mesh.material.uniforms.uNearCull || { value: cam.near }).value;
+        const antialiased = (mesh.material.uniforms.uAntialiased || { value: 0 }).value > 0.5;
 
         const step = Math.max(1, Math.ceil(N / PROBE_SAMPLE));
         let tested = 0, behind = 0, onScreen = 0, subPixel = 0, alphaDead = 0, degenerate = 0;
@@ -361,7 +364,7 @@
             const cz = mv[2] * px + mv[6] * py + mv[10] * pz + mv[14];
             depths.push(-cz);
 
-            if (cz >= -0.1) { behind++; continue; }
+            if (cz >= -nearCull) { behind++; continue; }
 
             // Σ = R S² Rᵀ, then Σ_cam = W Σ Wᵀ.
             const R = quatToMat3(qw, qx, qy, qz);
@@ -393,7 +396,7 @@
             c11 += DILATION;
             const detDil = c00 * c11 - c01 * c01;
 
-            const peakAlpha = op * Math.sqrt(Math.max(detOrig, 0) / Math.max(detDil, 1e-9));
+            const peakAlpha = antialiased ? op * Math.sqrt(Math.max(detOrig, 0) / Math.max(detDil, 1e-9)) : op;
             alphas.push(peakAlpha);
             if (peakAlpha < 1 / 255) alphaDead++;
 
@@ -496,6 +499,151 @@
     //  readPixels of the centre of the frame, counted against the known
     //  clear colour.
     // ═══════════════════════════════════════════════════════════════
+    // ── Reference comparison ────────────────────────────────────────
+    // Renders the CURRENT view twice — here, and by the render service
+    // (gsplat, the rasterizer the model is evaluated with) — and compares
+    // the pixels. Agreement (~45–50 dB) proves projection, covariance,
+    // opacity rule, blending, sort order and colour all match the trainer's
+    // renderer; a dark/washed-out viewer with low dB is a shader mismatch,
+    // not a bad model. Needs a georeferenced site scene (poses are ENU).
+    // The current depth order belongs to this pose, so no re-sort is needed.
+    async function compareWithReference(opts = {}) {
+        const meta = ref.sceneMeta, cam = ref.camera, rndr = ref.renderer;
+        const mesh = ref.activeMesh, root = ref.sceneRoot, sc = ref.scene;
+        if (!meta || !cam || !rndr || !mesh || !root || ref.mode !== 'splat') {
+            log('warn', 'Reference compare needs a loaded splat scene.');
+            return null;
+        }
+        const site = meta.metric && meta.metric.site;
+        if (!site) {
+            log('warn', 'Reference compare needs a georeferenced site scene (scene-meta.metric.site).');
+            return null;
+        }
+        const W = opts.width || Math.min(960, Math.round(rndr.domElement.clientWidth));
+        const H = Math.max(16, Math.round(W / cam.aspect));
+
+        // Viewer world → served → ENU: undo sceneRoot, add the centre back.
+        root.updateMatrixWorld(true);
+        cam.updateMatrixWorld();
+        const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+        const c = meta.center;
+        const eye = cam.position.clone().applyMatrix4(inv);
+        const fwd = new THREE.Vector3();
+        cam.getWorldDirection(fwd);
+        const at = cam.position.clone().addScaledVector(fwd, meta.extent * meta.scene_scale * 0.5).applyMatrix4(inv);
+        const bg = sc.background || new THREE.Color(0, 0, 0);
+        const body = {
+            mode: 'persp',
+            position: { e: eye.x + c[0], n: eye.y + c[1], u: eye.z + c[2] },
+            look_at: { e: at.x + c[0], n: at.y + c[1], u: at.z + c[2] },
+            width: W, height: H, fov_deg: cam.fov, background: [bg.r, bg.g, bg.b],
+        };
+        log('info', `Reference compare: rendering ${W}×${H} via the render service…`);
+        const resp = await fetch(`/api/v2/sites/${site}/render`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!resp.ok) {
+            log('error', `Render service: HTTP ${resp.status} ${await resp.text()}`);
+            return null;
+        }
+        const refMeta = JSON.parse(resp.headers.get('X-Render-Meta') || '{}');
+        const bmp = await createImageBitmap(await resp.blob());
+        const oc = document.createElement('canvas');
+        oc.width = W; oc.height = H;
+        const octx = oc.getContext('2d');
+        octx.drawImage(bmp, 0, 0);
+        const refPx = octx.getImageData(0, 0, W, H).data;
+
+        // Back-to-front order for exactly this pose, computed here: the
+        // worker's order may be stale or missing (a hidden tab runs no
+        // animation frames, so no sort was ever requested).
+        sortForCamera(mesh, cam);
+
+        // Same pose and vertical fov at W×H, rendered synchronously and read
+        // back before the frame is presented.
+        const vpU = mesh.material.uniforms.uViewport.value;
+        const savedVp = vpU.clone(), savedRatio = rndr.getPixelRatio();
+        const gl = rndr.getContext();
+        const px = new Uint8Array(W * H * 4);
+        try {
+            rndr.setPixelRatio(1);
+            rndr.setSize(W, H, false);
+            vpU.set(W, H);
+            rndr.render(sc, cam);
+            gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        } finally {
+            rndr.setPixelRatio(savedRatio);
+            rndr.setSize(window.innerWidth, window.innerHeight);
+            vpU.copy(savedVp);
+        }
+
+        const bgB = [bg.r * 255, bg.g * 255, bg.b * 255];
+        let se = 0, n = 0, seFg = 0, nFg = 0;
+        const meanV = [0, 0, 0], meanR = [0, 0, 0];
+        const diff = new Uint8ClampedArray(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const iv = ((H - 1 - y) * W + x) * 4, ir = (y * W + x) * 4;   // GL rows are bottom-up
+            let e = 0, fg = false;
+            for (let k = 0; k < 3; k++) {
+                const d = px[iv + k] - refPx[ir + k];
+                e += d * d; meanV[k] += px[iv + k]; meanR[k] += refPx[ir + k];
+                if (Math.abs(refPx[ir + k] - bgB[k]) > 3) fg = true;
+                diff[ir + k] = Math.min(255, 4 * Math.abs(d));
+            }
+            diff[ir + 3] = 255;
+            se += e; n += 3;
+            if (fg) { seFg += e; nFg += 3; }
+        }
+        const psnr = (e, m) => m ? 10 * Math.log10(65025 / Math.max(e / m, 1e-9)) : NaN;
+        const result = {
+            size: `${W}×${H}`,
+            psnr: psnr(se, n), psnrForeground: psnr(seFg, nFg), foregroundFrac: nFg / n,
+            meanViewer: meanV.map(v => v / (W * H)), meanReference: meanR.map(v => v / (W * H)),
+            rasterizeMode: meta.rasterize_mode, referenceMode: refMeta.rasterize_mode,
+            diffImage: new ImageData(diff, W, H),
+        };
+        state.reference = result;
+        const level = result.psnrForeground >= 40 ? 'info' : result.psnrForeground >= 30 ? 'warn' : 'error';
+        log(level, `Reference compare ${result.size}: ${result.psnr.toFixed(2)} dB (foreground `
+            + `${result.psnrForeground.toFixed(2)} dB); mean viewer ${result.meanViewer.map(v => v.toFixed(1)).join('/')} `
+            + `vs reference ${result.meanReference.map(v => v.toFixed(1)).join('/')}; modes `
+            + `${result.rasterizeMode} / ${result.referenceMode}. AeroDebug.showReferenceDiff() overlays |Δ|×4.`);
+        return result;
+    }
+
+    function sortForCamera(mesh, cam) {
+        const p = state.payload;
+        const attr = mesh.geometry.getAttribute('aSplatIndex');
+        if (!p || !attr) return;
+        const stride = p.meta.stride_floats || 16, N = attr.array.length, data = p.floatArr;
+        mesh.updateMatrixWorld(true);
+        const m = new THREE.Matrix4().multiplyMatrices(cam.matrixWorldInverse, mesh.matrixWorld).elements;
+        const z = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            const s = i * stride;
+            z[i] = m[2] * data[s] + m[6] * data[s + 1] + m[10] * data[s + 2] + m[14];
+        }
+        const idx = new Uint32Array(N);
+        for (let i = 0; i < N; i++) idx[i] = i;
+        idx.sort((a, b) => z[a] - z[b]);          // ascending view z = farthest first
+        attr.array.set(idx);
+        attr.needsUpdate = true;
+    }
+
+    function showReferenceDiff(show = true) {
+        const old = document.getElementById('adbg-refdiff');
+        if (old) old.remove();
+        const r = state.reference;
+        if (!show || !r) return;
+        const cv = document.createElement('canvas');
+        cv.id = 'adbg-refdiff';
+        cv.width = r.diffImage.width; cv.height = r.diffImage.height;
+        cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:9998;cursor:pointer;';
+        cv.title = '|viewer − reference| × 4 — click to close';
+        cv.getContext('2d').putImageData(r.diffImage, 0, 0);
+        cv.addEventListener('click', () => cv.remove());
+        document.body.appendChild(cv);
+    }
+
     function runPixelProbe() {
         const rndr = ref.renderer;
         if (!rndr) return null;
@@ -866,6 +1014,7 @@
                 <button data-act="test">Test scene</button>
                 <button data-act="reload">Reload data</button>
                 <button data-act="dump">Copy dump</button>
+                <button data-act="refcmp" title="Render this view in the render service too and compare pixels">Ref compare</button>
             </div>
             <div class="adbg-slider">
                 <label>scale ×</label>
@@ -899,6 +1048,7 @@
                     if (a === 'test')   injectTestScene();
                     if (a === 'reload') { const f = look('loadSpatialData'); if (typeof f === 'function') { resetMarks(); f(); } else { log('warn', 'loadSpatialData is not reachable — bind it via AeroDebug.bind({ loadSpatialData: () => loadSpatialData }).'); } }
                     if (a === 'dump')   copyDump();
+                    if (a === 'refcmp') compareWithReference().catch(e => log('error', `Reference compare failed: ${e.message}`));
                 } catch (e) {
                     log('error', `Action '${a}' failed: ${e.message}`);
                 }
@@ -1307,6 +1457,8 @@
         onFrame,
         probe: runProbe,
         pixelProbe: runPixelProbe,
+        compareWithReference,
+        showReferenceDiff,
         testScene: injectTestScene,
         frameScene,
         dump,

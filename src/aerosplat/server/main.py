@@ -143,6 +143,8 @@ DENSE_STRIDE = 6
 SPLAT_STRIDE = 16                                    # 4 RGBA32F texels
 SPLAT_TEXTURE_WIDTH = 2048                           # texels per texture row
 SPLATS_PER_TEXTURE_ROW = SPLAT_TEXTURE_WIDTH // 4    # 512
+# The shader addresses texels as aSplatIndex * 4.0 in fp32: exact up to 2^24 (ADR-0003).
+MAX_ADDRESSABLE_SPLATS = (2 ** 24) // 4
 
 SPLAT_LAYOUT = [
     {"name": "xyz", "offset": 0, "size": 3},
@@ -152,11 +154,22 @@ SPLAT_LAYOUT = [
     {"name": "rgb", "offset": 12, "size": 3},
 ]
 
-# The up-axis conversion the viewer must apply in its object matrix.
-# (x, y, z)_colmap → (x, −z, y)_webgl is Rx(+90°); the viewer sets
-# sceneRoot.rotation.x = +π/2, which is the same map applied to positions
-# *and* covariances at once.
-UP_AXIS_ROTATION = {"axis": "x", "degrees": 90.0}
+# The up-axis conversion the viewer must apply in its object matrix (WebGL is
+# Y-up); the viewer sets sceneRoot.rotation from it, which is the same map
+# applied to positions *and* covariances at once.
+# * ENU (every georeferenced scene: x east, y north, z up): Rx(−90°),
+#   (x, y, z) → (x, z, −y), so up stays up and north points into the screen.
+#   Rx(+90°) here used to send up to −Y: the default camera looked at the
+#   scene from under the ground.
+# * A free COLMAP frame (synthetic poses, no georeference) takes the first
+#   camera's axes (y down, z forward); for a nadir-ish first frame up ≈ −z,
+#   which Rx(+90°) maps to +Y.
+UP_AXIS_ROTATION_ENU = {"axis": "x", "degrees": -90.0}
+UP_AXIS_ROTATION_COLMAP = {"axis": "x", "degrees": 90.0}
+
+
+def up_axis_rotation(dataset: str) -> Dict[str, object]:
+    return UP_AXIS_ROTATION_ENU if scene_metric(dataset) is not None else UP_AXIS_ROTATION_COLMAP
 
 # ADR-0001: COLMAP units are arbitrary up to a similarity transform unless
 # the run was seeded with known georeferenced poses. The scene's `metric`
@@ -171,6 +184,18 @@ def scene_metric(dataset: str) -> Optional[Dict[str, object]]:
 # ═══════════════════════════════════════════════════════════════════
 #  Tensor helpers
 # ═══════════════════════════════════════════════════════════════════
+
+_QUANTILE_SAMPLE = 1_000_000
+
+
+def _quantile(values: torch.Tensor, q: float) -> float:
+    """torch.quantile refuses inputs above 2²⁴ elements, and rgb.flatten() is 3N: a
+    dense cloud of 5.6M points (this site's is 5.48M) would turn into a 500. A
+    deterministic strided sample is plenty for an encoding check."""
+    if values.numel() > _QUANTILE_SAMPLE:
+        values = values[:: math.ceil(values.numel() / _QUANTILE_SAMPLE)]
+    return float(torch.quantile(values.float(), q))
+
 
 def finite_mask(*tensors: torch.Tensor) -> torch.Tensor:
     """
@@ -395,9 +420,16 @@ class Payload:
     dropped_nonfinite: int
     dropped_outliers: int
     activations: Optional[Dict[str, object]] = None   # what was actually applied (splat only)
+    # How the splats were trained to be drawn (splat only): "classic" = +0.3 px²
+    # dilation, "antialiased" = the same plus Mip-Splatting opacity compensation.
+    # The viewer must match it or small splats fade (classic drawn antialiased).
+    rasterize_mode: Optional[str] = None
+    effective_step: Optional[int] = None   # > step when the server had to thin the scene
 
 
-_lock = threading.Lock()
+# Reentrant: get_payload holds it while building, and the builders call
+# scene_frame, which takes it too (scene_meta calls scene_frame directly).
+_lock = threading.RLock()
 _FRAMES: Dict[str, SceneFrame] = {}
 
 # review-2 #2: `step` is accepted straight from the query string
@@ -451,6 +483,14 @@ def scene_frame(dataset: str) -> SceneFrame:
     means a future TRIPS output lands in the same frame without a third
     magic constant.
     """
+    with _lock:
+        # Under the lock: two first requests would otherwise each load the files,
+        # and a reload popping _FRAMES mid-measurement would get the old file's
+        # frame re-inserted — the payload then centred differently from scene-meta.
+        return _scene_frame_locked(dataset)
+
+
+def _scene_frame_locked(dataset: str) -> SceneFrame:
     cached = _FRAMES.get(dataset)
     if cached is not None:
         return cached
@@ -531,9 +571,12 @@ def _clip_outliers(
 #  Payload builders
 # ═══════════════════════════════════════════════════════════════════
 
-def _etag_for(path: str, mode: str, step: int, count: int) -> str:
+def _etag_for(path: str, mode: str, step: int, count: int, frame: SceneFrame) -> str:
+    # The frame (centre) is measured from the splat file even for dense mode, so a
+    # retrained splat re-centres the dense payload without touching its mtime.
     mtime = os.path.getmtime(path)
-    return f'"{mode}-{step}-{count}-{int(mtime)}"'
+    centre = ",".join(f"{c:.4f}" for c in frame.center)
+    return f'"{mode}-{step}-{count}-{int(mtime)}-{centre}"'
 
 
 def _build_dense_payload(dataset: str, step: int) -> Payload:
@@ -566,7 +609,7 @@ def _build_dense_payload(dataset: str, step: int) -> Payload:
 
     # 99th percentile, not max: one remaining bright outlier should not
     # decide the encoding for the whole tensor.
-    if rgb.numel() and float(torch.quantile(rgb.flatten(), 0.99)) > 1.0:
+    if rgb.numel() and _quantile(rgb.flatten(), 0.99) > 1.0:
         rgb = rgb / 255.0
 
     frame = scene_frame(dataset)
@@ -595,10 +638,18 @@ def _build_dense_payload(dataset: str, step: int) -> Payload:
         count=count,
         padded_count=count,
         stride=DENSE_STRIDE,
-        etag=_etag_for(path, "dense", step, count),
+        etag=_etag_for(path, "dense", step, count, frame),
         dropped_nonfinite=dropped_nonfinite,
         dropped_outliers=dropped_outliers,
     )
+
+
+def _rasterize_mode(data: Dict[str, object]) -> str:
+    """The `.pt`'s declared render mode; files without one come from the Inria/torch
+    rasterizers, which are classic."""
+    render = data.get("render") or {}
+    mode = render.get("rasterize_mode") if isinstance(render, dict) else None
+    return mode if mode in ("classic", "antialiased") else "classic"
 
 
 def _build_splat_payload(dataset: str, step: int) -> Payload:
@@ -632,7 +683,9 @@ def _build_splat_payload(dataset: str, step: int) -> Payload:
     # so a single stray Gaussian used to raise here and take the whole
     # endpoint down with a 500 instead of being quietly dropped, which is
     # the exact failure this filter exists to prevent.
-    mask = finite_mask(xyz, scale, rot, opac, rgb)
+    # A zero quaternion is finite but has no rotation: normalize() in the shader
+    # turns it into NaN, so it goes out with the non-finite rows.
+    mask = finite_mask(xyz, scale, rot, opac, rgb) & (rot.norm(dim=1) > 1e-8)
     dropped_nonfinite = int((~mask).sum())
     xyz, scale, rot, opac, rgb = (t[mask] for t in (xyz, scale, rot, opac, rgb))
 
@@ -643,7 +696,7 @@ def _build_splat_payload(dataset: str, step: int) -> Payload:
     # percentile rather than the max — the same +inf-in-rgb mechanism
     # that blacked out the dense branch applies here too, and one
     # remaining bright outlier shouldn't flip the whole tensor's encoding.
-    if rgb.numel() and float(torch.quantile(rgb.flatten(), 0.99)) > 1.0:
+    if rgb.numel() and _quantile(rgb.flatten(), 0.99) > 1.0:
         rgb = rgb / 255.0
 
     # File-declared activation contract, if the trainer wrote one
@@ -679,13 +732,19 @@ def _build_splat_payload(dataset: str, step: int) -> Payload:
     # start reading each other's parameters: silent corruption, not a
     # crash. Warn here too, not just in the worker, since this is the
     # function that actually decides the count.
-    max_addressable = (2 ** 24) // 4
+    # Enforced, not just logged: past the ceiling every splat silently reads its
+    # neighbours' texels, so thin uniformly until the scene fits.
+    max_addressable = MAX_ADDRESSABLE_SPLATS
+    thin = 1
     if count > max_addressable:
+        thin = math.ceil(count / max_addressable)
+        xyz, scale, rot, opac, rgb = (t[::thin] for t in (xyz, scale, rot, opac, rgb))
         print(
             f"   ⚠️  [Server] {count:,} splats exceeds the fp32 texel-addressing "
-            f"ceiling ({max_addressable:,}). aSplatIndex * 4.0 will round and "
-            f"splats will read each other's data. Reload with a larger ?step="
+            f"ceiling ({max_addressable:,}); serving every {thin}-th "
+            f"({xyz.shape[0]:,}). Effective step = {step * thin}."
         )
+        count = xyz.shape[0]
 
     # Pad up to a whole number of texture rows so the response body can be
     # uploaded as an RGBA32F texture with no repacking on the main thread.
@@ -716,10 +775,12 @@ def _build_splat_payload(dataset: str, step: int) -> Payload:
         count=count,
         padded_count=padded,
         stride=SPLAT_STRIDE,
-        etag=_etag_for(path, "splat", step, count),
+        etag=_etag_for(path, "splat", step, count, frame),
         dropped_nonfinite=dropped_nonfinite,
         dropped_outliers=dropped_outliers,
         activations=activations_applied,
+        rasterize_mode=_rasterize_mode(data),
+        effective_step=step * thin,
     )
 
 
@@ -836,7 +897,7 @@ def scene_meta(
     # so the viewer doesn't have to duplicate the constant. The shader
     # addresses TEXELS (aSplatIndex * 4.0), not splats, so the ceiling on
     # splat count is 2^24 / 4, not 2^24.
-    max_addressable_splats = (2 ** 24) // 4
+    max_addressable_splats = MAX_ADDRESSABLE_SPLATS
 
     return {
         "dataset": dataset,
@@ -854,7 +915,7 @@ def scene_meta(
         "scene_scale": frame.scene_scale,
         "target_scene_radius": TARGET_SCENE_RADIUS,
         "frame_source": frame.source,
-        "up_axis_rotation": UP_AXIS_ROTATION,
+        "up_axis_rotation": up_axis_rotation(dataset),
 
         # review-2 §2.6: derive the shader's near-plane cull from the same
         # fraction frameCamera() uses for camera.near, so the two stay
@@ -868,6 +929,8 @@ def scene_meta(
         "max_addressable_splats": max_addressable_splats if mode == "splat" else None,
 
         "activations": payload.activations,
+        "rasterize_mode": payload.rasterize_mode,
+        "effective_step": payload.effective_step or step,
 
         # Site ENU metres + WGS84 origin when the run is georeferenced
         # (known poses), None otherwise. The viewer labels measurements as
@@ -942,9 +1005,20 @@ app.state.refresh_scenes = refresh_scenes
 app.include_router(api_v2.router)
 app.include_router(api_semantics.router)
 
+class _RevalidatedStaticFiles(StaticFiles):
+    """The classic viewer's files are unversioned (no content hash in the name), so
+    without a policy the browser caches them heuristically and keeps running the old
+    shader after an update. `no-cache` = revalidate every time; ETag makes that a 304."""
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 app.mount(
     "/web",
-    StaticFiles(directory=os.path.join(project_dir, "web"), html=True),
+    _RevalidatedStaticFiles(directory=os.path.join(project_dir, "web"), html=True),
     name="web",
 )
 

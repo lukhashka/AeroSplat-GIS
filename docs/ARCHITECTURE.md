@@ -245,14 +245,18 @@ flowchart TD
 * `appGLSL.js`:
   * сплати — **інстансовані квади**, параметри читаються з float-текстури
     за `aSplatIndex`; вершинний шейдер будує Σ, проєктує через Якобіан,
-    дилатація 0.3 px + компенсація непрозорості (Mip-Splatting), квад
-    вирівняний по власних осях еліпса, cutoff 3.5σ;
+    дилатація 0.3 px (+ компенсація непрозорості Mip-Splatting лише для
+    `scene-meta.rasterize_mode = antialiased`), квад вирівняний по власних осях
+    еліпса, cutoff 3.5σ;
   * dense — `THREE.Points` з розміром точки за оцінкою щільності;
   * NormalBlending, back-to-front, `depthWrite=false`.
 * `depth-sort_worker.js` — counting sort по 65 536 бакетах глибини у Web
   Worker; сортування запускається лише при реальному русі камери.
 * `aero-debug.js` — панель діагностики (F9): статистика реальних байтів,
-  CPU-дзеркало вершинного шейдера, синтетична тест-сцена.
+  CPU-дзеркало вершинного шейдера, синтетична тест-сцена, **Ref compare** —
+  той самий ракурс від render service (gsplat) і попіксельний PSNR в'ювер↔еталон.
+* Статичні файли `/web` віддаються з `Cache-Control: no-cache` (ревалідація за ETag):
+  імена без хешу, тож інакше браузер тримав старий шейдер після оновлення.
 * Ліміт адресації: `aSplatIndex*4` у float32 → максимум **4 194 304** сплатів.
 
 ### 3.8 Діагностика
@@ -553,7 +557,8 @@ georef → gs/*_wgs84.pt      = A·x + b (Σ → AΣAᵀ): WGS84 Site ENU (pypro
 server                      = мінус median-центр (float32-безпечно); scene-meta.metric:
                               enu = xyz + center, origin (WGS84) → будь-яка точка в lat/lon/h
                                                                                           ▼
-viewer sceneRoot            = Rx(+90°) · (100 / extent)   → Y-up, радіус 100
+viewer sceneRoot            = Rx(−90°) · (100 / extent)   → Y-up, радіус 100
+                              (Rx(+90°) лише для вільного кадру COLMAP без metric)
 ```
 
 Метрика й геоприв'язка тепер **доходять** до сервера (`scene-meta.metric`); в'ювер

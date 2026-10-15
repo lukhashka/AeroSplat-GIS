@@ -134,3 +134,25 @@ def test_anisotropy_penalty_only_above_ratio():
     needle = torch.tensor([[0.0, math.log(30), 0.0]])
     assert anisotropy_penalty(ok, 10.0).item() == 0.0
     assert anisotropy_penalty(needle, 10.0).item() > 0.0
+
+
+def test_anisotropy_penalty_spares_flat_disks():
+    """Roofs and roads are thin disks (two long axes, one tiny): not a needle."""
+    import math, torch
+    from aerosplat.gs.trainer import anisotropy_penalty
+    disk = torch.tensor([[math.log(30), math.log(30), 0.0]])
+    assert anisotropy_penalty(disk, 10.0).item() == 0.0
+
+
+def test_intrinsics_scale_per_axis(tmp_path):
+    """int() truncates each side differently; fx/cx and fy/cy follow their own axis."""
+    import torch
+    from PIL import Image
+    from aerosplat.gs.trainer import Camera, attach_images
+    Image.new("RGB", (5472, 3648), (10, 20, 30)).save(tmp_path / "a.jpg")
+    cam = Camera(torch.eye(3), torch.zeros(3), 4000.0, 4000.0, 2736.0, 1824.0, 5472, 3648, "a.jpg")
+    out = attach_images([cam], str(tmp_path), max_res=1000)[0]
+    assert (out.W, out.H) == (1000, 666)
+    assert abs(out.fx - 4000.0 * 1000 / 5472) < 1e-6
+    assert abs(out.fy - 4000.0 * 666 / 3648) < 1e-6
+    assert abs(out.cy - 1824.0 * 666 / 3648) < 1e-6

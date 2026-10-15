@@ -319,3 +319,74 @@ def test_root_redirect_and_ui_fallback(server, tmp_path, monkeypatch):
     for escape in ("/app/../../pyproject.toml", "/app/..%2F..%2F..%2Fpyproject.toml"):
         r = client.get(escape)
         assert "[project]" not in r.text            # never a file outside dist/
+
+
+def test_up_axis_follows_the_frame(server):
+    """ENU is Z-up → Rx(−90°) keeps up up; Rx(+90°) put the camera under the ground."""
+    client, _ = server
+    enu = client.get("/api/v1/scene-meta", params={"mode": "splat", "dataset": "t"}).json()
+    assert enu["metric"] is not None
+    assert enu["up_axis_rotation"] == {"axis": "x", "degrees": -90.0}
+    free = client.get("/api/v1/scene-meta", params={"mode": "dense", "dataset": "nosplat"}).json()
+    assert free["metric"] is None
+    assert free["up_axis_rotation"] == {"axis": "x", "degrees": 90.0}
+
+
+def test_rasterize_mode_reaches_the_viewer(server, tmp_path):
+    client, mod = server
+    # no `render` key: an Inria/torch file, which is classic
+    meta = client.get("/api/v1/scene-meta", params={"mode": "splat"}).json()
+    assert meta["rasterize_mode"] == "classic" and meta["effective_step"] == 1
+    path = tmp_path / "aa.pt"
+    write_pt(path, "splat", N)
+    data = torch.load(path)
+    data["render"] = {"rasterizer": "gsplat", "rasterize_mode": "antialiased"}
+    torch.save(data, path)
+    mod.SCENES["aa"] = SceneSource(name="aa", cloud=str(path), splat=str(path), metric=None,
+                                   kind="legacy")
+    meta = client.get("/api/v1/scene-meta", params={"mode": "splat", "dataset": "aa"}).json()
+    assert meta["rasterize_mode"] == "antialiased"
+
+
+def test_zero_quaternions_are_dropped(server, tmp_path):
+    client, mod = server
+    path = tmp_path / "zq.pt"
+    write_pt(path, "splat", N)
+    data = torch.load(path)
+    data["rotation"][:3] = 0.0
+    torch.save(data, path)
+    mod.SCENES["zq"] = SceneSource(name="zq", cloud=str(path), splat=str(path), metric=None,
+                                   kind="legacy")
+    meta = client.get("/api/v1/scene-meta", params={"mode": "splat", "dataset": "zq"}).json()
+    assert meta["dropped_nonfinite"] == 3 and meta["count"] == N - 3
+
+
+def test_splat_ceiling_is_enforced(server, monkeypatch):
+    """Past the fp32 texel-addressing ceiling the server thins instead of corrupting."""
+    client, mod = server
+    monkeypatch.setattr(mod, "MAX_ADDRESSABLE_SPLATS", 60)
+    meta = client.get("/api/v1/scene-meta", params={"mode": "splat"}).json()
+    assert 0 < meta["count"] <= 60
+    assert meta["effective_step"] == 4          # ceil(200 / 60)
+
+
+def test_quantile_handles_more_than_2_pow_24(server):
+    _, mod = server
+    v = torch.rand(17_000_000)
+    assert 0.98 < mod._quantile(v, 0.99) <= 1.0
+
+
+def test_dense_etag_follows_the_splat_frame(server, env):
+    client, mod = server
+    first = client.get("/api/v1/spatial-chunk", params={"mode": "dense"}).headers["etag"]
+    mod._FRAMES["demo/t"] = mod.SceneFrame(center=(1.0, 2.0, 3.0), extent=10.0,
+                                           scene_scale=10.0, source="splat.pt")
+    mod._PAYLOADS.clear()
+    again = client.get("/api/v1/spatial-chunk", params={"mode": "dense"}).headers["etag"]
+    assert first != again
+
+
+def test_classic_viewer_files_revalidate(server):
+    client, _ = server
+    r = client.get("/web/appGLSL.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"

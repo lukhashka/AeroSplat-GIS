@@ -346,10 +346,12 @@ def _resolve_image_path(images_dir: str, name: str) -> Optional[str]:
     return None
 
 
-def _decode_and_scale(path: str, max_res: int) -> Tuple[Tensor, float]:
+def _decode_and_scale(path: str, max_res: int) -> Tuple[Tensor, Tuple[float, float]]:
     """
     Декодує один кадр і масштабує його до max_res по довшій стороні.
-    Повертає ((H,W,3) float32 тензор в [0,1], scale).
+    Повертає ((H,W,3) float32 тензор в [0,1], (sx, sy)) — масштаб окремо по осях:
+    int() обрізає кожну сторону по-своєму, і для кадру не 16:9 (напр. 5472×3648)
+    спільний scale дає ~0.1% похибки fy і ~0.3 px у cy.
 
     img.draft(...) просить libjpeg декодувати одразу в наближеному до
     цільового DCT-масштабі, замість повного decode на нативній роздільності
@@ -381,7 +383,7 @@ def _decode_and_scale(path: str, max_res: int) -> Tuple[Tensor, float]:
 
     arr = torch.frombuffer(img.tobytes(), dtype=torch.uint8).clone()
     arr = arr.view(img.size[1], img.size[0], 3).float() / 255.0
-    return arr, scale
+    return arr, (img.size[0] / native_w, img.size[1] / native_h)
 
 
 def attach_images(cams: List[Camera], images_dir: str, max_res: int = 1024) -> List[Camera]:
@@ -420,9 +422,9 @@ def attach_images(cams: List[Camera], images_dir: str, max_res: int = 1024) -> L
         ))
 
     out: List[Camera] = []
-    for (cam, _path), (arr, scale) in zip(resolved, decoded):
-        out.append(Camera(cam.R, cam.t, cam.fx * scale, cam.fy * scale,
-                          cam.cx * scale, cam.cy * scale,
+    for (cam, _path), (arr, (sx, sy)) in zip(resolved, decoded):
+        out.append(Camera(cam.R, cam.t, cam.fx * sx, cam.fy * sy,
+                          cam.cx * sx, cam.cy * sy,
                           arr.shape[1], arr.shape[0], cam.name, arr))
     return out
 
@@ -1226,8 +1228,12 @@ class CameraSampler:
 
 
 def anisotropy_penalty(scaling_log: Tensor, max_ratio: float = 10.0) -> Tensor:
-    """Mean hinge on max/min axis ratio above `max_ratio` — suppresses needle splats."""
-    ratio = torch.exp(scaling_log.max(dim=-1).values - scaling_log.min(dim=-1).values)
+    """Mean hinge on the largest/middle axis ratio above `max_ratio` — suppresses
+    needle splats only. Flat disks (two large axes, one tiny) are what roofs, roads
+    and facades should converge to; the old largest/smallest ratio penalised them
+    as hard as needles and thickened every planar surface."""
+    s = scaling_log.sort(dim=-1).values
+    ratio = torch.exp(s[..., 2] - s[..., 1])
     return torch.relu(ratio - max_ratio).mean()
 
 
@@ -1269,6 +1275,7 @@ def train(
     mcmc_opacity_reg: float = 0.01,
     mcmc_scale_reg: float = 0.01,
     mcmc_noise_lr: float = 5e5,
+    mcmc_refine_stop_frac: float = 0.85,
     appearance: str = "none",
     # ── сумісність зі старою сигнатурою v3 (якщо train() кличуть з коду) ──
     use_cuda_rasterizer: Optional[bool] = None,
@@ -1357,9 +1364,14 @@ def train(
         scales = torch.full((xyz0.shape[0],), init_scale, device=device)
         log(f"  Стартовий масштаб: {init_scale} (задано вручну)")
     else:
-        scales = approx_nn_distance(xyz0).clamp(min=1e-7)
-        log(f"  Стартовий масштаб з KNN: медіана {float(scales.median()):.5f} "
-            f"({time.time()-t0:.1f}s)")
+        scales = approx_nn_distance(xyz0)
+        # Dense MVS has exact duplicates (NN distance 0): a 1e-7 splat is
+        # invisible, gets no gradient and is dead weight until pruned/relocated.
+        floor = 0.1 * float(scales.median())
+        n_floor = int((scales < floor).sum())
+        scales = scales.clamp(min=max(floor, 1e-7))
+        log(f"  Стартовий масштаб з KNN: медіана {float(scales.median()):.5f}, "
+            f"{n_floor:,} піднято до 0.1×медіани ({time.time()-t0:.1f}s)")
 
     densify_until = int(num_iterations * densify_until_frac)
 
@@ -1381,7 +1393,8 @@ def train(
             opacity_reset_interval=opacity_reset_interval, max_gaussians=max_gaussians,
             max_screen_radius=max_screen_radius, scale_reg=scale_reg,
             max_aniso_ratio=max_aniso_ratio, mcmc_opacity_reg=mcmc_opacity_reg,
-            mcmc_scale_reg=mcmc_scale_reg, mcmc_noise_lr=mcmc_noise_lr, appearance=appearance,
+            mcmc_scale_reg=mcmc_scale_reg, mcmc_noise_lr=mcmc_noise_lr,
+            mcmc_refine_stop=int(num_iterations * mcmc_refine_stop_frac), appearance=appearance,
             warmup_iters=warmup_iters, eval_interval=eval_interval, save_every=save_every)
         if self_test:
             _self_test_ground_truth(GaussianModel(xyz0, rgb0, init_scale=scales).to(device),
@@ -1490,9 +1503,9 @@ def train(
             log(f"    Test PSNR @ {iteration}: {test_psnr:.2f} dB ({len(test_cams)} кадрів)")
 
         if save_every and iteration % save_every == 0:
-            _save(model, output_path)
+            _save(model, output_path, rasterizer_kind)
 
-    _save(model, output_path)
+    _save(model, output_path, rasterizer_kind)
     log(f"\n  Середній loss: {sum(losses)/len(losses):.4f}")
     _log_done(model.n_gaussians, t_start, output_path)
 
@@ -1514,7 +1527,7 @@ def _log_done(n_gaussians: int, t_start: float, output_path: str) -> None:
     log(f"  Збережено: {output_path}")
 
 
-def _save(model: GaussianModel, path: str):
+def _save(model: GaussianModel, path: str, rasterizer: str = "cuda"):
     """
     Формат навмисне ТОЙ САМИЙ, що й у v3 — {xyz, scale, rotation, opacity, rgb},
     активовані значення, CPU. main.py і appGLSL.js читають без змін.
@@ -1530,6 +1543,11 @@ def _save(model: GaussianModel, path: str):
         p = model.get_params(with_cov=False)
         scene: Dict[str, Any] = {k: v.detach().cpu() for k, v in p.items()}
     scene["activations"] = {"scale_is_log": False, "opacity_is_logit": False}
+    # Both cuda (Inria) and torch rasterize "classic": +0.3 px² dilation with no
+    # opacity compensation. Consumers (viewer shader, render service, eval) must
+    # draw the same way — the viewer's Mip-Splatting compensation on a classic
+    # model fades every small splat (measured: 22 dB vs 50 dB against gsplat).
+    scene["render"] = {"rasterizer": rasterizer, "rasterize_mode": "classic"}
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     torch.save(scene, path)
 
@@ -1604,6 +1622,8 @@ def main(argv=None) -> int:
     g.add_argument("--mcmc-opacity-reg", type=float, default=0.01)
     g.add_argument("--mcmc-scale-reg", type=float, default=0.01)
     g.add_argument("--mcmc-noise-lr", type=float, default=5e5)
+    g.add_argument("--mcmc-refine-stop-frac", type=float, default=0.85,
+                   help="до якої частки ітерацій MCMC релокує «мертві» сплати (gsplat: 25k/30k)")
     g.add_argument("--appearance", choices=["none", "exposure"], default="none",
                    help="exposure = афінна корекція кольору на кожен train-кадр (лише в тренуванні)")
     args = parser.parse_args(argv)
@@ -1655,6 +1675,7 @@ def main(argv=None) -> int:
         mcmc_opacity_reg=args.mcmc_opacity_reg,
         mcmc_scale_reg=args.mcmc_scale_reg,
         mcmc_noise_lr=args.mcmc_noise_lr,
+        mcmc_refine_stop_frac=args.mcmc_refine_stop_frac,
         appearance=args.appearance,
     )
     return 0

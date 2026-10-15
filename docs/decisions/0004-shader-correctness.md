@@ -16,3 +16,19 @@
 * **§C2** Компенсація непрозорості Mip-Splatting для 0.3-px дилатації.
 * **§3.5** Захищені пошуки HUD, pixel ratio при resize, supersampling замість
   MSAA, `highp` у dense-фрагментному шейдері.
+
+## Доповнення 2026-10-15: компенсація — лише для `antialiased`
+
+§C2 застосовувався до **кожної** сцени, а тренер за замовчуванням (`rasterizer: auto`
+= Inria CUDA) і `torch` рендерять **classic**: та сама дилатація 0.3 px², але без
+компенсації, і непрозорості навчені саме так. Компенсований показ classic-моделі
+гасить усі дрібні сплати (σ = 0.5 px → ×0.45): сцена темніша й «прозоріша».
+Виміряно на `dataset_splater` (Inria, 1.9M) у тому самому ракурсі проти render
+service (gsplat, classic): **22.2 dB** з компенсацією проти **49.6 dB** без неї.
+
+Тепер `.pt` кожного тренера несе `render.rasterize_mode` (Inria/torch пишуть
+`classic`; файл без ключа = classic), сервер віддає його в `scene-meta.rasterize_mode`,
+шейдер вмикає компенсацію uniform-ом `uAntialiased` лише для `antialiased`.
+Перевірка будь-якої сцени — кнопка **Ref compare** у панелі F9
+(`AeroDebug.compareWithReference()`): поточний ракурс рендериться ще й render
+service-ом і порівнюється попіксельно (очікувано ≳ 45 dB).

@@ -131,9 +131,14 @@ def _make_rasterizer(kind: str, device, render: Optional[Dict[str, Any]] = None)
     """Растерізатор оцінки. gsplat бере rasterize_mode із файлу (`render`), щоб test-кадри
     рендерились так само, як під час тренування; файл без `render` — classic (Inria)."""
     render = render or {}
-    if kind == "gsplat":
+    if kind == "gsplat" or (kind == "auto" and render.get("rasterizer") == "gsplat"):
         from aerosplat.gs.gsplat_backend import GsplatRasterizer
-        return GsplatRasterizer(render.get("rasterize_mode", "classic"))
+        try:
+            return GsplatRasterizer(render.get("rasterize_mode", "classic"))
+        except Exception as e:  # auto: no gsplat build environment → say so, fall back
+            if kind == "gsplat":
+                raise
+            log(f"  ⚠️  gsplat недоступний для оцінки ({e}) — fallback.")
     if render.get("rasterizer") == "gsplat":
         log(f"  ⚠️  Сплат натреновано gsplat ({render.get('rasterize_mode')}), а оцінка йде "
             f"rasterizer={kind}: без SH і antialiasing метрики занижені.")

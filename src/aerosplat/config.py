@@ -113,6 +113,7 @@ class RunConfig(BaseModel):
     mcmc_opacity_reg: float = Field(0.01, ge=0)
     mcmc_scale_reg: float = Field(0.01, ge=0)
     mcmc_noise_lr: float = Field(5e5, ge=0)
+    mcmc_refine_stop_frac: float = Field(0.85, gt=0, le=1)  # MCMC relocation until this fraction
     # "exposure": per-train-image colour affine, training only (mixed sources).
     appearance: Literal["none", "exposure"] = "none"
 

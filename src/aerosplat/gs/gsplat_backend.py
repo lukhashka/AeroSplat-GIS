@@ -458,6 +458,9 @@ class GsplatOptions:
     mcmc_opacity_reg: float = 0.01
     mcmc_scale_reg: float = 0.01
     mcmc_noise_lr: float = 5e5
+    # MCMC keeps relocating dead splats until here. It used to stop at densify_until
+    # (50% of the run); gsplat's reference schedule stops at 25k of 30k.
+    mcmc_refine_stop: Optional[int] = None
     appearance: str = "none"
     warmup_iters: int = 0
     eval_interval: int = 1000
@@ -507,8 +510,10 @@ def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale:
     mcmc_dens: Optional[McmcDensifier] = None
     densifier: Optional[GsplatDensifier] = None
     if mcmc:
-        mcmc_dens = McmcDensifier(model, opts.max_gaussians, opts.densify_from, opts.densify_until,
+        refine_stop = opts.mcmc_refine_stop if opts.mcmc_refine_stop is not None else opts.densify_until
+        mcmc_dens = McmcDensifier(model, opts.max_gaussians, opts.densify_from, refine_stop,
                                   opts.densify_interval, opts.mcmc_noise_lr, extent)
+        log(f"  MCMC: релокація з {opts.densify_from} до {refine_stop} ітерації")
     else:
         densifier = GsplatDensifier(
             model, opts.absgrad_threshold if absgrad else opts.grad_threshold, absgrad=absgrad)
