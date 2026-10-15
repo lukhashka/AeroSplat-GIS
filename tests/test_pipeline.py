@@ -107,30 +107,14 @@ def test_every_stage_entry_resolves(cloud_source):
 
 
 # ── Site runs (ADR-0006): RunLayout as a view on the project tree ─────────
-from conftest import write_es_export, write_pt  # noqa: E402
+from conftest import ES_ORIGIN as SITE_ORIGIN  # noqa: E402
+from conftest import write_pt  # noqa: E402
 
 from aerosplat import starter  # noqa: E402
-from aerosplat.geo.crs import GeoPoint  # noqa: E402
-from aerosplat.ingest.earthstudio import import_earthstudio  # noqa: E402
 from aerosplat.pipeline.stages import argv_dense, argv_eval, argv_geo  # noqa: E402
-from aerosplat.store import Catalog, RunStatus, Site  # noqa: E402
+from aerosplat.store import RunStatus  # noqa: E402
 from aerosplat.store.scenes import (CLOUD, CLOUD_RECON, SPLAT, SPLAT_RECON,  # noqa: E402
                                     catalog_scenes)
-
-SITE_ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
-
-
-@pytest.fixture
-def es_site(tmp_path):
-    """Catalog with site demo/es holding one Earth Studio capture."""
-    root = tmp_path / "projects"
-    cat = Catalog.open(root)
-    cat.ensure_project("demo")
-    site = cat.create_site(Site(id="es", project_id="demo", origin=SITE_ORIGIN))
-    js, footage = write_es_export(tmp_path / "export", "fixture")
-    cap = import_earthstudio(cat, site, js, footage)
-    yield cat, site, cap, root
-    cat.close()
 
 
 def test_site_layout_is_a_view_on_the_run_dir(es_site):

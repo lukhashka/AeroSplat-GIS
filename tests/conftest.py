@@ -23,6 +23,31 @@ def catalog(tmp_path):
     cat.close()
 
 
+def _es_origin():
+    from aerosplat.geo.crs import GeoPoint
+
+    return GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
+
+
+ES_ORIGIN = _es_origin()
+
+
+@pytest.fixture
+def es_site(tmp_path):
+    """Catalog with site demo/es holding one Earth Studio capture (3 frames)."""
+    from aerosplat.ingest.earthstudio import import_earthstudio
+    from aerosplat.store import Catalog, Site
+
+    root = tmp_path / "projects"
+    cat = Catalog.open(root)
+    cat.ensure_project("demo")
+    site = cat.create_site(Site(id="es", project_id="demo", origin=ES_ORIGIN))
+    js, footage = write_es_export(tmp_path / "export", "fixture")
+    cap = import_earthstudio(cat, site, js, footage)
+    yield cat, site, cap, root
+    cat.close()
+
+
 def write_jpeg(path: Path, shade: int = 100, size=(16, 12)) -> None:
     from PIL import Image
 

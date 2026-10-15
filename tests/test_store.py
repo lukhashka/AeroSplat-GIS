@@ -7,6 +7,7 @@ import pytest
 import yaml
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 from sqlalchemy import exc, select, text
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from aerosplat.geo.crs import GeoPoint
 from aerosplat.store import (BBox, Capture, CaptureSource, Catalog, CatalogError, Epoch, Image,
                              NotFoundError, RunStatus, Site)
+from aerosplat.store.catalog import alembic_config
 from aerosplat.store.db import Base, OriginImmutableError, SiteRow
 
 ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
@@ -26,10 +28,17 @@ def _site(cat, sid="s1", project="demo", origin=ORIGIN):
 
 
 def test_migrations_match_models(catalog):
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
     with catalog.engine.connect() as conn:
         ctx = MigrationContext.configure(conn, opts={"compare_type": True})
         assert compare_metadata(ctx, Base.metadata) == []
-        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == "0001"
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
+
+
+def test_catalog_db_is_wal(catalog):
+    # API, workers and job processes share the file (aerosplat.store.db.make_engine).
+    with catalog.engine.connect() as conn:
+        assert conn.execute(text("PRAGMA journal_mode")).scalar() == "wal"
 
 
 def test_reopen_keeps_data(tmp_path):

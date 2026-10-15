@@ -193,14 +193,76 @@ class ProductRow(Base):
     run: Mapped[RunRow] = relationship(back_populates="products")
 
 
+class JobRow(Base):
+    """A unit of background work (aerosplat.jobs); the queue lives in the catalog DB."""
+
+    __tablename__ = "jobs"
+
+    # Insertion order: FIFO among equal priorities (created_at is per-second).
+    pk: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[str] = mapped_column(String(32), unique=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    resource: Mapped[str] = mapped_column(String(8), index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    site_key: Mapped[Optional[str]] = mapped_column(String(130), nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    worker_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    started_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+
+
+class JobEventRow(Base):
+    """Append-only event log of a job; `pk` doubles as the clients' stream cursor."""
+
+    __tablename__ = "job_events"
+
+    pk: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    ts: Mapped[datetime] = mapped_column(UtcDateTime)
+    type: Mapped[str] = mapped_column(String(16))
+    data: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class WorkerRow(Base):
+    """A worker process; `heartbeat_at` tells the UI (and orphan recovery) it is alive."""
+
+    __tablename__ = "workers"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    resource: Mapped[str] = mapped_column(String(8))
+    host: Mapped[str] = mapped_column(String(128))
+    pid: Mapped[int] = mapped_column(Integer)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    heartbeat_at: Mapped[datetime] = mapped_column(UtcDateTime)
+    current_job: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(UtcDateTime, nullable=True)
+
+
 def make_engine(db: Path | str) -> Engine:
-    """Engine for a catalog file (or any SQLAlchemy URL), with SQLite FKs enforced."""
+    """Engine for a catalog file (or any SQLAlchemy URL), with SQLite FKs enforced.
+
+    The API, the workers and the job processes they spawn all write the same
+    SQLite file, so it runs in WAL mode (readers never block the writer) and
+    waits for the write lock instead of failing at once.
+    """
     url = db if isinstance(db, str) and "://" in db else f"sqlite:///{Path(db).as_posix()}"
     engine = create_engine(url)
     if engine.dialect.name == "sqlite":
+        in_memory = engine.url.database in (None, "", ":memory:")
+
         @event.listens_for(engine, "connect")
-        def _fk_on(dbapi_conn: Any, _record: Any) -> None:
+        def _sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA foreign_keys=ON")
+            cur.execute("PRAGMA busy_timeout=10000")
+            if not in_memory:
+                cur.execute("PRAGMA journal_mode=WAL")
+                cur.execute("PRAGMA synchronous=NORMAL")
             cur.close()
     return engine
