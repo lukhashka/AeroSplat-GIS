@@ -150,8 +150,8 @@ flowchart TD
     (Inria, збирається локально, лежить у корені репо, untracked);
   * `torch` — `TileRasterizer`, власний диференційований tile-based растеризатор на
     чистому PyTorch (fallback; `auto` = `cuda`, якщо зібраний, інакше `torch`).
-    Семплює пікселі в цілих координатах, а не в центрах (+0.5), тобто зсунутий
-    на пів пікселя відносно COLMAP/Inria/gsplat (GPU-тест у `tests/test_gsplat.py`);
+    Семплює Гаусіани в центрах пікселів (+0.5), як COLMAP/Inria/gsplat; збіг із
+    gsplat `classic` перевіряє GPU-тест у `tests/test_gsplat.py`;
   * `gsplat` (Фаза 2.2) — gsplat 1.5.3, окремий цикл `train_gsplat` у
     `gs/gsplat_backend.py`. Обирається лише явно: JIT-збірка CUDA-розширення,
     на Windows — через [tools/gsplat_env.bat](../tools/gsplat_env.bat);

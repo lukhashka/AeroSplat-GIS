@@ -152,8 +152,9 @@ aerosplat run --dataset sample` на малому семпл-датасеті (1
 > ✅ 1.5 45 CPU-тестів (config, starter, pipeline, cloud_io, FastAPI, golden-тест осей Earth Studio) + GitHub Actions CI (ruff, mypy, eslint, pytest);
 > ✅ стадії як функції in-process, `RunLayout`/`manifest.json`, `--resume` (1.3); ADR у `docs/decisions/` замість коментарів-журналів;
 > ✅ 1.1 структура пакета (`io/ geo/ sfm/ gs/ pipeline/`); ✅ тест `TileRasterizer` vs gsplat
-> (GPU, `tests/test_gsplat.py`; знайшов зсув `TileRasterizer` на пів пікселя — він семплює
-> цілі координати замість центрів пікселів, не виправлено).
+> (GPU, `tests/test_gsplat.py`; знайшов зсув `TileRasterizer` на пів пікселя — він семплював
+> цілі координати замість центрів пікселів; виправлено: max abs diff з gsplat `classic`
+> 0.25…0.35 → ≤0.013, mean 0.013 → 0.0004).
 
 ### 1.1 Структура пакета
 

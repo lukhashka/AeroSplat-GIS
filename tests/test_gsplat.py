@@ -334,11 +334,9 @@ def test_gpu_gsplat_classic_matches_tile_rasterizer():
     p = _gpu_scene()
     p["cov3d"] = build_covariance_3d(torch.log(p["scale"]), p["rotation"])
     cam = Camera(torch.eye(3), torch.zeros(3), 120.0, 120.0, 64, 48, 128, 96, "c")
-    # gsplat (like Inria and COLMAP) samples pixel centres at +0.5; TileRasterizer
-    # samples integer coordinates, so it sees the image half a pixel shifted.
-    tile_cam = Camera(cam.R, cam.t, cam.fx, cam.fy, cam.cx - 0.5, cam.cy - 0.5, cam.W, cam.H, "c")
     view, bg = cam.view_matrix("cuda"), torch.zeros(3, device="cuda")
-    ref, _ = TileRasterizer().render(p, tile_cam, view, bg)
+    # Same camera for both: they sample pixel centres (+0.5), like Inria and COLMAP.
+    ref, _ = TileRasterizer().render(p, cam, view, bg)
     out, meta = GsplatRasterizer("classic").render(p, cam, view, bg)
     assert out.shape == ref.shape == (96, 128, 3)
     diff = (out - ref).abs()

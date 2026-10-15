@@ -740,13 +740,15 @@ class TileRasterizer:
             tstart = torch.cumsum(cpt, 0) - cpt
             max_cnt = int(cpt.max())
 
-            # Координати пікселів кожного тайла
+            # Цілі індекси пікселів кожного тайла (для збирання зображення) і
+            # їхні центри (+0.5), у яких рахуємо Гаусіани — та сама конвенція,
+            # що в інтрінсиків COLMAP, Inria-CUDA і gsplat.
             P = TILE * TILE
             t_idx = torch.arange(n_tiles, device=device)
             loc = torch.arange(P, device=device)
             px = ((t_idx % ntx) * TILE).unsqueeze(1) + (loc % TILE).unsqueeze(0)
             py = ((t_idx // ntx) * TILE).unsqueeze(1) + (loc // TILE).unsqueeze(0)
-            px, py = px.to(dtype), py.to(dtype)
+            pxc, pyc = px.to(dtype) + 0.5, py.to(dtype) + 0.5
 
             active = torch.nonzero(cpt > 0, as_tuple=True)[0]
 
@@ -764,7 +766,7 @@ class TileRasterizer:
                 max=gid_s.shape[0] - 1)
             g = gid_s[flat]                                              # (A,K)
 
-            args = (px[active], py[active], Tacc[active],
+            args = (pxc[active], pyc[active], Tacc[active],
                     u[g], v[g], ia[g], ib[g], idd[g], op[g], rgb[g],
                     valid.to(dtype))
             if self.use_checkpoint and torch.is_grad_enabled():
@@ -786,7 +788,7 @@ class TileRasterizer:
 
         # тайли → зображення
         img = torch.zeros(Hp * Wp, 3, device=device, dtype=dtype)
-        flat_idx = (py.long() * Wp + px.long()).reshape(-1)
+        flat_idx = (py * Wp + px).reshape(-1)
         img = img.index_copy(0, flat_idx, color.reshape(-1, 3))
         img = img.view(Hp, Wp, 3)[:H, :W]
 
