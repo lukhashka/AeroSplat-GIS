@@ -159,3 +159,43 @@ def test_model_validation():
         BBox(west=1, south=0, east=0, north=1)
     with pytest.raises(ValidationError):
         Image(name="x", sha256="nothex", bytes=1)
+
+
+_OPEN_CATALOG = """
+import sys
+from aerosplat.store import Catalog
+Catalog.open(sys.argv[1]).close()
+"""
+
+
+@pytest.mark.parametrize("start_at", [None, "0001"])
+def test_concurrent_open_migrates_once(tmp_path, start_at):
+    # `aerosplat up` starts the server and two workers at once; each opens the
+    # catalog and runs pending migrations. They must not race (one used to die
+    # with "table jobs already exists").
+    import os
+    import subprocess
+    import sys
+
+    from aerosplat.store.catalog import upgrade
+    from aerosplat.store.db import make_engine
+    from aerosplat.store.paths import StorePaths
+
+    root = tmp_path / "projects"
+    root.mkdir()
+    if start_at:
+        engine = make_engine(StorePaths(root).catalog_db)
+        upgrade(engine, start_at)
+        engine.dispose()
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    procs = [subprocess.Popen([sys.executable, "-c", _OPEN_CATALOG, str(root)], env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+             for _ in range(6)]
+    outputs = [p.communicate(timeout=120)[0] for p in procs]
+    failed = [out for p, out in zip(procs, outputs) if p.returncode != 0]
+    assert not failed, failed[0][-1500:]
+    head = ScriptDirectory.from_config(alembic_config()).get_current_head()
+    cat = Catalog.open(root)
+    with cat.engine.connect() as conn:
+        assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
+    cat.close()

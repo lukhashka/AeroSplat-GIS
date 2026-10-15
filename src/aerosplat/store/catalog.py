@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -32,6 +32,7 @@ from aerosplat.store.db import (CaptureRow, EpochRow, ImageRow, ProductRow, Proj
 from aerosplat.store.models import (BBox, Capture, CaptureSource, Epoch, Image, ImagePose,
                                     Project, RegistrationStatus, Run, RunStatus, Site, SiteKind,
                                     utcnow)
+from aerosplat.store.locking import file_lock
 from aerosplat.store.paths import RunDirs, SiteDirs, StorePaths, default_projects_root
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
@@ -56,9 +57,17 @@ def alembic_config(engine: Engine | None = None) -> AlembicConfig:
 
 
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    """Bring the catalog schema to `revision` (idempotent)."""
+    """Bring the catalog schema to `revision` (idempotent, safe across processes).
+
+    SQLite DDL is not transactional under pysqlite, so two processes opening an
+    outdated catalog at once would both run the same migration; a file lock next
+    to the database makes the second one wait and then find nothing to do.
+    """
+    db = engine.url.database if engine.dialect.name == "sqlite" else None
+    lock = (file_lock(Path(f"{db}.migrate.lock")) if db and db != ":memory:"
+            else nullcontext())
     cfg = alembic_config()
-    with engine.begin() as conn:
+    with lock, engine.begin() as conn:
         cfg.attributes["connection"] = conn
         command.upgrade(cfg, revision)
 
