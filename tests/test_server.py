@@ -1,6 +1,7 @@
 """API tests for aerosplat/server/main.py: scenes come from a temp catalog (CPU only)."""
 
 import importlib
+import json
 import struct
 import sys
 
@@ -9,8 +10,9 @@ import torch
 
 from conftest import write_pt
 from aerosplat.geo.crs import GeoPoint
+from aerosplat.geo.sphere_enu import EARTH_MODEL
 from aerosplat.store import Capture, CaptureSource, Catalog, RunStatus, Site
-from aerosplat.store.scenes import CLOUD, SPLAT, SceneSource
+from aerosplat.store.scenes import CLOUD, REGISTRATION, SPLAT, SceneSource, legacy_scenes
 
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
@@ -218,6 +220,59 @@ def test_legacy_outputs_are_still_served(env):
     assert mod.DEFAULT_DATASET == "old" and mod.SCENES["old"].kind == "legacy"
     meta = client.get("/api/v1/scene-meta", params={"mode": "splat"}).json()
     assert meta["dataset"] == "old" and meta["metric"] is None   # no geo registration
+
+
+def test_scene_meta_metric_for_sphere_enu_run(env):
+    """An Earth Studio run (sphere ENU + affine): the served products are its WGS84 Site
+    ENU files and frame_error_m is the affine map's residual."""
+    projects, _ = env
+    cat = Catalog.open(projects)
+    cat.ensure_project("demo")
+    site = cat.create_site(Site(id="es", project_id="demo", origin=ORIGIN))
+    cat.ensure_epoch(site)
+    cat.create_run(site, "baseline", "r1", earth_model=EARTH_MODEL, georeferenced=True)
+    rd = cat.run_dirs(site, "baseline", "r1")
+    write_pt(rd.gs / "dense_wgs84.pt", "dense", N)
+    write_pt(rd.gs / "splat_wgs84.pt", "splat", N)
+    rd.reports.mkdir(parents=True)
+    rd.registration_report.write_text(json.dumps(
+        {"sphere_enu_to_site_enu": {"residual_max_m": 0.0002}}))
+    cat.finish_run(site, "baseline", "r1", status=RunStatus.ok,
+                   products={SPLAT: rd.gs / "splat_wgs84.pt", CLOUD: rd.gs / "dense_wgs84.pt",
+                             REGISTRATION: rd.registration_report})
+    cat.close()
+    client = TestClient(_load_server().app)
+    m = client.get("/api/v1/scene-meta", params={"mode": "splat", "dataset": "es"}).json()["metric"]
+    assert m["earth_model"] == EARTH_MODEL and m["frame_error_m"] == 0.0002
+    assert m["datum"].startswith("WGS84") and m["origin"]["lat"] == ORIGIN.lat
+
+
+def test_legacy_sphere_enu_dataset_is_metric_only_once_mapped(env):
+    """`aerosplat run --dataset` with Earth Studio poses: data/<ds>_*_wgs84.pt (georef stage)
+    are served with a metric block; the sphere-ENU originals alone are not called metric."""
+    _, data = env
+    write_pt(data / "es_dense.pt", "dense", N)
+    write_pt(data / "es_splat.pt", "splat", N)
+    (data / "es" / "sparse_known").mkdir(parents=True)
+    (data / "es" / "sparse_known" / "geo_registration.json").write_text(json.dumps({
+        "earth_model": EARTH_MODEL, "origin_source": "frames_mean (legacy)",
+        "enu_origin": {"latitude": ORIGIN.lat, "longitude": ORIGIN.lon, "altitude": ORIGIN.h},
+        "sphere_enu_to_site_enu": {"residual_max_m": 0.0002}}))
+    (data / "es" / "run").mkdir()
+    (data / "es" / "run" / "manifest.json").write_text(json.dumps(
+        {"config": {"camera_source": "earthstudio_json", "known_poses": True,
+                    "cloud_source": "dense"}}))
+    scene = legacy_scenes(data)["es"]
+    assert scene.metric is None and scene.cloud == str(data / "es_dense.pt")
+
+    write_pt(data / "es_dense_wgs84.pt", "dense", N)
+    write_pt(data / "es_splat_wgs84.pt", "splat", N)
+    scenes = legacy_scenes(data)
+    assert set(scenes) == {"es"}                       # *_wgs84.pt is not a dataset of its own
+    scene = scenes["es"]
+    assert scene.cloud == str(data / "es_dense_wgs84.pt")
+    assert scene.splat == str(data / "es_splat_wgs84.pt")
+    assert scene.metric["earth_model"] == EARTH_MODEL and scene.metric["frame_error_m"] == 0.0002
 
 
 def test_no_scenes_is_404_and_creates_nothing(env):

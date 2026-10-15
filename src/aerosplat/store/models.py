@@ -158,8 +158,12 @@ class Run(_Model):
     epoch_id: Slug
     capture_ids: list[str] = Field(default_factory=list)
     status: RunStatus = RunStatus.running
-    # Earth model the run's geometry was produced in: "wgs84", or
-    # "sphere-legacy" for runs migrated from before ADR-0006.
+    # Earth model the run's geometry was produced in (ADR-0006):
+    # "sphere-enu+affine" -- Earth Studio known poses, reconstructed in sphere
+    #   ENU, products mapped to WGS84 Site ENU (aerosplat.geo.sphere_enu);
+    # "wgs84" -- poses converted to WGS84 at ingest (S1 runs; also the value
+    #   of runs that are not georeferenced at all);
+    # "sphere-legacy" -- runs migrated from before ADR-0006.
     earth_model: str = "wgs84"
     # True when the reconstruction is in metric Site ENU (known georeferenced
     # poses); False for runs whose scale is arbitrary (synthetic GPS / SfM only).

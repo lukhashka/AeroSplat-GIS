@@ -12,7 +12,8 @@ from aerosplat.pipeline.layout import RunLayout
 from aerosplat.pipeline.manifest import git_commit
 from aerosplat.store.catalog import Catalog, new_run_id
 from aerosplat.store.models import Capture, CaptureSource, RunStatus, Site
-from aerosplat.store.scenes import CLOUD, REGISTRATION, SPLAT, is_georeferenced
+from aerosplat.store.scenes import (CLOUD, CLOUD_RECON, REGISTRATION, SPLAT, SPLAT_RECON,
+                                    is_georeferenced, run_earth_model)
 
 
 @dataclass
@@ -66,19 +67,34 @@ class SiteRun:
         return cls(catalog, site, epoch_id, run_id, capture, layout, exists)
 
     def begin(self, cfg: dict[str, Any]) -> None:
+        earth_model = run_earth_model(cfg)
+        if self.exists:
+            # A run's earth model is fixed at creation; continuing one built
+            # under another convention would mix frames inside it.
+            old = self.catalog.get_run(self.site, self.epoch_id, self.run_id).earth_model
+            if old != earth_model:
+                raise SystemExit(f"❌ run {self.run_id} побудовано з earth_model={old}, поточний "
+                                 f"конвеєр дає {earth_model} — запусти новий run "
+                                 f"(без --resume/--run-id)")
         self.catalog.ensure_epoch(self.site, self.epoch_id)
         if not self.exists:
             self.catalog.create_run(self.site, self.epoch_id, self.run_id,
                                     capture_ids=[self.capture.id], config=cfg,
-                                    earth_model="wgs84", georeferenced=is_georeferenced(cfg),
+                                    earth_model=earth_model, georeferenced=is_georeferenced(cfg),
                                     git_commit=git_commit(PROJECT_DIR))
 
     def end(self, cfg: dict[str, Any], ok: bool) -> None:
         L = self.layout
-        products = {SPLAT: L.splat_pt, CLOUD: L.cloud_in, "sparse": L.sparse,
-                    "fused_ply": L.fused_ply, "known_poses": L.known_poses_dir,
-                    "metrics": L.metrics_json, "report": L.report_html,
-                    REGISTRATION: L.registration_report}
+        products = {"sparse": L.sparse, "fused_ply": L.fused_ply,
+                    "known_poses": L.known_poses_dir, "metrics": L.metrics_json,
+                    "report": L.report_html, REGISTRATION: L.registration_report}
+        if is_georeferenced(cfg):
+            # Served products must be in WGS84 Site ENU: only the georef stage's
+            # outputs qualify; the sphere-ENU originals are kept for reference.
+            products.update({SPLAT: L.splat_wgs84, CLOUD: L.cloud_wgs84,
+                             SPLAT_RECON: L.splat_pt, CLOUD_RECON: L.cloud_in})
+        else:
+            products.update({SPLAT: L.splat_pt, CLOUD: L.cloud_in})
         self.catalog.finish_run(self.site, self.epoch_id, self.run_id,
                                 status=RunStatus.ok if ok else RunStatus.failed,
                                 products=products, georeferenced=is_georeferenced(cfg))

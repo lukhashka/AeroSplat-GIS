@@ -12,14 +12,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 from aerosplat.geo.crs import GeoPoint
+from aerosplat.geo.sphere_enu import EARTH_MODEL as SPHERE_ENU_AFFINE
 from aerosplat.store.catalog import Catalog
 from aerosplat.store.models import Run, Site
 from aerosplat.store.paths import CATALOG_FILE
 
 # Product kinds a run registers (Catalog.finish_run) and the server reads.
-SPLAT = "splat"            # gs/splat.pt
-CLOUD = "cloud"            # gs/dense.pt or gs/cloud.pt, whichever the run trained from
+# For georeferenced Earth Studio runs SPLAT/CLOUD are the georef stage's
+# WGS84 Site ENU files (gs/*_wgs84.pt); the *_RECON kinds keep the files in
+# the reconstruction frame (sphere ENU), which the server never serves.
+SPLAT = "splat"            # gs/splat.pt, or gs/splat_wgs84.pt
+CLOUD = "cloud"            # gs/{dense,cloud}.pt (whichever the run trained from), or *_wgs84.pt
+SPLAT_RECON = "splat_recon"
+CLOUD_RECON = "cloud_recon"
 REGISTRATION = "registration_report"
+WGS84 = "wgs84"
 
 
 @dataclass(frozen=True)
@@ -39,6 +46,12 @@ def is_georeferenced(cfg: dict[str, Any]) -> bool:
     return cfg.get("camera_source") == "earthstudio_json" and bool(cfg.get("known_poses", True))
 
 
+def run_earth_model(cfg: dict[str, Any]) -> str:
+    """Run.earth_model of a new run: Earth Studio known poses reconstruct in sphere
+    ENU and the georef stage maps the products (ADR-0006, amended 2026-10-15)."""
+    return SPHERE_ENU_AFFINE if is_georeferenced(cfg) else WGS84
+
+
 def metric_block(origin: GeoPoint, *, earth_model: str, source: str,
                  frame_error_m: Optional[float] = None, **extra: Any) -> dict[str, Any]:
     """`scene-meta.metric`: how served coordinates map to the Earth.
@@ -54,8 +67,9 @@ def metric_block(origin: GeoPoint, *, earth_model: str, source: str,
         "origin": {"lat": origin.lat, "lon": origin.lon, "h": origin.h},
         "served_offset": "enu = xyz + center",
         "earth_model": earth_model,
-        # Known discrepancy between this run's frame and true WGS84 Site ENU
-        # (sphere-legacy runs only); None when the run was built in WGS84.
+        # Known discrepancy between the served coordinates and WGS84 Site ENU:
+        # the affine map's residual (sphere-enu+affine, sub-millimetre), the
+        # legacy shift (sphere-legacy, ~1.5 m), None for runs built in WGS84.
         "frame_error_m": frame_error_m,
         "source": source,
     }
@@ -73,15 +87,22 @@ def _read_json(path: Optional[Path]) -> Optional[dict[str, Any]]:
         return None
 
 
+def frame_error(report: dict[str, Any], earth_model: str) -> Optional[float]:
+    """metric_block.frame_error_m from a registration report."""
+    if earth_model == WGS84:
+        return None
+    if earth_model == SPHERE_ENU_AFFINE:
+        return (report.get("sphere_enu_to_site_enu") or {}).get("residual_max_m")
+    return (report.get("legacy_shift") or {}).get("max_m")
+
+
 def run_metric(catalog: Catalog, site: Site, run: Run) -> Optional[dict[str, Any]]:
     if not run.georeferenced:
         return None
-    frame_error = None
-    if run.earth_model != "wgs84":
-        report = _read_json(catalog.product_path(site, run, REGISTRATION)) or {}
-        frame_error = (report.get("legacy_shift") or {}).get("max_m")
+    report = _read_json(catalog.product_path(site, run, REGISTRATION)) or {}
     return metric_block(site.origin, earth_model=run.earth_model, source="catalog",
-                        frame_error_m=frame_error, site=site.key, epoch=run.epoch_id, run=run.id)
+                        frame_error_m=frame_error(report, run.earth_model),
+                        site=site.key, epoch=run.epoch_id, run=run.id)
 
 
 def catalog_scenes(catalog: Catalog) -> dict[str, SceneSource]:
@@ -116,16 +137,28 @@ def legacy_scenes(data_dir: Path) -> dict[str, SceneSource]:
         cloud = data_dir / f"{ds}_{cloud_name}.pt"
         if not cloud.is_file():
             cloud = data_dir / f"{ds}_{'dense' if cloud_name == 'cloud' else 'cloud'}.pt"
+        splat = data_dir / f"{ds}_splat.pt"
         metric = None
         geo = _read_json(data_dir / ds / "sparse_known" / "geo_registration.json")
         if geo and is_georeferenced(cfg):
             o = geo.get("enu_origin") or {}
-            metric = metric_block(
-                GeoPoint(lat=o["latitude"], lon=o["longitude"], h=o["altitude"]),
-                earth_model=("wgs84" if str(geo.get("earth_model", "")).startswith("WGS84")
-                             else "sphere-legacy"),
-                source="legacy", origin_source=geo.get("origin_source", "frames_mean (legacy)"))
-        out[ds] = SceneSource(name=ds, cloud=str(cloud), splat=str(data_dir / f"{ds}_splat.pt"),
+            origin = GeoPoint(lat=o["latitude"], lon=o["longitude"], h=o["altitude"])
+            label = str(geo.get("earth_model", ""))
+            extra = {"origin_source": geo.get("origin_source", "frames_mean (legacy)")}
+            if label == SPHERE_ENU_AFFINE:
+                # Only the georef stage's outputs are in WGS84 ENU; without them the
+                # scene is in sphere ENU and gets no metric block.
+                cloud_w = cloud.with_name(f"{cloud.stem}_wgs84.pt")
+                if cloud_w.is_file():
+                    cloud, splat = cloud_w, splat.with_name(f"{splat.stem}_wgs84.pt")
+                    metric = metric_block(origin, earth_model=SPHERE_ENU_AFFINE, source="legacy",
+                                          frame_error_m=frame_error(geo, SPHERE_ENU_AFFINE),
+                                          **extra)
+            else:
+                metric = metric_block(origin, earth_model=(WGS84 if label.startswith("WGS84")
+                                                           else "sphere-legacy"),
+                                      source="legacy", **extra)
+        out[ds] = SceneSource(name=ds, cloud=str(cloud), splat=str(splat),
                               metric=metric, kind="legacy")
     return out
 

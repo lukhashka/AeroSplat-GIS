@@ -7,7 +7,8 @@
 > [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
 
 > **Де ми зараз (2026-10-15).** Фаза 0 ✅ (крім ⏳-пунктів), Фаза 1 ✅ (крім
-> тесту `TileRasterizer` vs gsplat), Фаза 2.1 ✅ (baseline PSNR 27.53),
+> тесту `TileRasterizer` vs gsplat), Фаза 2.1 ✅ (baseline PSNR 25.89 без витоку test-кадру;
+> 27.53 було завищене),
 > Фаза 2.2 — частина 1 ✅ (без вимірюваного ефекту); gsplat збирається на
 > Windows, але в тренер ще не інтегрований. Уся ця робота — у гілці
 > `phase-1-foundation`, не змерджена в `main`.
@@ -419,9 +420,12 @@ M0–M6 — з [ACCESS_POINTS §12](ACCESS_POINTS.md#12-етапи-впрова�
 сфера→WGS84, `RunLayout` як вид, `aerosplat run --site`, `aerosplat catalog`,
 `tools/migrate_dataset.py`, сервер із каталогу, `scene-meta.metric`; деталі —
 [ARCHITECTURE §3.9, §4](ARCHITECTURE.md). `dataset_v6` перенесено як `default/dataset_v6`
-(run `sphere-legacy`, похибка кадру до 1.53 м). Лишилось: перерахувати `dataset_v6` у
-WGS84 (`aerosplat run --site default/dataset_v6`, GPU) і перевірити, яка модель Землі/висот
-правдива для рендерів Google; `doctor` і README під `--site`.
+(run `sphere-legacy`, похибка кадру до 1.53 м). Перевірено, що рендери Google узгоджені зі
+сферою, а не з WGS84; тому ADR-0006 поправлено: реконструкція у сферичному ENU, продукти →
+WGS84 Site ENU афінним відображенням (стадія `georef`, `earth_model="sphere-enu+affine"`).
+`dataset_v6` перераховано так (run `20261015-031843`, зсув камер BA 0.49 м, як у legacy).
+Лишилось: абсолютна висота (еліпсоїд/геоїд — потрібен DEM або контрольні точки); `doctor`
+і README під `--site`.
 
 ### Фаза 7 — «Точки доступу» (6–10 тижнів)
 

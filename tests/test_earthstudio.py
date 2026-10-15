@@ -1,15 +1,19 @@
-"""Golden/invariant tests protecting the empirically-found Earth Studio axis convention
-and the Site-ENU (WGS84) conversion that replaced the per-capture spherical frame."""
+"""Golden/invariant tests protecting the empirically-found Earth Studio axis convention,
+the sphere-ENU frame of the Site that the known poses are written in, and the affine map
+sphere ENU -> WGS84 Site ENU recorded for the products (ADR-0006, amended 2026-10-15)."""
 import json
 
 import numpy as np
 import pytest
 
 from conftest import FIXTURES
-from aerosplat.geo.crs import EnuFrame, GeoPoint
-from aerosplat.geo.earthstudio_to_colmap import (convert, frame_coordinates, legacy_mean_origin,
+from aerosplat.geo.affine import AffineMap
+from aerosplat.geo.crs import EnuFrame, GeoPoint, ecef_to_enu_rotation
+from aerosplat.geo.earthstudio_to_colmap import (EARTH_MODEL, EARTH_R, convert,
+                                                 frame_coordinates, legacy_mean_origin,
                                                  load_frames, mat_to_quat_wxyz, rot_x, rot_y,
                                                  rot_z)
+from aerosplat.geo.sphere_enu import fit_box, fit_site_affine, sphere_enu_to_site_enu
 
 JSON = FIXTURES / "earthstudio_3frames.json"
 # Site origin used for the golden file (fixed, NOT derived from the frames).
@@ -72,46 +76,83 @@ def test_images_txt_matches_golden(tmp_path):
         assert pa[8:] == pb[8:]
 
 
-def test_camera_centres_are_wgs84_site_enu(tmp_path):
-    """Centres = pyproj ENU of the WGS84 coordinates around the Site origin."""
+def test_camera_centres_are_sphere_enu_from_coordinate(tmp_path):
+    """Centres sit on Earth Studio's sphere: back in geocentric xyz (same origin and R),
+    each is at radius EARTH_R + altitude along the spherical angles of `coordinate`."""
     out, _ = _convert(tmp_path)
     _, frames = load_frames(JSON)
-    expected = EnuFrame(SITE_ORIGIN).from_geodetic(*frame_coordinates(frames))
+    lat, lon, alt = frame_coordinates(frames)
+    la0, lo0 = np.radians(SITE_ORIGIN.lat), np.radians(SITE_ORIGIN.lon)
+    o_ecef = (EARTH_R + SITE_ORIGIN.h) * np.array(
+        [np.cos(la0) * np.cos(lo0), np.cos(la0) * np.sin(lo0), np.sin(la0)])
+    R = ecef_to_enu_rotation(SITE_ORIGIN.lat, SITE_ORIGIN.lon)
     geo = json.loads((out / "geo_registration.json").read_text())
-    for (_, c), exp, rec in zip(_poses(out / "images.txt"), expected, geo["images"]):
-        np.testing.assert_allclose(c, exp, atol=1e-3)
-        np.testing.assert_allclose(rec["enu_xyz"], exp, atol=1e-6)
+    for i, ((_, c), rec) in enumerate(zip(_poses(out / "images.txt"), geo["images"])):
+        xyz = o_ecef + R.T @ c
+        r = np.linalg.norm(xyz)
+        assert r - EARTH_R == pytest.approx(alt[i], abs=1e-3)
+        assert np.degrees(np.arcsin(xyz[2] / r)) == pytest.approx(lat[i], abs=1e-9)
+        assert np.degrees(np.arctan2(xyz[1], xyz[0])) == pytest.approx(lon[i], abs=1e-9)
+        np.testing.assert_allclose(rec["enu_xyz"], c, atol=1e-5)
+    site = EnuFrame(SITE_ORIGIN).from_geodetic(lat, lon, alt)
+    np.testing.assert_allclose([rec["site_enu_xyz"] for rec in geo["images"]], site, atol=1e-6)
     assert geo["enu_origin"] == {"latitude": 40.8942, "longitude": -74.2173, "altitude": 233.0}
-    assert geo["origin_source"] == "site" and geo["earth_model"].startswith("WGS84")
+    assert geo["origin_source"] == "site" and geo["earth_model"] == EARTH_MODEL
 
 
-def test_wgs84_keeps_sphere_rotations_and_moves_centres_within_report(tmp_path):
-    """Against the legacy sphere golden (same origin = mean of frames): orientations are
-    identical and centres move by exactly the reported legacy shift."""
+def test_sphere_enu_is_legacy_frame_without_position_offset(tmp_path):
+    """Against the legacy golden (built from `position`, same origin = mean of frames):
+    orientations are identical and centres differ only by `position`'s constant radial
+    offset, i.e. ~1.2 m straight down near the origin."""
     _, frames = load_frames(JSON)
     out, report = _convert(tmp_path, origin=legacy_mean_origin(frames))
+    offset = report["export_check"]["radial_offset_m"]["mean"]
+    assert offset == pytest.approx(1.2, abs=0.01)
     new = _poses(out / "images.txt")
     old = _poses(FIXTURES / "earthstudio_3frames_images.sphere.golden.txt")
-    shifts = []
     for (Rn, cn), (Ro, co) in zip(new, old):
         np.testing.assert_allclose(Rn, Ro, atol=1e-8)
-        shifts.append(np.linalg.norm(cn - co))
-    assert max(shifts) == pytest.approx(report["legacy_shift"]["max_m"], abs=1e-4)
-    assert 0.05 < max(shifts) < 2.0
+        np.testing.assert_allclose(cn - co, [0.0, 0.0, -offset], atol=1e-4)
 
+
+def test_affine_maps_sphere_enu_to_wgs84_site_enu(tmp_path):
+    """The recorded map takes the sphere-ENU centres to their exact WGS84 Site ENU positions
+    and is sub-millimetre over the whole 1 km x 1 km x 500 m fit box."""
+    out, report = _convert(tmp_path)
+    geo = json.loads((out / "geo_registration.json").read_text())
+    block = report["sphere_enu_to_site_enu"]
+    assert geo["sphere_enu_to_site_enu"] == block
+    aff = AffineMap.from_dict(block)
+    # ~41 N: east stretched by the prime-vertical radius, north shrunk by the meridional one.
+    np.testing.assert_allclose(np.diag(aff.A), [1.002558, 0.998712, 1.0], atol=2e-6)
+    assert np.abs(aff.A - np.diag(np.diag(aff.A))).max() < 1e-9
+    assert np.abs(aff.b).max() < 1e-3
+    assert block["residual_max_m"] < 5e-4 and block["frames_residual_max_m"] < 5e-4
+    sphere = np.array([rec["enu_xyz"] for rec in geo["images"]])
+    site = np.array([rec["site_enu_xyz"] for rec in geo["images"]])
+    np.testing.assert_allclose(aff.apply(sphere), site, atol=5e-4)
+    pts = np.random.default_rng(0).uniform([-500, -500, -250], [500, 500, 250], (500, 3))
+    exact = sphere_enu_to_site_enu(SITE_ORIGIN, pts)
+    assert np.linalg.norm(aff.apply(pts) - exact, axis=1).max() < 5e-4
+    # The map depends on the Site origin alone: every run of a Site shares it.
+    np.testing.assert_allclose(fit_site_affine(SITE_ORIGIN)[0].A, aff.A, rtol=0, atol=1e-15)
+    assert len(fit_box()) == block["fit"]["points"]
 
 
 def test_transition_report(tmp_path):
     out, report = _convert(tmp_path)
     assert json.loads((out / "registration_report.json").read_text()) == report
+    assert report["schema"] == 2 and report["earth_model"]["id"] == EARTH_MODEL
     check = report["export_check"]
     assert check["angular_residual_max_m"] < 1e-3          # convention holds
     assert check["radial_offset_m"]["spread"] < 1e-3          # constant offset only
     tr = report["sphere_to_wgs84"]
-    # Sphere vs ellipsoid at ~41°N: ~0.1-0.3 % horizontal scale, i.e. ~1-2 m at 500 m.
+    # Sphere vs ellipsoid at ~41 N: ~0.1-0.3 % horizontal scale, i.e. ~1-2 m at 500 m.
     assert 0.5 < tr["site_1km2"]["max_horizontal_m"] < 3.0
     assert tr["site_1km2"]["max_vertical_m"] < 0.01
     assert tr["frames"]["n"] == 3 and tr["frames"]["max_m"] < tr["site_1km2"]["max_m"]
+    # The pre-ADR-0006 frame (from `position`) also sat ~1.2 m high.
+    assert report["legacy_shift"]["max_vertical_m"] == pytest.approx(1.2, abs=0.05)
 
 
 def test_origin_is_fixed_not_derived_from_frames(tmp_path):

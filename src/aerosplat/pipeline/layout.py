@@ -28,6 +28,11 @@ def abs_path(p: str | Path, root: Path = PROJECT_DIR) -> Path:
     return p if p.is_absolute() else root / p
 
 
+def _wgs84(pt: Path) -> Path:
+    """gs/dense.pt -> gs/dense_wgs84.pt (data/<ds>_splat.pt -> data/<ds>_splat_wgs84.pt)."""
+    return pt.with_name(f"{pt.stem}_wgs84{pt.suffix}")
+
+
 @dataclass(frozen=True)
 class RunLayout:
     dataset: str
@@ -55,6 +60,10 @@ class RunLayout:
     report_html: Path
     registration_report: Path
     log_path: Path
+    # Products mapped to WGS84 Site ENU by the georef stage (Earth Studio runs
+    # reconstruct in sphere ENU, ADR-0006): what the catalog registers and serves.
+    cloud_wgs84: Path
+    splat_wgs84: Path
     # Earth Studio frames are matched as '<frame_prefix>_<n>.<ext>'.
     frame_prefix: str
     # Site ENU origin; None only for legacy runs (origin = mean of the frames).
@@ -82,6 +91,7 @@ class RunLayout:
         # NOT under colmap_out: sfm --fresh wipes that directory, and known
         # poses are ground-truth INPUT, not regenerable COLMAP output.
         known_poses = data_dir / ds / "sparse_known"
+        cloud_in = dense_pt if cfg["cloud_source"] == "dense" else cloud_pt
         return cls(
             dataset=ds,
             data_dir=data_dir,
@@ -97,7 +107,7 @@ class RunLayout:
             dense_pt=dense_pt,
             splat_pt=data_dir / f"{ds}_splat.pt",
             geo_txt=data_dir / f"{ds}_geo.txt",
-            cloud_in=dense_pt if cfg["cloud_source"] == "dense" else cloud_pt,
+            cloud_in=cloud_in,
             json_path=(abs_path(cfg["json_path"], project_dir) if cfg["json_path"]
                        else data_dir / ds / f"{ds}.json"),
             known_poses_dir=known_poses,
@@ -109,6 +119,8 @@ class RunLayout:
             report_html=run_dir / "report.html",
             registration_report=known_poses / "registration_report.json",
             log_path=run_dir / "run.log",
+            cloud_wgs84=_wgs84(cloud_in),
+            splat_wgs84=_wgs84(data_dir / f"{ds}_splat.pt"),
             frame_prefix=ds,
         )
 
@@ -125,6 +137,7 @@ class RunLayout:
         cloud_pt = run.gs / "cloud.pt"
         json_path = (cdirs.root / capture.metadata_file if capture.metadata_file
                      else cdirs.source / "earthstudio.json")
+        cloud_in = dense_pt if cfg["cloud_source"] == "dense" else cloud_pt
         return cls(
             dataset=site.key,
             data_dir=site_dirs.root,
@@ -140,7 +153,7 @@ class RunLayout:
             dense_pt=dense_pt,
             splat_pt=run.gs / "splat.pt",
             geo_txt=run.root / "images_geo.txt",
-            cloud_in=dense_pt if cfg["cloud_source"] == "dense" else cloud_pt,
+            cloud_in=cloud_in,
             json_path=json_path,
             known_poses_dir=run.known_poses,
             geo_registration_json=run.known_poses / "geo_registration.json",
@@ -151,6 +164,8 @@ class RunLayout:
             report_html=run.reports / "report.html",
             registration_report=run.registration_report,
             log_path=run.log,
+            cloud_wgs84=_wgs84(cloud_in),
+            splat_wgs84=_wgs84(run.gs / "splat.pt"),
             frame_prefix=capture.frame_prefix or site.id,
             origin=site.origin,
             site_key=site.key,

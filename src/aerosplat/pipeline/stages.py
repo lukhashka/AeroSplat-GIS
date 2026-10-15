@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from aerosplat.geo.sphere_enu import EARTH_MODEL
 from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import RunLayout, abs_path
 
@@ -158,6 +159,12 @@ def argv_eval(cfg: Cfg, L: RunLayout) -> list[str]:
     return a
 
 
+def argv_georef(cfg: Cfg, L: RunLayout) -> list[str]:
+    return ["--registration", str(L.registration_report),
+            "--cloud", str(L.cloud_in), str(L.cloud_wgs84),
+            "--splat", str(L.splat_pt), str(L.splat_wgs84)]
+
+
 # ── registry ─────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Stage:
@@ -169,6 +176,9 @@ class Stage:
     outputs: Callable[[Cfg, RunLayout], list[Path]]
     keys: tuple[str, ...]             # config keys this stage depends on
     skip_reason: Callable[[Cfg], str | None] = lambda cfg: None
+    # Bumped when the stage's output convention changes, so `--resume` redoes
+    # it (and everything downstream) instead of reusing incompatible outputs.
+    version: str = ""
 
     def script(self, cfg: Cfg) -> Path:
         spec = importlib.util.find_spec(self.module(cfg))
@@ -206,6 +216,12 @@ def _geo_skip(cfg: Cfg) -> str | None:
     return None
 
 
+def _georef_skip(cfg: Cfg) -> str | None:
+    if not _known_poses(cfg):
+        return "реконструкція без відомих поз Earth Studio — метричного кадру немає"
+    return None
+
+
 def _exif_skip(cfg: Cfg) -> str | None:
     if cfg["camera_source"] == "earthstudio_json":
         return "camera_source='earthstudio_json' — raw_images_<ds> вже заповнено стадією 'geo'"
@@ -213,42 +229,47 @@ def _exif_skip(cfg: Cfg) -> str | None:
 
 
 STAGES: dict[str, Stage] = {s.name: s for s in [
-    Stage("geo", "0/6  Earth Studio JSON → відомі пози COLMAP (Site ENU, WGS84) + кадри для SfM",
+    Stage("geo", "0/7  Earth Studio JSON → відомі пози COLMAP (сферичний ENU ділянки) + кадри для SfM",
           lambda c: "aerosplat.geo.earthstudio_to_colmap", argv_geo,
           lambda c, L: [L.json_path],
           lambda c, L: [L.known_poses_dir, L.geotagged],
-          ("camera_source",), _geo_skip),
-    Stage("exif", "1/6  EXIF GPS injection",
+          ("camera_source",), _geo_skip, version=EARTH_MODEL),
+    Stage("exif", "1/7  EXIF GPS injection",
           lambda c: "aerosplat.geo.exif_injector", argv_exif,
           lambda c, L: [L.footage],
           lambda c, L: [L.geotagged],
           ("camera_source",) + _SYNTH, _exif_skip),
-    Stage("sfm", "2/6  COLMAP SfM (sparse)",
+    Stage("sfm", "2/7  COLMAP SfM (sparse)",
           lambda c: "aerosplat.sfm.sfm_runner", argv_sfm,
           lambda c, L: [L.geotagged],
           lambda c, L: [L.sparse],
           ("camera_source",) + _SFM),
-    Stage("dense", "3/6  COLMAP Dense MVS",
+    Stage("dense", "3/7  COLMAP Dense MVS",
           lambda c: "aerosplat.sfm.dense_runner", argv_dense,
           lambda c, L: [L.sparse],
           lambda c, L: [L.fused_ply],
           _DENSE),
-    Stage("parse", "4/6  point cloud → .pt",
+    Stage("parse", "4/7  point cloud → .pt",
           lambda c: ("aerosplat.io.ply_parser" if c["cloud_source"] == "dense"
                   else "aerosplat.io.colmap_parser"),
           argv_parse,
           lambda c, L: [L.fused_ply if c["cloud_source"] == "dense" else L.points3d],
           lambda c, L: [L.cloud_in],
           _PARSE),
-    Stage("train", "5/6  3D Gaussian Splatting (aerosplat.gs.trainer)",
+    Stage("train", "5/7  3D Gaussian Splatting (aerosplat.gs.trainer)",
           lambda c: "aerosplat.gs.trainer", argv_train,
           lambda c, L: [L.cloud_in],
           lambda c, L: [L.splat_pt],
           _TRAIN),
-    Stage("eval", "6/6  Оцінка якості на test-кадрах (metrics.json + report.html)",
+    Stage("eval", "6/7  Оцінка якості на test-кадрах (metrics.json + report.html)",
           lambda c: "aerosplat.gs.evaluate", argv_eval,
           lambda c, L: [L.splat_pt],
           lambda c, L: [L.metrics_json, L.report_html],
           _EVAL,
           lambda c: ("eval_every=0 — test-спліту немає" if not c["eval_every"] else None)),
+    Stage("georef", "7/7  Продукти: сферичний ENU → WGS84 Site ENU (афінне з reports/registration.json)",
+          lambda c: "aerosplat.geo.georef", argv_georef,
+          lambda c, L: [L.registration_report, L.cloud_in, L.splat_pt],
+          lambda c, L: [L.cloud_wgs84, L.splat_wgs84],
+          ("camera_source", "known_poses", "cloud_source"), _georef_skip),
 ]}

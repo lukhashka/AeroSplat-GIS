@@ -12,7 +12,8 @@ def test_config_defaults():
 
 
 def test_resolve_stages_ranges():
-    assert starter.resolve_stages(_args(["--from", "dense"])) == ["dense", "parse", "train", "eval"]
+    assert starter.resolve_stages(_args(["--from", "dense"])) == ["dense", "parse", "train", "eval",
+                                                                  "georef"]
     assert starter.resolve_stages(_args(["--only", "sfm"])) == ["sfm"]
     assert starter.resolve_stages(_args(["--stages", "geo,sfm"])) == ["geo", "sfm"]
     assert "exif" not in starter.resolve_stages(_args(["--skip", "exif"]))

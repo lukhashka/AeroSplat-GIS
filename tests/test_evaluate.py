@@ -1,4 +1,5 @@
 import json
+import math
 
 import numpy as np
 import pytest
@@ -6,7 +7,9 @@ import torch
 
 from aerosplat.geo.compare_poses import pose_errors
 from aerosplat.gs import evaluate, report
-from aerosplat.gs.trainer import Camera, TileRasterizer, build_covariance_3d, split_cameras
+from aerosplat.gs.trainer import (
+    Camera, TileRasterizer, build_covariance_3d, find_test_twins, split_cameras,
+)
 
 
 def _cam(name, img=None, W=32, H=32):
@@ -25,6 +28,45 @@ def test_split_disabled_or_too_few():
     cams = [_cam(f"f{i}.jpg") for i in range(10)]
     assert split_cameras(cams, 0) == (cams, [])
     assert split_cameras(cams, 8) == (cams, [])
+
+
+def _rz(deg):
+    a = math.radians(deg)
+    return torch.tensor([[math.cos(a), -math.sin(a), 0.0],
+                         [math.sin(a), math.cos(a), 0.0],
+                         [0.0, 0.0, 1.0]])
+
+
+def _orbit_cam(name, bearing_deg, radius=100.0, center_jitter=(0.0, 0.0, 0.0)):
+    """Camera on a horizontal orbit, rotated with its bearing (distinct pose per frame)."""
+    R = _rz(bearing_deg)
+    a = math.radians(bearing_deg)
+    C = torch.tensor([radius * math.cos(a), radius * math.sin(a), 0.0]) + torch.tensor(center_jitter)
+    return Camera(R, -R @ C, 40.0, 40.0, 16, 16, 32, 32, name, None)
+
+
+def test_split_drops_closing_orbit_twin_of_test_frame():
+    # 17 distinct frames ≈21° apart (≈37 m) + a closing frame that repeats frame 0
+    # the way BA leaves it: ≈0.4 m and 0.09° off (dataset_v6: 00 ↔ 30).
+    cams = [_orbit_cam(f"v_{i:02d}.jpg", i * 360.0 / 17) for i in range(17)]
+    cams.append(_orbit_cam("v_17.jpg", 0.09, center_jitter=(0.2, 0.2, 0.1)))
+    train, test = split_cameras(cams, 8)
+    assert [c.name for c in test] == ["v_00.jpg", "v_08.jpg", "v_16.jpg"]
+    assert "v_17.jpg" not in {c.name for c in train}
+    assert len(train) == 14
+
+
+def test_find_test_twins_needs_both_position_and_rotation():
+    test = [_orbit_cam("t.jpg", 0.0)]
+    ring = [_orbit_cam(f"r{i}.jpg", b) for i, b in enumerate((45.0, 90.0, 135.0, 180.0))]
+    same_spot_turned = _orbit_cam("turned.jpg", 0.0)
+    same_spot_turned.R = _rz(10.0)
+    same_spot_turned.t = -same_spot_turned.R @ test[0].center()
+    same_view_far = _orbit_cam("far.jpg", 0.0, center_jitter=(0.0, 30.0, 0.0))
+    near_twin = _orbit_cam("twin.jpg", 0.05, center_jitter=(0.5, 0.0, 0.0))
+    train = ring + [same_spot_turned, same_view_far, near_twin]
+    assert find_test_twins(train, test) == {"twin.jpg": "t.jpg"}
+    assert find_test_twins(ring, test) == {}
 
 
 def _scene():

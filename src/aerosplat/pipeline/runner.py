@@ -22,6 +22,8 @@ def _fingerprint(stage: Stage, cfg: dict[str, Any], L: RunLayout) -> str:
     values.update(dataset=L.dataset, footage=str(L.footage), json=str(L.json_path))
     if L.origin is not None:   # absent for legacy runs, keeping their old fingerprints
         values["origin"] = L.origin.as_tuple()
+    if stage.version:          # likewise absent for stages that never changed convention
+        values["version"] = stage.version
     return fingerprint(values)
 
 

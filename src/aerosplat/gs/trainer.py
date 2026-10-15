@@ -422,17 +422,57 @@ def attach_images(cams: List[Camera], images_dir: str, max_res: int = 1024) -> L
     return out
 
 
+# A train frame that repeats a test frame's pose (e.g. the closing frame of a
+# 360° orbit == frame 0) leaks that test view into training: its PSNR then
+# measures memorisation and how far BA split the pair, not novel-view quality.
+# The centre gap is relative to the median nearest-neighbour camera spacing, so
+# the check is independent of the COLMAP scale.
+TWIN_DIST_FRAC = 0.1
+TWIN_MAX_DEG = 1.0
+
+
+def find_test_twins(train: List[Camera], test: List[Camera],
+                    dist_frac: float = TWIN_DIST_FRAC,
+                    max_deg: float = TWIN_MAX_DEG) -> Dict[str, str]:
+    """Train frames whose pose duplicates a test frame's → {train name: test name}.
+
+    Twin = centre gap < `dist_frac` × median nearest-neighbour spacing of all
+    cameras AND relative rotation < `max_deg`. A degenerate rig whose median
+    spacing is 0 (e.g. synthetic cameras at one pose) yields no twins.
+    """
+    if not train or not test:
+        return {}
+    centers = torch.stack([c.center() for c in train + test]).double()
+    dist = torch.cdist(centers, centers)
+    dist.fill_diagonal_(float("inf"))
+    spacing = float(dist.min(dim=1).values.median())
+    gap = dist[:len(train), len(train):]                     # (n_train, n_test)
+    R_tr = torch.stack([c.R for c in train]).double()
+    R_te = torch.stack([c.R for c in test]).double()
+    # rotation angle of R_tr·R_teᵀ: cos θ = (tr − 1) / 2, tr(A·Bᵀ) = Σ A∘B
+    cos = (torch.einsum("aij,bij->ab", R_tr, R_te) - 1) / 2
+    angle = torch.rad2deg(torch.acos(cos.clamp(-1.0, 1.0)))
+    hits = torch.nonzero((gap < dist_frac * spacing) & (angle < max_deg)).tolist()
+    return {train[i].name: test[j].name for i, j in hits}
+
+
 def split_cameras(cams: List[Camera], every: int = 8) -> Tuple[List[Camera], List[Camera]]:
     """
     Train/test split за протоколом Mip-NeRF 360: кожен `every`-й кадр (за
     відсортованим іменем) — test. every<=0 або замало кадрів → без спліту.
     Детермінований, тож trainer і evaluate завжди бачать однаковий test-набір.
+    Train-кадри з позою test-кадру (find_test_twins) не входять ні в train, ні в test.
     """
     if every <= 0 or len(cams) < 2 * every:
         return cams, []
     ordered = sorted(cams, key=lambda c: c.name)
     test = [c for i, c in enumerate(ordered) if i % every == 0]
     train_ = [c for i, c in enumerate(ordered) if i % every != 0]
+    twins = find_test_twins(train_, test)
+    if twins:
+        log(f"  Split: {len(twins)} train-кадр(ів) виключено — дублюють позу test-кадру: "
+            + ", ".join(f"{a} ≈ {b}" for a, b in sorted(twins.items())))
+        train_ = [c for c in train_ if c.name not in twins]
     return train_, test
 
 

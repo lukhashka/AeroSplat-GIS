@@ -1,8 +1,11 @@
+import dataclasses
 import json
 
 import pytest
+import torch
 
 from aerosplat.config import RunConfig
+from aerosplat.geo.sphere_enu import EARTH_MODEL
 from aerosplat.pipeline import runner
 from aerosplat.pipeline.layout import RunLayout
 from aerosplat.pipeline.manifest import Manifest
@@ -33,6 +36,27 @@ def test_layout_paths(layout):
     assert L.geotagged.name == "raw_images_t"
     assert L.manifest_path == L.data_dir / "t" / "run" / "manifest.json"
     assert L.cloud_in == L.dense_pt
+    assert L.cloud_wgs84 == L.data_dir / "t_dense_wgs84.pt"
+    assert L.splat_wgs84 == L.data_dir / "t_splat_wgs84.pt"
+
+
+def test_georef_skipped_without_known_poses(layout, monkeypatch):
+    cfg, L = layout
+    calls: list[str] = []
+    _fake_stage(monkeypatch, calls)
+    runner.run_stages(cfg, L, ["georef"])                                  # synthetic
+    runner.run_stages(dict(cfg, camera_source="earthstudio_json", known_poses=False), L,
+                      ["georef"])
+    assert calls == []
+
+
+def test_geo_fingerprint_carries_its_convention(layout):
+    """Known poses written before sphere ENU must not be reused by --resume."""
+    cfg, L = layout
+    geo = STAGES["geo"]
+    assert geo.version == EARTH_MODEL
+    assert runner._fingerprint(geo, cfg, L) != runner._fingerprint(
+        dataclasses.replace(geo, version=""), cfg, L)
 
 
 def test_manifest_records_and_resume(layout, monkeypatch):
@@ -83,13 +107,15 @@ def test_every_stage_entry_resolves(cloud_source):
 
 
 # ── Site runs (ADR-0006): RunLayout as a view on the project tree ─────────
-from conftest import write_es_export  # noqa: E402
+from conftest import write_es_export, write_pt  # noqa: E402
 
 from aerosplat import starter  # noqa: E402
 from aerosplat.geo.crs import GeoPoint  # noqa: E402
 from aerosplat.ingest.earthstudio import import_earthstudio  # noqa: E402
 from aerosplat.pipeline.stages import argv_dense, argv_eval, argv_geo  # noqa: E402
 from aerosplat.store import Catalog, RunStatus, Site  # noqa: E402
+from aerosplat.store.scenes import (CLOUD, CLOUD_RECON, SPLAT, SPLAT_RECON,  # noqa: E402
+                                    catalog_scenes)
 
 SITE_ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
 
@@ -143,12 +169,14 @@ def test_site_run_geo_stage_end_to_end(es_site):
     assert rc == 0
     run = cat.get_run(site, "baseline", "r1")
     assert run.status == RunStatus.ok and run.georeferenced and run.capture_ids == [cap.id]
+    assert run.earth_model == EARTH_MODEL
     assert {"known_poses", "registration_report"} <= set(run.products)
     assert "splat" not in run.products
     rd = cat.run_dirs(site, "baseline", "r1")
     geo = json.loads((rd.known_poses / "geo_registration.json").read_text())
     assert geo["enu_origin"] == {"latitude": SITE_ORIGIN.lat, "longitude": SITE_ORIGIN.lon,
                                  "altitude": SITE_ORIGIN.h}
+    assert geo["earth_model"] == EARTH_MODEL
     assert len(list(rd.images.glob("fixture_*.jpeg"))) == 3
     manifest = json.loads(rd.manifest.read_text(encoding="utf-8"))
     assert manifest["site"] == "demo/es" and manifest["run_id"] == "r1"
@@ -159,6 +187,45 @@ def test_site_run_geo_stage_end_to_end(es_site):
     assert starter.main(["--site", "es", "--only", "geo", "--resume",
                          "--projects-root", str(root)]) == 0
     assert [r.id for r in cat.list_runs(site)] == ["r1"]
+
+
+def test_site_run_registers_and_serves_wgs84_products(es_site):
+    """The catalog's splat/cloud of an Earth Studio run are the georef stage's WGS84
+    Site ENU files; the sphere-ENU originals stay as *_recon and are never served."""
+    cat, site, _, root = es_site
+    args = ["--site", "demo/es", "--run-id", "r1", "--projects-root", str(root)]
+    assert starter.main([*args, "--only", "geo"]) == 0
+    rd = cat.run_dirs(site, "baseline", "r1")
+    write_pt(rd.gs / "dense.pt", "dense", 50)          # as if dense/parse/train had run
+    write_pt(rd.gs / "splat.pt", "splat", 50)
+    assert starter.main([*args, "--only", "georef"]) == 0
+
+    run = cat.get_run(site, "baseline", "r1")
+    assert run.products[SPLAT] == "gs/splat_wgs84.pt"
+    assert run.products[CLOUD] == "gs/dense_wgs84.pt"
+    assert run.products[SPLAT_RECON] == "gs/splat.pt"
+    assert run.products[CLOUD_RECON] == "gs/dense.pt"
+    reg = json.loads(rd.registration_report.read_text(encoding="utf-8"))
+    A = torch.tensor(reg["sphere_enu_to_site_enu"]["A"], dtype=torch.float64)
+    b = torch.tensor(reg["sphere_enu_to_site_enu"]["b"], dtype=torch.float64)
+    src = torch.load(rd.gs / "splat.pt")["xyz"].double()
+    out = torch.load(rd.gs / "splat_wgs84.pt")["xyz"].double()
+    assert torch.allclose(out, src @ A.T + b, atol=1e-4)
+
+    scene = catalog_scenes(cat)["demo/es"]
+    assert scene.splat.endswith("splat_wgs84.pt") and scene.cloud.endswith("dense_wgs84.pt")
+    assert scene.metric["earth_model"] == EARTH_MODEL
+    assert 0 < scene.metric["frame_error_m"] < 1e-3          # affine residual, sub-mm
+
+
+def test_site_run_refuses_to_resume_other_earth_model(es_site):
+    cat, site, cap, root = es_site
+    cat.ensure_epoch(site, "baseline")
+    cat.create_run(site, "baseline", "old", capture_ids=[cap.id], earth_model="wgs84",
+                   georeferenced=True)
+    with pytest.raises(SystemExit, match="earth_model=wgs84"):
+        starter.main(["--site", "demo/es", "--run-id", "old", "--only", "geo",
+                      "--projects-root", str(root)])
 
 
 def test_site_dry_run_writes_nothing(es_site, capsys):

@@ -3,7 +3,8 @@
 """
 aerosplat.starter — єдина точка входу в пайплайн AeroSplat-GIS.
 
-footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat
+footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat → eval
+        → georef (Earth Studio: продукти зі сферичного ENU у WGS84 Site ENU)
 
 Приклади:
     aerosplat run --site default/dataset_v6   # ділянка з каталогу (ADR-0006): новий run
@@ -30,7 +31,7 @@ from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import DATA_DIR, RunLayout, abs_path
 from aerosplat.pipeline.runner import StageError, preflight, run_stages
 
-STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval"]
+STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval", "georef"]
 
 # Параметри: src/aerosplat/config.py (RunConfig, валідація pydantic).
 # Перекриття: --config run.yaml|json, прапорці CLI, --set KEY=VALUE.
@@ -210,6 +211,9 @@ def main(argv=None) -> int:
         log.info(f"\n🎉 Готово за {time.perf_counter() - t0:.1f}s")
         log.info(f"   хмара: {layout.cloud_in}")
         log.info(f"   splat: {layout.splat_pt}")
+        if layout.splat_wgs84.is_file() or layout.cloud_wgs84.is_file():
+            log.info(f"   WGS84 Site ENU: {layout.cloud_wgs84.name}, {layout.splat_wgs84.name} "
+                     f"(їх реєструє каталог і показує сервер)")
         log.info(f"   журнал: {layout.manifest_path}")
         log.info(f"   далі:  AEROSPLAT_DATASET={layout.dataset} aerosplat serve")
     return 0
