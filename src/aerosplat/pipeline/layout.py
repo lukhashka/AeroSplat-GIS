@@ -64,6 +64,8 @@ class RunLayout:
     # reconstruct in sphere ENU, ADR-0006): what the catalog registers and serves.
     cloud_wgs84: Path
     splat_wgs84: Path
+    # Semantic layer (terrain, buildings, facades) derived from the mapped cloud.
+    semantics_dir: Path
     # Earth Studio frames are matched as '<frame_prefix>_<n>.<ext>'.
     frame_prefix: str
     # Site ENU origin; None only for legacy runs (origin = mean of the frames).
@@ -121,6 +123,7 @@ class RunLayout:
             log_path=run_dir / "run.log",
             cloud_wgs84=_wgs84(cloud_in),
             splat_wgs84=_wgs84(data_dir / f"{ds}_splat.pt"),
+            semantics_dir=run_dir / "semantics",
             frame_prefix=ds,
         )
 
@@ -166,6 +169,7 @@ class RunLayout:
             log_path=run.log,
             cloud_wgs84=_wgs84(cloud_in),
             splat_wgs84=_wgs84(run.gs / "splat.pt"),
+            semantics_dir=run.root / "semantics",
             frame_prefix=capture.frame_prefix or site.id,
             origin=site.origin,
             site_key=site.key,

@@ -122,6 +122,22 @@ class RunConfig(BaseModel):
     eval_interval: int = Field(1000, ge=1)
     eval_lpips: bool = True
 
+    # -- semantics: terrain, buildings, facades (Фаза 7.1, aerosplat.semantics) --
+    semantics_res: float = Field(1.0, gt=0, le=10)             # розмір клітини растру, м
+    min_building_height: float = Field(2.5, gt=0)              # над рельєфом, м
+    min_building_area: float = Field(40.0, gt=0)               # м²
+    facade_inlier: float = Field(1.2, gt=0)                    # напівтовщина шару стіни, м
+    facade_min_length: float = Field(5.0, gt=0)
+    facade_min_height: float = Field(3.0, gt=0)
+    facade_min_points: int = Field(40, ge=3)
+    max_facades_per_building: int = Field(12, ge=1)
+    coverage_cell: float = Field(0.5, gt=0)                    # клітина карти покриття, м
+    coverage_max_angle: float = Field(60.0, gt=0, lt=90)       # до нормалі фасаду
+    # Роздільність, за якої деталі фасаду ще читаються. Орбіта Earth Studio з
+    # 200 м дає ~0.10-0.25 м/px, тобто гірше за цей поріг: стадія це повідомляє.
+    coverage_max_gsd: float = Field(0.05, gt=0)
+    semantics_seed: int = Field(0, ge=0)
+
     colmap_bin: str = "colmap"
 
     @model_validator(mode="after")
