@@ -6,12 +6,11 @@
 > у [ARCHITECTURE.md](ARCHITECTURE.md), цільова — у
 > [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md).
 
-> **Де ми зараз (2026-10-15).** Фаза 0 ✅ (крім ⏳-пунктів), Фаза 1 ✅ (крім
-> тесту `TileRasterizer` vs gsplat), Фаза 2.1 ✅ (baseline PSNR 25.89 без витоку test-кадру;
-> 27.53 було завищене),
-> Фаза 2.2 — частина 1 ✅ (без вимірюваного ефекту); gsplat збирається на
-> Windows, але в тренер ще не інтегрований. Уся ця робота — у гілці
-> `phase-1-foundation`, не змерджена в `main`.
+> **Де ми зараз (2026-10-15).** Фаза 0 ✅ (крім ⏳-пунктів), Фаза 1 ✅, Фаза 2.1 ✅
+> (baseline без витоку test-кадру: 26.47 dB з Inria-растерізатором, 3 seed-и; 27.53 було
+> завищене), Фаза 2.2 — gsplat ✅: `rasterizer: gsplat` з SH3, antialiased, MCMC і
+> per-image exposure; MCMC дає **27.0 dB (+0.56)**, решта — у межах шуму
+> ([BASELINE.md](BASELINE.md)). Лишились маски, depth-регуляризація, checkpoint/resume.
 > **Нові вимоги** (доставка, вікна та отвори, склади, повені, веб-UI) —
 > §9 і новий порядок пріоритетів у §7.
 
@@ -152,7 +151,10 @@ aerosplat run --dataset sample` на малому семпл-датасеті (1
 > ✅ 1.4 `ruff` (вузький набір E9/F), єдина `fix_console_encoding`, модуль `aerosplat.logging_utils`;
 > ✅ 1.5 45 CPU-тестів (config, starter, pipeline, cloud_io, FastAPI, golden-тест осей Earth Studio) + GitHub Actions CI (ruff, mypy, eslint, pytest);
 > ✅ стадії як функції in-process, `RunLayout`/`manifest.json`, `--resume` (1.3); ADR у `docs/decisions/` замість коментарів-журналів;
-> ✅ 1.1 структура пакета (`io/ geo/ sfm/ gs/ pipeline/`); ⏳ тест `TileRasterizer` vs gsplat (разом з Фазою 2).
+> ✅ 1.1 структура пакета (`io/ geo/ sfm/ gs/ pipeline/`); ✅ тест `TileRasterizer` vs gsplat
+> (GPU, `tests/test_gsplat.py`; знайшов зсув `TileRasterizer` на пів пікселя — він семплював
+> цілі координати замість центрів пікселів; виправлено: max abs diff з gsplat `classic`
+> 0.25…0.35 → ≤0.013, mean 0.013 → 0.0004).
 
 ### 1.1 Структура пакета
 
@@ -245,7 +247,18 @@ tools/
 
 **Статус (2026-10-01):** зроблено — перестановка камер, `max_screen_radius`=20 px, scale-регуляризація
 (CLI/конфіг: `--max-screen-radius`, `--scale-reg`, `--max-aniso-ratio`; див. BASELINE.md).
-Лишилось: gsplat (SH3, AA, MCMC), appearance embedding, маски, depth-регуляризація, checkpoint/resume, TensorBoard.
+
+**Статус (2026-10-15):** gsplat інтегровано як третій растерізатор (`rasterizer: gsplat`,
+`aerosplat/gs/gsplat_backend.py`): SH до 3-го ступеня з поступовим вмиканням, `antialiased`,
+densify `mcmc` (за замовчуванням) або `default` з бюджетом і опційним absgrad,
+`appearance: exposure` (афінна корекція кольору на кадр). Перестановка камер,
+`max_screen_radius` і scale-reg перенесені. Контракт `.pt` той самий + `sh` (ADR-0002,
+доповнення); `eval` рендерить з SH, `georef` обертає SH. На dataset_v6 (2–3 seed-и):
+**MCMC +0.56 dB (27.03)**, antialiased +0.004 SSIM; SH3, absgrad і exposure — без приросту
+на Earth Studio (меш із запеченими текстурами, однакове освітлення). Пресет для Earth Studio —
+`configs/gsplat-earthstudio.yaml` (MCMC, AA, SH0: 27.00 dB за 5.2 хв).
+Лишилось: маски, depth-регуляризація, checkpoint/resume, TensorBoard; перевірити SH і
+exposure на реальних знімках / змішаних джерелах (S4).
 
 Опційно пізніше: **2DGS** (surfel-и, краща поверхня для DSM/мешу),
 **Scaffold-GS / Octree-GS** для великих територій.
@@ -366,8 +379,8 @@ tools/
 4. **Фаза 6.2 (S2): черга задач, API v2, каркас веб-UI.**
 5. **Фаза 7.1 (S3): фасади, ортофото, ручна розмітка точок доступу,
    адресація** — оператор сам задає вікна й отвори.
-6. **gsplat + appearance embedding** (залишок 2.2) — до реєстрації
-   різнорідних джерел (S4); можна паралельно з п. 4–5.
+6. ✅ **gsplat + appearance (per-image exposure)** (залишок 2.2, 2026-10-15) — MCMC
+   +0.56 dB; exposure чекає на змішані джерела (S4).
 7. **S4–S7** у порядку §9.
 8. Решта Фаз 2–5 — за потребою, коли їх вимагатиме S4–S7.
 

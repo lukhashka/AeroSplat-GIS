@@ -9,7 +9,12 @@ server serves; the inputs stay in the reconstruction frame, which is the one
 consistent with the COLMAP cameras (eval, resume).
 
 Points map as x -> A x + b; Gaussians exactly as mu -> A mu + b,
-Sigma -> A Sigma A^T (aerosplat.geo.affine). Opacity and colour are unchanged.
+Sigma -> A Sigma A^T (aerosplat.geo.affine). Opacity and `rgb` are unchanged.
+View-dependent colour (`sh`, gsplat trainer) is a function of the viewing
+direction, which the map turns too: the SH coefficients are rotated by the
+rotation part of A (polar decomposition). A's remaining stretch (sphere ->
+WGS84 on dataset_v6: axes 1.0026 / 0.9987 / 1) bends directions by <= 0.11°
+and is ignored.
 
     python -m aerosplat.geo.georef --registration reports/registration.json \\
         --cloud gs/dense.pt gs/dense_wgs84.pt --splat gs/splat.pt gs/splat_wgs84.pt
@@ -27,6 +32,7 @@ import torch
 
 from aerosplat.geo.affine import AffineMap
 from aerosplat.geo.sphere_enu import EARTH_MODEL
+from aerosplat.gs.sh import rotate_sh
 
 # Key a mapped .pt carries: which frame it is in and how it got there.
 FRAME_KEY = "frame"
@@ -114,6 +120,9 @@ def transform_splat(src: Path, dst: Path, affine: AffineMap, info: dict[str, Any
         new_scale = np.log(new_scale)
     data.update(xyz=_tensor(new_xyz, data["xyz"]), scale=_tensor(new_scale, data["scale"]),
                 rotation=_tensor(new_rot, data["rotation"]))
+    sh = data.get("sh")
+    if sh is not None and sh.shape[1] > 1:      # DC alone is direction-independent
+        data["sh"] = _tensor(rotate_sh(sh.double().numpy(), affine.rotation()), sh)
     data[FRAME_KEY] = info
     _save(data, dst)
     return int(len(new_xyz))
@@ -131,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     affine, block = load_affine(args.registration)
     diag = ", ".join(f"{affine.A[i, i]:.6f}" for i in range(3))
     print(f"sphere ENU -> {SITE_FRAME}: diag(A)={diag}, b={np.round(affine.b, 6).tolist()}, "
-          f"fit residual {block['residual_max_m'] * 1000:.2f} mm")
+          f"rotation {affine.rotation_deg():.2e}°, fit residual {block['residual_max_m'] * 1000:.2f} mm")
     done = 0
     for kind, pair, fn in (("cloud", args.cloud, transform_cloud),
                            ("splat", args.splat, transform_splat)):

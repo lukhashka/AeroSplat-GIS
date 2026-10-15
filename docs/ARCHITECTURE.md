@@ -1,4 +1,4 @@
-# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-6-platform`, стан на 2026-10-15: S1 + S2)
+# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `main`, стан на 2026-10-15: S1 + S2 + Фаза 2.2 gsplat)
 
 > Документ описує **фактичний** стан коду, а не README. Там, де README
 > розходиться з кодом, правдою вважається код (див. §8).
@@ -141,16 +141,25 @@ flowchart TD
 * Фільтри: non-finite, reprojection error, track length, MAD-викиди, субсемплінг.
 * Вихідний контракт `.pt`: `{"xyz": f32[N,3], "rgb": f32[N,3] ∈ [0,1], "meta": {...}}`.
 
-### 3.5 3D Gaussian Splatting — `aerosplat/gs/trainer.py`
+### 3.5 3D Gaussian Splatting — `aerosplat/gs/trainer.py`, `gs/gsplat_backend.py`
 
-* Модель: `xyz`, `log scale`, кватерніон `(w,x,y,z)`, `logit opacity`,
-  `logit rgb` (**без сферичних гармонік** — колір не залежить від ракурсу).
-* Ініціалізація масштабу — наближений KNN через Morton-код.
-* Два растеризатори:
-  * `CudaRasterizer` — обгортка над `diff-gaussian-rasterization`
+* Спільна підготовка: хмара `.pt`, камери COLMAP + кадри, test-спліт, радіус
+  сцени, стартовий масштаб — наближений KNN через Morton-код.
+* Три растеризатори (`rasterizer` у `RunConfig`):
+  * `cuda` — `CudaRasterizer`, обгортка над `diff-gaussian-rasterization`
     (Inria, збирається локально, лежить у корені репо, untracked);
-  * `TileRasterizer` — власний диференційований tile-based растеризатор на
-    чистому PyTorch (fallback).
+  * `torch` — `TileRasterizer`, власний диференційований tile-based растеризатор на
+    чистому PyTorch (fallback; `auto` = `cuda`, якщо зібраний, інакше `torch`).
+    Семплює Гаусіани в центрах пікселів (+0.5), як COLMAP/Inria/gsplat; збіг із
+    gsplat `classic` перевіряє GPU-тест у `tests/test_gsplat.py`;
+  * `gsplat` (Фаза 2.2) — gsplat 1.5.3, окремий цикл `train_gsplat` у
+    `gs/gsplat_backend.py`. Обирається лише явно: JIT-збірка CUDA-розширення,
+    на Windows — через [tools/gsplat_env.bat](../tools/gsplat_env.bat);
+    `require_gsplat()` перевіряє середовище (CUDA toolkit = версія torch, MSVC ≠ VS 18)
+    до першого виклику, бо невдала JIT-збірка псує кеш.
+
+Шлях `cuda` / `torch` (`GaussianModel` + `GaussianDensifier`):
+
 * Loss `0.8·L1 + 0.2·(1−SSIM)`, Adam з lr за Kerbl et al., експоненційний
   decay lr позицій, densify (clone/split) за екранним градієнтом, prune,
   opacity reset, бюджет `max_gaussians`.
@@ -162,10 +171,37 @@ flowchart TD
   `max_aniso_ratio`); test-спліт кожен 8-й кадр (`eval_every`); train-кадр
   з позою test-кадру (напр. замикальний кадр орбіти = кадр 0) виключається
   з тренування (`find_test_twins`), щоб test не протікав у train.
+
+Шлях `gsplat` (`SplatModel` + `GsplatDensifier` / `McmcDensifier`):
+
+* Параметри в `ParameterDict` у розкладці gsplat (`means`, `scales`, `quats`,
+  `opacities`, `sh0`, `shN`), по одному Adam на ключ; хірургія параметрів при
+  densify — `gsplat.strategy.ops`, тож стан Adam іде за гаусіанами.
+* Колір — SH до 3-го ступеня (`sh_degree`), +1 ступінь кожні `sh_degree_interval`
+  ітерацій. `rasterize_mode`: `antialiased` (за замовчуванням) — 2D-фільтр
+  Mip-Splatting з компенсацією непрозорості, як у шейдері в'ювера (ADR-0004 §C2).
+* `densify_strategy`: `mcmc` (за замовчуванням) — 3DGS-MCMC (`MCMCStrategy` gsplat:
+  релокація «мертвих» гаусіанів, ріст до `max_gaussians`, шум позицій; шум і
+  регуляризатори перераховано з нормалізованої сцени на метри через радіус сцени);
+  `default` — правила гілки `cuda` (бюджет `max_gaussians`, prune за екранним
+  радіусом, opacity reset), за бажання на абсолютних градієнтах (`absgrad`, поріг
+  `absgrad_threshold`). Порівняння — [BASELINE.md](BASELINE.md).
+* `appearance: exposure` — афінна корекція кольору 3×4 на кожен train-кадр, лише в
+  тренуванні (спільний зсув віднімається); для змішаних джерел (TARGET_ARCHITECTURE §6.2).
+* Перестановка камер, prune за екранним радіусом і регуляризація анізотропії —
+  ті самі, що в гілці `cuda`.
+* Вихід — той самий контракт плюс `sh (N, 16, 3)`, `sh_degree`, `render`; `rgb` =
+  DC-складова SH (ADR-0002, доповнення 2026-10-15). SH3 збільшує `.pt` ≈3.7×
+  (≈470 МБ на 2M гаусіанів).
+
+Оцінка й геоприв'язка:
+
 * `gs/evaluate.py` + `gs/report.py` — PSNR/SSIM/LPIPS, FPS, розмір →
   `run/metrics.json` + `report.html` (стадія `eval`, baseline — [BASELINE.md](BASELINE.md)).
-* gsplat 1.5.3 збирається на Windows ([tools/gsplat_env.bat](../tools/gsplat_env.bat)),
-  але в тренер **ще не інтегрований**.
+  З `rasterizer=gsplat` test-кадри рендеряться з SH і `rasterize_mode` із `.pt`.
+* `geo/georef.py` переносить сплат у WGS84 Site ENU: Σ → AΣAᵀ, а SH обертаються
+  обертальною частиною A (полярний розклад, `gs/sh.py`). На dataset_v6 A діагональна,
+  тож обертання нульове.
 
 Легасі-тренери (`gs_trainer_v2.py`, `trips_trainer.py`, `optimization/gs_trainer.py`)
 перенесено в `legacy/`; у пайплайні не використовуються.
@@ -488,7 +524,7 @@ AeroSplat-GIS/
 │   ├── ingest/                    # earthstudio, folder, images
 │   ├── sfm/                       # sfm_runner, dense_runner
 │   ├── io/                        # cloud_io, ply_parser, colmap_parser
-│   ├── gs/                        # trainer (активний), evaluate, report
+│   ├── gs/                        # trainer (активний), gsplat_backend, sh, evaluate, report
 │   ├── jobs/                      # models, queue, worker, child, proctree (черга задач, S2)
 │   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, up.py (`aerosplat up`)
 ├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js

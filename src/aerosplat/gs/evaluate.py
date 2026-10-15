@@ -12,26 +12,37 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch import Tensor
 
+from aerosplat.gs.sh import sh_degree_of
 from aerosplat.gs.trainer import (
     CudaRasterizer, TileRasterizer, attach_images, build_covariance_3d,
     load_colmap_cameras, log, psnr, split_cameras, ssim_loss, Camera,
 )
 
 
-def load_scene_params(path: str, device) -> Dict[str, Tensor]:
-    """Зчитує splat.pt (активовані значення, див. trainer._save) → params для растерізатора."""
-    scene = torch.load(path, map_location="cpu")
+def load_scene(path: str, device) -> Tuple[Dict[str, Tensor], Dict[str, Any]]:
+    """splat.pt (активовані значення, ADR-0002) → (params для растерізатора, `render` з файлу).
+
+    `sh` (gsplat-тренер) потрапляє в params; Inria/torch-растерізатори його
+    ігнорують і малюють `rgb`. `render` — як сплат рендерили під час тренування
+    ({} для файлів Inria/torch-тренера).
+    """
+    scene = torch.load(path, map_location="cpu", weights_only=False)
     act = scene.get("activations", {})
     if act.get("scale_is_log") or act.get("opacity_is_logit"):
         raise ValueError("splat.pt з неактивованими значеннями не підтримується цим оцінювачем")
-    p = {k: scene[k].to(device).float() for k in ("xyz", "scale", "rotation", "opacity", "rgb")}
+    keys = ("xyz", "scale", "rotation", "opacity", "rgb") + (("sh",) if "sh" in scene else ())
+    p = {k: scene[k].to(device).float() for k in keys}
     p["cov3d"] = build_covariance_3d(torch.log(p["scale"]), p["rotation"])
-    return p
+    return p, dict(scene.get("render") or {})
+
+
+def load_scene_params(path: str, device) -> Dict[str, Tensor]:
+    return load_scene(path, device)[0]
 
 
 def _make_lpips(device):
@@ -116,7 +127,16 @@ def evaluate_views(params: Dict[str, Tensor], rasterizer, cams: List[Camera], de
     return out
 
 
-def _make_rasterizer(kind: str, device):
+def _make_rasterizer(kind: str, device, render: Optional[Dict[str, Any]] = None):
+    """Растерізатор оцінки. gsplat бере rasterize_mode із файлу (`render`), щоб test-кадри
+    рендерились так само, як під час тренування; файл без `render` — classic (Inria)."""
+    render = render or {}
+    if kind == "gsplat":
+        from aerosplat.gs.gsplat_backend import GsplatRasterizer
+        return GsplatRasterizer(render.get("rasterize_mode", "classic"))
+    if render.get("rasterizer") == "gsplat":
+        log(f"  ⚠️  Сплат натреновано gsplat ({render.get('rasterize_mode')}), а оцінка йде "
+            f"rasterizer={kind}: без SH і antialiasing метрики занижені.")
     if kind in ("auto", "cuda") and device.type == "cuda":
         try:
             return CudaRasterizer()
@@ -137,8 +157,8 @@ def run_evaluation(splat: str, colmap: str, images: str, out_dir: str, *,
         raise SystemExit(f"❌ Замало кадрів ({len(cams)}) для test-спліту кожен {eval_every}-й")
     log(f"  Оцінка: {len(test_cams)} test-кадрів з {len(cams)}")
 
-    params = load_scene_params(splat, device)
-    raster = _make_rasterizer(rasterizer, device)
+    params, render = load_scene(splat, device)
+    raster = _make_rasterizer(rasterizer, device, render)
     lp = _make_lpips(device) if use_lpips else None
     result = evaluate_views(params, raster, test_cams, device, lpips_fn=lp, keep_images=True)
     imgs = result.pop("_images")
@@ -147,6 +167,10 @@ def run_evaluation(splat: str, colmap: str, images: str, out_dir: str, *,
         "n_gaussians": int(params["xyz"].shape[0]),
         "splat_size_mb": round(os.path.getsize(splat) / 1024 ** 2, 2),
         "rasterizer": type(raster).__name__,
+        "rasterize_mode": getattr(raster, "rasterize_mode", "classic"),
+        # SH is evaluated only by gsplat; the other rasterizers draw `rgb`.
+        "sh_degree": (sh_degree_of(params["sh"].shape[1])
+                      if rasterizer == "gsplat" and "sh" in params else 0),
         "device": str(device),
         "train_seconds": None,
     }
@@ -183,7 +207,7 @@ def main(argv=None) -> int:
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--eval-every", type=int, default=8)
     ap.add_argument("--max-res", type=int, default=1024)
-    ap.add_argument("--rasterizer", choices=["auto", "cuda", "torch"], default="auto")
+    ap.add_argument("--rasterizer", choices=["auto", "cuda", "torch", "gsplat"], default="auto")
     ap.add_argument("--no-lpips", action="store_true")
     ap.add_argument("--manifest", default=None, help="manifest.json (час тренування)")
     ap.add_argument("--known-poses-dir", default=None,

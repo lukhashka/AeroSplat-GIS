@@ -1,0 +1,13 @@
+# Preset: 3DGS on gsplat for Earth Studio renders (ROADMAP 2.2, docs/BASELINE.md).
+# Training keys only, so it composes with a site run:
+#   tools\gsplat_env.bat venv\Scripts\aerosplat run --site default/dataset_v6 --from train ^
+#       --config configs/gsplat-earthstudio.yaml
+# dataset_v6, 2-3 seeds: 27.00 dB / SSIM 0.900 vs 26.47 / 0.891 with the Inria rasterizer.
+rasterizer: gsplat
+densify_strategy: mcmc        # the gain (+0.56 dB): fixed 2M budget, relocation of dead splats
+rasterize_mode: antialiased   # SSIM +0.004; matches the viewer's Mip-Splatting compensation
+# Earth Studio renders a textured mesh: no view-dependent colour to learn. SH3 measured
+# the same PSNR at ~2x the training time and ~3.7x the .pt size, so keep SH off here.
+sh_degree: 0
+iterations: 5500
+max_gaussians: 2000000

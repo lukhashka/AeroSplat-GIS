@@ -61,6 +61,11 @@
 ║  Формат збереженої сцени НЕ змінився: {xyz, scale, rotation, opacity,       ║
 ║  rgb} — appGLSL.js / main.py читають його як раніше.                        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+
+Растерізатор 3 (Фаза 2.2): gsplat — aerosplat/gs/gsplat_backend.py. SH до 3-го
+ступеня, antialiased, densify default/absgrad/MCMC, per-image exposure. Окремий цикл
+(train_gsplat); підготовка (хмара, камери, спліт, KNN-масштаб) спільна з цим файлом.
+.pt той самий плюс `sh`, `sh_degree`, `render` (ADR-0002, доповнення 2026-10-15).
 """
 
 import os
@@ -735,13 +740,15 @@ class TileRasterizer:
             tstart = torch.cumsum(cpt, 0) - cpt
             max_cnt = int(cpt.max())
 
-            # Координати пікселів кожного тайла
+            # Цілі індекси пікселів кожного тайла (для збирання зображення) і
+            # їхні центри (+0.5), у яких рахуємо Гаусіани — та сама конвенція,
+            # що в інтрінсиків COLMAP, Inria-CUDA і gsplat.
             P = TILE * TILE
             t_idx = torch.arange(n_tiles, device=device)
             loc = torch.arange(P, device=device)
             px = ((t_idx % ntx) * TILE).unsqueeze(1) + (loc % TILE).unsqueeze(0)
             py = ((t_idx // ntx) * TILE).unsqueeze(1) + (loc // TILE).unsqueeze(0)
-            px, py = px.to(dtype), py.to(dtype)
+            pxc, pyc = px.to(dtype) + 0.5, py.to(dtype) + 0.5
 
             active = torch.nonzero(cpt > 0, as_tuple=True)[0]
 
@@ -759,7 +766,7 @@ class TileRasterizer:
                 max=gid_s.shape[0] - 1)
             g = gid_s[flat]                                              # (A,K)
 
-            args = (px[active], py[active], Tacc[active],
+            args = (pxc[active], pyc[active], Tacc[active],
                     u[g], v[g], ia[g], ib[g], idd[g], op[g], rgb[g],
                     valid.to(dtype))
             if self.use_checkpoint and torch.is_grad_enabled():
@@ -781,7 +788,7 @@ class TileRasterizer:
 
         # тайли → зображення
         img = torch.zeros(Hp * Wp, 3, device=device, dtype=dtype)
-        flat_idx = (py.long() * Wp + px.long()).reshape(-1)
+        flat_idx = (py * Wp + px).reshape(-1)
         img = img.index_copy(0, flat_idx, color.reshape(-1, 3))
         img = img.view(Hp, Wp, 3)[:H, :W]
 
@@ -1165,10 +1172,14 @@ def create_optimizer(model: GaussianModel, extent: float) -> torch.optim.Adam:
     ], eps=1e-15)
 
 
-def update_xyz_lr(optimizer, iteration: int, total: int, extent: float):
+def xyz_lr_at(iteration: int, total: int, extent: float) -> float:
     """Експоненційний decay lr позицій: 0.00016 → 0.0000016 (× extent)."""
     t = min(1.0, iteration / max(1, total))
-    lr = (0.00016 ** (1 - t)) * (0.0000016 ** t) * extent
+    return (0.00016 ** (1 - t)) * (0.0000016 ** t) * extent
+
+
+def update_xyz_lr(optimizer, iteration: int, total: int, extent: float):
+    lr = xyz_lr_at(iteration, total, extent)
     for group in optimizer.param_groups:
         if group.get("name") == "_xyz":
             group["lr"] = lr
@@ -1248,6 +1259,17 @@ def train(
     max_screen_radius: float = 20.0,
     scale_reg: float = 0.01,
     max_aniso_ratio: float = 10.0,
+    # ── лише rasterizer="gsplat" (aerosplat.gs.gsplat_backend) ──
+    sh_degree: int = 3,
+    sh_degree_interval: int = 1000,
+    rasterize_mode: str = "antialiased",
+    densify_strategy: str = "mcmc",
+    absgrad: bool = False,
+    absgrad_threshold: float = 0.0008,
+    mcmc_opacity_reg: float = 0.01,
+    mcmc_scale_reg: float = 0.01,
+    mcmc_noise_lr: float = 5e5,
+    appearance: str = "none",
     # ── сумісність зі старою сигнатурою v3 (якщо train() кличуть з коду) ──
     use_cuda_rasterizer: Optional[bool] = None,
     H: Optional[int] = None,
@@ -1339,6 +1361,41 @@ def train(
         log(f"  Стартовий масштаб з KNN: медіана {float(scales.median()):.5f} "
             f"({time.time()-t0:.1f}s)")
 
+    densify_until = int(num_iterations * densify_until_frac)
+
+    def warm_copies() -> Optional[List[Camera]]:
+        # Зменшені копії кадрів для warmup будуємо ОДИН раз, а не щоітерації
+        # (F.interpolate на кожному кроці — це зайвий resize усього кадру).
+        # Після self-test GT: копії мають містити вже відрендерені кадри.
+        return [c.scaled(warmup_scale) for c in train_cams] if warmup_iters else None
+
+    if rasterizer_kind == "gsplat":
+        from aerosplat.gs.gsplat_backend import GsplatOptions, train_gsplat
+
+        opts = GsplatOptions(
+            num_iterations=num_iterations, sh_degree=sh_degree,
+            sh_degree_interval=sh_degree_interval, rasterize_mode=rasterize_mode,
+            densify_strategy=densify_strategy, absgrad=absgrad, grad_threshold=grad_threshold,
+            absgrad_threshold=absgrad_threshold, densify_from=densify_from,
+            densify_until=densify_until, densify_interval=densify_interval,
+            opacity_reset_interval=opacity_reset_interval, max_gaussians=max_gaussians,
+            max_screen_radius=max_screen_radius, scale_reg=scale_reg,
+            max_aniso_ratio=max_aniso_ratio, mcmc_opacity_reg=mcmc_opacity_reg,
+            mcmc_scale_reg=mcmc_scale_reg, mcmc_noise_lr=mcmc_noise_lr, appearance=appearance,
+            warmup_iters=warmup_iters, eval_interval=eval_interval, save_every=save_every)
+        if self_test:
+            _self_test_ground_truth(GaussianModel(xyz0, rgb0, init_scale=scales).to(device),
+                                    cams, device, chunk)
+        log(f"\n  Підготовка зайняла {time.time()-t_start:.1f}s")
+        log(f"  Тренування: {num_iterations} ітерацій, {len(train_cams)} train-камер")
+        splat_model = train_gsplat(opts, xyz0=xyz0, rgb0=rgb0, init_scale=scales,
+                                   train_cams=train_cams, test_cams=test_cams, extent=extent,
+                                   device=device, output_path=output_path, cams_warm=warm_copies())
+        _log_done(splat_model.n_gaussians, t_start, output_path)
+        return
+
+    if absgrad or appearance != "none":
+        log("  ⚠️  absgrad / appearance діють лише з rasterizer=gsplat — ігноруються.")
     model = GaussianModel(xyz0, rgb0, init_scale=scales).to(device)
     optimizer = create_optimizer(model, extent)
     densifier = GaussianDensifier(model, grad_threshold=grad_threshold)
@@ -1360,26 +1417,15 @@ def train(
     log(f"  Растерізатор: {rasterizer_kind}")
 
     if self_test:
-        # ground truth = рендер стартової хмари з тих самих камер
-        with torch.no_grad():
-            gt_params = model.get_params()
-            bg = torch.zeros(3, device=device)
-            ref = TileRasterizer(chunk=chunk)
-            for cam in cams:
-                img, _ = ref.render(gt_params, cam, cam.view_matrix(device), bg)
-                cam.image = img.cpu()
+        _self_test_ground_truth(model, cams, device, chunk)
+    cams_warm = warm_copies()
 
     bg_color = torch.zeros(3, device=device)
-    densify_until = int(num_iterations * densify_until_frac)
 
     log(f"\n  Підготовка зайняла {time.time()-t_start:.1f}s")
     log(f"  Тренування: {num_iterations} ітерацій, "
         f"{model.n_gaussians:,} Гаусіанів, {len(cams)} камер")
     log("  Перша ітерація зазвичай найповільніша (прогрів CUDA-ядер)...\n")
-
-    # Зменшені копії кадрів для warmup будуємо ОДИН раз, а не щоітерації
-    # (F.interpolate на кожному кроці — це зайвий resize усього кадру).
-    cams_warm = [c.scaled(warmup_scale) for c in train_cams] if warmup_iters else None
 
     sampler = CameraSampler(len(train_cams))
     losses: List[float] = []
@@ -1448,7 +1494,22 @@ def train(
 
     _save(model, output_path)
     log(f"\n  Середній loss: {sum(losses)/len(losses):.4f}")
-    log(f"  Фінальна кількість Гаусіанів: {model.n_gaussians:,}")
+    _log_done(model.n_gaussians, t_start, output_path)
+
+
+def _self_test_ground_truth(model: GaussianModel, cams: List[Camera], device, chunk: int) -> None:
+    """Self-test: ground truth = рендер стартової хмари з тих самих камер."""
+    with torch.no_grad():
+        gt_params = model.get_params()
+        bg = torch.zeros(3, device=device)
+        ref = TileRasterizer(chunk=chunk)
+        for cam in cams:
+            img, _ = ref.render(gt_params, cam, cam.view_matrix(device), bg)
+            cam.image = img.cpu()
+
+
+def _log_done(n_gaussians: int, t_start: float, output_path: str) -> None:
+    log(f"  Фінальна кількість Гаусіанів: {n_gaussians:,}")
     log(f"  Загальний час: {(time.time()-t_start)/60:.1f} min")
     log(f"  Збережено: {output_path}")
 
@@ -1496,7 +1557,9 @@ def main(argv=None) -> int:
     parser.add_argument("--images", default=None,
                         help="каталог з кадрами (ground truth)")
     parser.add_argument("--iterations", type=int, default=7000)
-    parser.add_argument("--rasterizer", choices=["auto", "cuda", "torch"], default="auto")
+    parser.add_argument("--rasterizer", choices=["auto", "cuda", "torch", "gsplat"], default="auto",
+                        help="auto = cuda (Inria), якщо зібраний, інакше torch; gsplat — лише явно "
+                             "(на Windows через tools\\gsplat_env.bat)")
     parser.add_argument("--max-res", type=int, default=1024,
                         help="максимальна довша сторона кадру")
     parser.add_argument("--max-gaussians", type=int, default=1_000_000)
@@ -1526,6 +1589,23 @@ def main(argv=None) -> int:
     parser.add_argument("--scale-reg", type=float, default=0.01,
                         help="вага штрафу за анізотропію сплатів (0 = вимкнено)")
     parser.add_argument("--max-aniso-ratio", type=float, default=10.0)
+    g = parser.add_argument_group("лише --rasterizer gsplat (aerosplat.gs.gsplat_backend)")
+    g.add_argument("--sh-degree", type=int, default=3, choices=range(4),
+                   help="максимальний ступінь SH (0 = колір без залежності від ракурсу)")
+    g.add_argument("--sh-degree-interval", type=int, default=1000,
+                   help="+1 ступінь SH кожні N ітерацій (0 = усі одразу)")
+    g.add_argument("--rasterize-mode", choices=["classic", "antialiased"], default="antialiased")
+    g.add_argument("--densify-strategy", choices=["default", "mcmc"], default="mcmc",
+                   help="mcmc = 3DGS-MCMC (сталий бюджет max_gaussians); default = Kerbl et al. "
+                        "з бюджетом max_gaussians")
+    g.add_argument("--absgrad", action="store_true",
+                   help="densify за абсолютним екранним градієнтом (AbsGS), поріг --absgrad-threshold")
+    g.add_argument("--absgrad-threshold", type=float, default=0.0008)
+    g.add_argument("--mcmc-opacity-reg", type=float, default=0.01)
+    g.add_argument("--mcmc-scale-reg", type=float, default=0.01)
+    g.add_argument("--mcmc-noise-lr", type=float, default=5e5)
+    g.add_argument("--appearance", choices=["none", "exposure"], default="none",
+                   help="exposure = афінна корекція кольору на кожен train-кадр (лише в тренуванні)")
     args = parser.parse_args(argv)
     if not args.self_test and not (args.input and args.colmap and args.images):
         parser.error("--input, --colmap і --images обов'язкові "
@@ -1566,6 +1646,16 @@ def main(argv=None) -> int:
         max_screen_radius=args.max_screen_radius,
         scale_reg=args.scale_reg,
         max_aniso_ratio=args.max_aniso_ratio,
+        sh_degree=args.sh_degree,
+        sh_degree_interval=args.sh_degree_interval,
+        rasterize_mode=args.rasterize_mode,
+        densify_strategy=args.densify_strategy,
+        absgrad=args.absgrad,
+        absgrad_threshold=args.absgrad_threshold,
+        mcmc_opacity_reg=args.mcmc_opacity_reg,
+        mcmc_scale_reg=args.mcmc_scale_reg,
+        mcmc_noise_lr=args.mcmc_noise_lr,
+        appearance=args.appearance,
     )
     return 0
 
