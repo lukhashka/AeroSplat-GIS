@@ -34,6 +34,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -43,7 +44,9 @@ from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
-from aerosplat.paths import PROJECT_DIR
+from aerosplat.paths import DATA_DIR, PROJECT_DIR
+from aerosplat.store.paths import default_projects_root
+from aerosplat.store.scenes import SceneSource, discover_scenes
 
 
 _fix_console_encoding()
@@ -69,52 +72,43 @@ project_dir = str(PROJECT_DIR)
 #  Configuration
 # ═══════════════════════════════════════════════════════════════════
 
-# Default only — every endpoint takes ?dataset=... so two datasets can be
-# compared without restarting uvicorn (review §3.4).
-DEFAULT_DATASET = os.environ.get("AEROSPLAT_DATASET", "zaporizhzhia")
+# Scenes come from the catalog (one per Site: its latest successful run,
+# ADR-0006), plus legacy `data/<ds>_*.pt` outputs of `aerosplat run --dataset`
+# until those are migrated (tools/migrate_dataset.py). Every endpoint takes
+# ?dataset=<project>/<site> (or a bare site id when unique, or a legacy
+# dataset name), so scenes can be A/B'd without restarting uvicorn.
+PROJECTS_ROOT = default_projects_root()
+LEGACY_DATA_DIR = Path(os.environ.get("AEROSPLAT_DATA", str(DATA_DIR)))
 
-# NOTE (review-2 #4): 'mill19' currently points at the same two files as
-# 'zaporizhzhia'. The whole point of ?dataset=... is A/B comparison
-# (review §3.4), and a silent collision here reads as "the two datasets
-# are identical" instead of as the placeholder it actually is. Left as
-# real paths (not removed) so the server still starts and the collision
-# check below fires instead of a 404 — replace mill19's paths with its
-# real files when that dataset exists.
-DATASET_PATHS: Dict[str, Dict[str, str]] = {
-    "zaporizhzhia": {
-        "cloud": os.path.join(project_dir, "data", "dataset_v6_dense.pt"),
-        "splat": os.path.join(project_dir, "data", "dataset_v6_splat.pt"),
-    },
-    # Matches RunLayout's naming convention (data/<dataset>_dense.pt,
-    # data/<dataset>_splat.pt) directly, so an `aerosplat run` for this
-    # dataset is reachable as ?dataset=dataset_v6 without editing this file
-    # again or going through the unrelated 'mill19' placeholder below.
-    "dataset_v6": {
-        "cloud": os.path.join(project_dir, "data", "dataset_v6_dense.pt"),
-        "splat": os.path.join(project_dir, "data", "dataset_v6_splat.pt"),
-    },
-    "mill19": {
-        "cloud": os.path.join(project_dir, "data", "dataset_v6_dense.pt"),
-        "splat": os.path.join(project_dir, "data", "dataset_v6_splat.pt"),
-    },
-}
+SCENES: Dict[str, SceneSource] = {}
+DEFAULT_DATASET: Optional[str] = None
 
 
-def _warn_dataset_path_collisions() -> None:
-    """Flag datasets that resolve to the same file on disk — comparing
-    them would silently just compare a dataset against itself."""
-    seen: Dict[str, list] = {}
-    for name, paths in DATASET_PATHS.items():
-        for mode, path in paths.items():
-            seen.setdefault(os.path.abspath(path), []).append(f"{name}.{mode}")
-    for path, users in seen.items():
-        if len(users) > 1:
-            print(f"   ⚠️  [Server] {', '.join(users)} all resolve to the same file: {path}")
+def load_scenes() -> None:
+    """(Re)read the catalog and legacy outputs into SCENES / DEFAULT_DATASET."""
+    global SCENES, DEFAULT_DATASET
+    try:
+        scenes = discover_scenes(PROJECTS_ROOT, LEGACY_DATA_DIR)
+    except Exception as e:  # a broken catalog must not take the viewer down
+        print(f"   ❌ [Server] Каталог {PROJECTS_ROOT} не прочитано: {e}")
+        scenes = discover_scenes(None, LEGACY_DATA_DIR)
+    SCENES = scenes
+    wanted = os.environ.get("AEROSPLAT_DATASET")
+    canonical = [n for n, s in scenes.items() if n == s.name]
+    catalog_first = sorted(canonical, key=lambda n: (scenes[n].kind != "catalog", n))
+    DEFAULT_DATASET = wanted if wanted in scenes else (catalog_first[0] if catalog_first else None)
+    if wanted and wanted not in scenes:
+        print(f"   ⚠️  [Server] AEROSPLAT_DATASET='{wanted}' не знайдено; "
+              f"доступні: {sorted(canonical)}")
+
+
+def _resolve_dataset(dataset: Optional[str]) -> Optional[str]:
+    return dataset or DEFAULT_DATASET
 
 
 # Runs at import time too (not just __main__), so it fires when uvicorn
 # imports the app directly rather than running this file as a script.
-_warn_dataset_path_collisions()
+load_scenes()
 
 # ── Trainer contract (§A4/§S1, see ADR-0002) ───────────────────────
 # The .pt declares an "activations" key (written by gs_trainer_v3._save);
@@ -162,41 +156,14 @@ SPLAT_LAYOUT = [
 # *and* covariances at once.
 UP_AXIS_ROTATION = {"axis": "x", "degrees": 90.0}
 
-# review-2 §4 (ADR-0001): COLMAP units are arbitrary up to a similarity
-# transform — an "extent" of 3.7 doesn't mean 3.7 of anything until it's
-# tied to a real-world scale. A per-dataset geo file
-# (`data/<dataset_id>_geo.txt`) should carry exactly this. This resolver
-# looks for it and reports what it found; it does NOT invent a scale by
-# guessing at the file's format, because a wrong "confident" number is
-# worse for a measurement tool than an honest None.
-GEO_FILE_TEMPLATE = os.path.join(project_dir, "data", "{dataset_id}_geo.txt")
-
-
-def load_metric_scale(dataset: str) -> Optional[Dict[str, object]]:
-    """
-    Best-effort metric-scale lookup for `dataset`.
-
-    Returns None if no geo file is found. If a file IS found, returns
-    what's known about it without parsing a format that hasn't been
-    confirmed yet — replace the body of the `if path exists` branch once
-    dataset_v6.json / *_geo.txt's real schema is settled (the highest-value unexplored input in the repo, see ADR-0001).
-    """
-    # dataset_v6_geo.txt is named after the RUN (dataset_v6), not the
-    # logical dataset key ("zaporizhzhia") used elsewhere in this file —
-    # those are different namespaces today. Try the logical name first,
-    # then the one run this project currently has.
-    candidates = [
-        GEO_FILE_TEMPLATE.format(dataset_id=dataset),
-        GEO_FILE_TEMPLATE.format(dataset_id="dataset_v6"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return {
-                "units_to_metres": None,   # TODO: parse once the geo file's schema is confirmed
-                "source": f"geo_file_present_unparsed:{os.path.basename(path)}",
-                "path": path,
-            }
-    return None
+# ADR-0001: COLMAP units are arbitrary up to a similarity transform unless
+# the run was seeded with known georeferenced poses. The scene's `metric`
+# block (aerosplat.store.scenes.metric_block) is None in that case — an
+# honest None beats a confident wrong scale for a measurement tool — and
+# otherwise says units are metres in Site ENU, with the WGS84 origin.
+def scene_metric(dataset: str) -> Optional[Dict[str, object]]:
+    src = SCENES.get(dataset)
+    return None if src is None else src.metric
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -452,17 +419,22 @@ def _evict_if_needed() -> None:
         print(f"   ♻️  [Server] Evicted cached payload {key} ({len(dropped.data)/1e6:.0f} MB)")
 
 
-def dataset_paths(dataset: str) -> Dict[str, str]:
-    if dataset not in DATASET_PATHS:
-        raise KeyError(
-            f"unknown dataset '{dataset}'; known: {sorted(DATASET_PATHS)}"
-        )
-    return DATASET_PATHS[dataset]
+def scene_source(dataset: str) -> SceneSource:
+    if dataset not in SCENES:
+        raise KeyError(f"unknown dataset '{dataset}'; known: {sorted(SCENES)}")
+    return SCENES[dataset]
 
 
 def _path_for(dataset: str, mode: str) -> str:
-    paths = dataset_paths(dataset)
-    return paths["splat"] if mode == "splat" else paths["cloud"]
+    src = scene_source(dataset)
+    return src.splat if mode == "splat" else src.cloud
+
+
+def _unknown(dataset: Optional[str]) -> Response:
+    if dataset is None:
+        return _error(404, "No scenes: the catalog has no site with a finished run and no "
+                           "legacy data/<ds>_*.pt exists (see tools/migrate_dataset.py)")
+    return _error(404, f"Unknown dataset '{dataset}'; known: {sorted(SCENES)}")
 
 
 def scene_frame(dataset: str) -> SceneFrame:
@@ -789,12 +761,12 @@ def stream_spatial_chunk(
     step: int = Query(1, ge=1, le=64),
 ):
     start = time.time()
-    dataset = dataset or DEFAULT_DATASET
-
     if mode not in ("dense", "splat"):
         return _error(400, f"Invalid mode '{mode}'; expected 'dense' or 'splat'")
-    if dataset not in DATASET_PATHS:
-        return _error(404, f"Unknown dataset '{dataset}'; known: {sorted(DATASET_PATHS)}")
+    requested = _resolve_dataset(dataset)
+    if requested is None or requested not in SCENES:
+        return _unknown(requested)
+    dataset = SCENES[requested].name     # aliases share one cache entry and ETag
 
     try:
         payload = get_payload(dataset, mode, step)
@@ -843,12 +815,12 @@ def scene_meta(
     doing it here desynchronises positions from rotation quaternions
     (review §A3).
     """
-    dataset = dataset or DEFAULT_DATASET
-
     if mode not in ("dense", "splat"):
         return _error(400, f"Invalid mode '{mode}'; expected 'dense' or 'splat'")
-    if dataset not in DATASET_PATHS:
-        return _error(404, f"Unknown dataset '{dataset}'; known: {sorted(DATASET_PATHS)}")
+    requested = _resolve_dataset(dataset)
+    if requested is None or requested not in SCENES:
+        return _unknown(requested)
+    dataset = SCENES[requested].name     # aliases share one cache entry and ETag
 
     try:
         frame = scene_frame(dataset)
@@ -895,24 +867,27 @@ def scene_meta(
 
         "activations": payload.activations,
 
-        # review-2 §4a: None until a geo file's schema is confirmed and
-        # parsed — see load_metric_scale(). The viewer should label
-        # measurements as relative units whenever this is None, and as
-        # metres only once units_to_metres is a real number.
-        "metric": load_metric_scale(dataset),
+        # Site ENU metres + WGS84 origin when the run is georeferenced
+        # (known poses), None otherwise. The viewer labels measurements as
+        # relative units whenever this is None (aerosplat.store.scenes).
+        "metric": scene_metric(dataset),
     }
 
 
 @app.get("/api/v1/status")
 def status():
+    canonical = {name: src for name, src in SCENES.items() if name == src.name}
     return {
         "default_dataset": DEFAULT_DATASET,
+        "projects_root": str(PROJECTS_ROOT),
         "datasets": {
-            name: {
-                mode: os.path.exists(paths[key])
-                for mode, key in (("splat", "splat"), ("dense", "cloud"))
-            }
-            for name, paths in DATASET_PATHS.items()
+            name: {"splat": os.path.exists(src.splat), "dense": os.path.exists(src.cloud)}
+            for name, src in canonical.items()
+        },
+        "scenes": {
+            name: {"kind": src.kind, "site": src.site, "run": src.run,
+                   "aliases": list(src.aliases), "metric": src.metric is not None}
+            for name, src in canonical.items()
         },
         "cached_payloads": [
             {"dataset": d, "mode": m, "step": s, "count": p.count}
@@ -924,19 +899,23 @@ def status():
 
 @app.post("/api/v1/reload")
 def reload_caches(dataset: Optional[str] = Query(None)):
-    """Drop cached payloads and scene frames so re-trained .pt files are picked up."""
+    """Drop cached payloads and scene frames so re-trained .pt files are picked
+    up; a full reload (no ?dataset=) also re-reads the catalog."""
     with _lock:
         if dataset is None:
             n = len(_PAYLOADS)
             _PAYLOADS.clear()
             _FRAMES.clear()
+            load_scenes()
         else:
-            keys = [k for k in _PAYLOADS if k[0] == dataset]
+            name = SCENES[dataset].name if dataset in SCENES else dataset
+            keys = [k for k in _PAYLOADS if k[0] == name]
             for k in keys:
                 del _PAYLOADS[k]
-            _FRAMES.pop(dataset, None)
+            _FRAMES.pop(name, None)
             n = len(keys)
-    return {"reloaded": dataset or "all", "dropped_payloads": n}
+    return {"reloaded": dataset or "all", "dropped_payloads": n,
+            "scenes": sorted(k for k, s in SCENES.items() if k == s.name)}
 
 
 app.mount(
@@ -948,9 +927,15 @@ app.mount(
 if __name__ == "__main__":
     import uvicorn
 
-    print(f"🌍 [Server] Датасет за замовчуванням: {DEFAULT_DATASET}")
-    for name, paths in DATASET_PATHS.items():
-        print(f"   {name}: cloud={paths['cloud']}")
-        print(f"   {' ' * len(name)}  splat={paths['splat']}")
-    _warn_dataset_path_collisions()
+    print(f"🌍 [Server] Каталог: {PROJECTS_ROOT}; legacy: {LEGACY_DATA_DIR}")
+    print(f"   Датасет за замовчуванням: {DEFAULT_DATASET}")
+    for name, src in SCENES.items():
+        if name != src.name:
+            continue
+        where = f"{src.kind}" + (f", run {src.run}" if src.run else "")
+        metric = "metric" if src.metric else "relative units"
+        aliases = f"  (alias: {', '.join(src.aliases)})" if src.aliases else ""
+        print(f"   {name}: {where}, {metric}{aliases}")
+        print(f"   {' ' * len(name)}  cloud={src.cloud}")
+        print(f"   {' ' * len(name)}  splat={src.splat}")
     uvicorn.run(app, host="127.0.0.1", port=8000)

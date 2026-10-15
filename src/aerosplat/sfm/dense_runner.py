@@ -32,6 +32,12 @@ def parse_args(argv=None):
         default=os.environ.get("COLMAP_BIN", "colmap"),
         help="Path to colmap executable (default: $COLMAP_BIN or 'colmap' on PATH)",
     )
+    parser.add_argument("--images-dir", default=None,
+                        help="Frames the sparse model was built from (default: data/raw_images_<dataset>)")
+    parser.add_argument("--sparse-dir", default=None,
+                        help="Sparse model (default: data/colmap_output_<dataset>/sparse/0)")
+    parser.add_argument("--dense-dir", default=None,
+                        help="MVS workspace (default: data/colmap_output_<dataset>/dense)")
     parser.add_argument("--gpu-index", default="0", help="GPU index for patch match stereo")
     parser.add_argument(
         "--max-image-size",
@@ -59,10 +65,11 @@ def parse_args(argv=None):
 def run_colmap_dense(argv=None):
     args = parse_args(argv)
 
-    project_dir = str(PROJECT_DIR)
-    images_dir = os.path.join(project_dir, "data", f"raw_images_{args.dataset}")
-    sparse_dir = os.path.join(project_dir, "data", f"colmap_output_{args.dataset}", "sparse", "0")
-    dense_dir = os.path.join(project_dir, "data", f"colmap_output_{args.dataset}", "dense")
+    data_dir = os.path.join(str(PROJECT_DIR), "data")
+    images_dir = args.images_dir or os.path.join(data_dir, f"raw_images_{args.dataset}")
+    sparse_dir = args.sparse_dir or os.path.join(
+        data_dir, f"colmap_output_{args.dataset}", "sparse", "0")
+    dense_dir = args.dense_dir or os.path.join(data_dir, f"colmap_output_{args.dataset}", "dense")
     fused_ply_path = os.path.join(dense_dir, "fused.ply")
 
     # --- Pre-flight validation: fail fast with a clear message instead of a

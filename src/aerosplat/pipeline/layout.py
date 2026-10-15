@@ -1,12 +1,26 @@
-"""All filesystem paths of one run, derived from the config in one place."""
+"""All filesystem paths of one run, derived in one place.
+
+`RunLayout` is a *view*: stages only ever see its fields, never where they
+come from. Two sources exist while the migration to the project tree is in
+progress (ADR-0006):
+
+* `for_site_run` -- the project tree: inputs from a Site's capture, outputs
+  under `sites/<site>/epochs/<epoch>/runs/<run_id>/` (aerosplat.store.paths);
+* `from_config` -- the legacy `data/<dataset>` naming (`aerosplat run --dataset`).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Optional
 
+from aerosplat.geo.crs import GeoPoint
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
+
+if TYPE_CHECKING:
+    from aerosplat.store.models import Capture, Site
+    from aerosplat.store.paths import SiteDirs
 
 
 def abs_path(p: str | Path, root: Path = PROJECT_DIR) -> Path:
@@ -36,13 +50,28 @@ class RunLayout:
     geo_registration_json: Path
     run_dir: Path
     manifest_path: Path
+    reports_dir: Path
     metrics_json: Path
     report_html: Path
+    registration_report: Path
     log_path: Path
+    # Earth Studio frames are matched as '<frame_prefix>_<n>.<ext>'.
+    frame_prefix: str
+    # Site ENU origin; None only for legacy runs (origin = mean of the frames).
+    origin: Optional[GeoPoint] = None
+    site_key: Optional[str] = None
+    epoch_id: Optional[str] = None
+    run_id: Optional[str] = None
+    capture_id: Optional[str] = None
+
+    @property
+    def is_site_run(self) -> bool:
+        return self.site_key is not None
 
     @classmethod
     def from_config(cls, cfg: dict[str, Any], data_dir: Path = DATA_DIR,
                     project_dir: Path = PROJECT_DIR) -> "RunLayout":
+        """Legacy layout: data/raw_images_<ds>, data/colmap_output_<ds>, data/<ds>_*.pt."""
         ds = cfg["dataset"]
         colmap_out = data_dir / f"colmap_output_{ds}"
         sparse = colmap_out / "sparse" / "0"
@@ -50,12 +79,14 @@ class RunLayout:
         dense_pt = data_dir / f"{ds}_dense.pt"
         cloud_pt = data_dir / f"{ds}_cloud.pt"
         run_dir = data_dir / ds / "run"
+        # NOT under colmap_out: sfm --fresh wipes that directory, and known
+        # poses are ground-truth INPUT, not regenerable COLMAP output.
+        known_poses = data_dir / ds / "sparse_known"
         return cls(
             dataset=ds,
             data_dir=data_dir,
             project_dir=project_dir,
             footage=abs_path(cfg["footage_dir"], project_dir),
-            # sfm_runner / dense_runner hard-code this naming scheme.
             geotagged=data_dir / f"raw_images_{ds}",
             colmap_out=colmap_out,
             sparse=sparse,
@@ -69,13 +100,61 @@ class RunLayout:
             cloud_in=dense_pt if cfg["cloud_source"] == "dense" else cloud_pt,
             json_path=(abs_path(cfg["json_path"], project_dir) if cfg["json_path"]
                        else data_dir / ds / f"{ds}.json"),
-            # NOT under colmap_out: sfm --fresh wipes that directory, and known
-            # poses are ground-truth INPUT, not regenerable COLMAP output.
-            known_poses_dir=data_dir / ds / "sparse_known",
-            geo_registration_json=data_dir / ds / f"{ds}_geo_registration.json",
+            known_poses_dir=known_poses,
+            geo_registration_json=known_poses / "geo_registration.json",
             run_dir=run_dir,
             manifest_path=run_dir / "manifest.json",
+            reports_dir=run_dir,
             metrics_json=run_dir / "metrics.json",
             report_html=run_dir / "report.html",
+            registration_report=known_poses / "registration_report.json",
             log_path=run_dir / "run.log",
+            frame_prefix=ds,
+        )
+
+    @classmethod
+    def for_site_run(cls, cfg: dict[str, Any], *, site: "Site", site_dirs: "SiteDirs",
+                     capture: "Capture", epoch_id: str, run_id: str,
+                     project_dir: Path = PROJECT_DIR) -> "RunLayout":
+        """Project-tree layout: one capture of `site` in, one run directory out."""
+        cdirs = site_dirs.capture(capture.id)
+        run = site_dirs.run(epoch_id, run_id)
+        colmap_out = run.sfm
+        sparse = colmap_out / "sparse" / "0"
+        dense_pt = run.gs / "dense.pt"
+        cloud_pt = run.gs / "cloud.pt"
+        json_path = (cdirs.root / capture.metadata_file if capture.metadata_file
+                     else cdirs.source / "earthstudio.json")
+        return cls(
+            dataset=site.key,
+            data_dir=site_dirs.root,
+            project_dir=project_dir,
+            footage=cdirs.images,
+            geotagged=run.images,
+            colmap_out=colmap_out,
+            sparse=sparse,
+            dense=run.mvs,
+            fused_ply=run.mvs / "fused.ply",
+            points3d=sparse / "points3D.bin",
+            cloud_pt=cloud_pt,
+            dense_pt=dense_pt,
+            splat_pt=run.gs / "splat.pt",
+            geo_txt=run.root / "images_geo.txt",
+            cloud_in=dense_pt if cfg["cloud_source"] == "dense" else cloud_pt,
+            json_path=json_path,
+            known_poses_dir=run.known_poses,
+            geo_registration_json=run.known_poses / "geo_registration.json",
+            run_dir=run.root,
+            manifest_path=run.manifest,
+            reports_dir=run.reports,
+            metrics_json=run.reports / "metrics.json",
+            report_html=run.reports / "report.html",
+            registration_report=run.registration_report,
+            log_path=run.log,
+            frame_prefix=capture.frame_prefix or site.id,
+            origin=site.origin,
+            site_key=site.key,
+            epoch_id=epoch_id,
+            run_id=run_id,
+            capture_id=capture.id,
         )

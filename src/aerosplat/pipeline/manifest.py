@@ -19,7 +19,7 @@ def fingerprint(values: dict[str, Any]) -> str:
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
-def _git_commit(cwd: Path) -> str | None:
+def git_commit(cwd: Path) -> str | None:
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=cwd,
                              capture_output=True, text=True, timeout=5)
@@ -53,12 +53,14 @@ class Manifest:
                 pass
         return cls(path, {"schema": SCHEMA, "stages": {}})
 
-    def start_run(self, dataset: str, cfg: dict[str, Any], project_dir: Path) -> None:
+    def start_run(self, dataset: str, cfg: dict[str, Any], project_dir: Path,
+                  extra: dict[str, Any] | None = None) -> None:
         from aerosplat import __version__
+        self.data.update(extra or {})
         self.data.update({
             "dataset": dataset,
             "aerosplat_version": __version__,
-            "git_commit": _git_commit(project_dir),
+            "git_commit": git_commit(project_dir),
             "python": sys.version.split()[0],
             "config": cfg,
             "updated": time.strftime("%Y-%m-%dT%H:%M:%S%z"),

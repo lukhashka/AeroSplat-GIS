@@ -5,11 +5,26 @@ Converts an Earth Studio 3D-tracking-data export (per-frame position,
 rotation, geodetic coordinate, FOV) into a COLMAP known-pose seed:
 
   - cameras.txt   real intrinsics (SIMPLE_PINHOLE), derived from fovVertical
-  - images.txt    known camera poses (QW QX QY QZ TX TY TZ) in a local ENU
+  - images.txt    known camera poses (QW QX QY QZ TX TY TZ) in the Site ENU
                    frame -- one entry per REAL footage file, matched by name
   - points3D.txt  empty (populate via point_triangulator)
   - geo_registration.json   ENU origin + per-image lat/lon/alt, for
                    downstream georeferencing of the final reconstruction
+  - registration_report.json   sphere -> WGS84 transition error (see below)
+
+EARTH MODEL (ADR-0006): Earth Studio exports positions on a sphere (see the
+confirmed model below). This adapter is the only place that sphere exists:
+`coordinate.{latitude,longitude,altitude}` is re-read as WGS84 (EPSG:4979,
+altitude taken as ellipsoidal height -- unverified, recorded in the report)
+and projected into the Site ENU frame through pyproj (aerosplat.geo.crs).
+Orientations carry over unchanged: the local ENU basis at given angles is the
+same on the sphere and on the ellipsoid, so the camera-to-ECEF rotation is
+identical in both models. How far the two models disagree in position is
+measured on every conversion and written to registration_report.json.
+
+The ENU origin is the Site's (fixed when the Site is created, `--origin`).
+Without one the legacy behaviour applies -- mean lat/lon/alt of the frames --
+which moves with every new capture and is kept only for `--dataset` runs.
 
 Also copies (or symlinks) the matched footage into the `raw_images_<dataset>`
 convention sfm_runner.py / dense_runner.py expect, and -- if piexif is
@@ -80,7 +95,19 @@ import re
 import shutil
 import numpy as np
 
+from aerosplat.geo.crs import EnuFrame, GeoPoint, ecef_to_enu_rotation
+
 EARTH_R = 6371008.8  # IUGG mean radius, meters -- confirmed model, see header
+
+# Half-size of the square used to quote the sphere -> WGS84 transition error
+# "per 1 km^2 site" independently of where this capture's frames happen to be.
+SITE_HALF_SIZE_M = 500.0
+
+# Earth Studio's `position` must point along the spherical model of
+# `coordinate` (same angles); beyond this the export convention changed.
+# Its radius is NOT checked against EARTH_R + altitude: real exports sit a
+# constant ~1.2 m further out (dataset_v6), which only the legacy frame used.
+POSITION_MODEL_TOL_M = 1.0
 
 # Identity -- see header note #4. Earth Studio's local camera axes, as
 # produced by the rotation composition above, already match COLMAP's
@@ -174,8 +201,111 @@ def load_frames(json_path):
     return data, data["cameraFrames"]
 
 
+def frame_coordinates(frames):
+    """(lat, lon, alt) arrays of an Earth Studio export's cameraFrames."""
+    lat = np.array([fr["coordinate"]["latitude"] for fr in frames], dtype=np.float64)
+    lon = np.array([fr["coordinate"]["longitude"] for fr in frames], dtype=np.float64)
+    alt = np.array([fr["coordinate"]["altitude"] for fr in frames], dtype=np.float64)
+    return lat, lon, alt
+
+
+def legacy_mean_origin(frames) -> GeoPoint:
+    """The pre-Site ENU origin: mean lat/lon/alt of the frames (moves per capture)."""
+    lat, lon, alt = frame_coordinates(frames)
+    return GeoPoint(lat=float(lat.mean()), lon=float(lon.mean()), h=float(alt.mean()))
+
+
+def sphere_to_ecef(lat, lon, alt):
+    """Earth Studio's geocentric model: lat/lon as angles on a sphere of radius EARTH_R."""
+    la, lo = np.radians(np.asarray(lat, dtype=np.float64)), np.radians(np.asarray(lon, dtype=np.float64))
+    r = EARTH_R + np.asarray(alt, dtype=np.float64)
+    return np.stack([r * np.cos(la) * np.cos(lo), r * np.cos(la) * np.sin(lo), r * np.sin(la)],
+                    axis=-1)
+
+
+def _sphere_enu(origin: GeoPoint, ecef_sphere):
+    """ENU on the sphere around `origin` -- the legacy (pre-WGS84) frame."""
+    R = ecef_to_enu_rotation(origin.lat, origin.lon)
+    return (ecef_sphere - sphere_to_ecef(origin.lat, origin.lon, origin.h)) @ R.T
+
+
+def _delta_stats(delta):
+    horiz = np.linalg.norm(delta[:, :2], axis=1)
+    return {
+        "n": int(delta.shape[0]),
+        "max_m": float(np.linalg.norm(delta, axis=1).max()),
+        "rms_m": float(np.sqrt((delta ** 2).sum(axis=1).mean())),
+        "max_horizontal_m": float(horiz.max()),
+        "max_vertical_m": float(np.abs(delta[:, 2]).max()),
+    }
+
+
+def transition_report(frame: EnuFrame, enu_wgs84, position_ecef_sphere, lat, lon, alt,
+                      origin_source: str):
+    """How much the sphere -> WGS84 switch moves things, in Site ENU metres.
+
+    * sphere_to_wgs84.frames: each camera under WGS84 vs. under the sphere
+      model of the same lat/lon/alt (same origin angles) -- the model change;
+    * sphere_to_wgs84.site_1km2: the same on a grid over a 1 km x 1 km square
+      around the origin, comparable between captures;
+    * legacy_shift: WGS84 positions vs. what the pre-WGS84 converter produced
+      from `position` with this origin -- how far an old run's frame is off;
+    * export_check: `position` vs. the sphere model of `coordinate`, split into
+      an angular residual (guards the confirmed convention) and a radial offset.
+    """
+    origin = frame.origin
+    sphere_coord = sphere_to_ecef(lat, lon, alt)
+    frames_delta = enu_wgs84 - _sphere_enu(origin, sphere_coord)
+    legacy_delta = enu_wgs84 - _sphere_enu(origin, position_ecef_sphere)
+
+    g = np.linspace(-SITE_HALF_SIZE_M, SITE_HALF_SIZE_M, 5)
+    grid = np.array([[e, n, 0.0] for e in g for n in g])
+    glat, glon, gh = frame.to_geodetic(grid)
+    grid_delta = grid - _sphere_enu(origin, sphere_to_ecef(glat, glon, gh))
+
+    r_pos = np.linalg.norm(position_ecef_sphere, axis=1)
+    unit_coord = sphere_coord / np.linalg.norm(sphere_coord, axis=1, keepdims=True)
+    angular = np.linalg.norm(position_ecef_sphere / r_pos[:, None] - unit_coord, axis=1) * r_pos
+    radial = r_pos - (EARTH_R + alt)
+    return {
+        "schema": 1,
+        "adapter": "earthstudio",
+        "earth_model": {
+            "input": f"sphere R={EARTH_R} m (Earth Studio export)",
+            "output": "WGS84 (EPSG:4979) -> Site ENU (pyproj topocentric)",
+        },
+        "altitude_reference": "Earth Studio altitude taken as WGS84 ellipsoidal height (unverified)",
+        "enu_origin": origin.model_dump(),
+        "origin_source": origin_source,
+        "export_check": {
+            "angular_residual_max_m": float(angular.max()),
+            "tolerance_m": POSITION_MODEL_TOL_M,
+            "radial_offset_m": {"mean": float(radial.mean()),
+                                "spread": float(radial.max() - radial.min())},
+        },
+        "sphere_to_wgs84": {
+            "frames": _delta_stats(frames_delta),
+            "site_1km2": dict(_delta_stats(grid_delta), half_size_m=SITE_HALF_SIZE_M),
+        },
+        "legacy_shift": _delta_stats(legacy_delta),
+    }
+
+
+def report_for_json(json_path, origin: GeoPoint, origin_source: str = "site"):
+    """The transition report alone (no COLMAP files), e.g. for an already-built run."""
+    _, frames = load_frames(json_path)
+    lat, lon, alt = frame_coordinates(frames)
+    pos_sphere = np.array([[fr["position"]["x"], fr["position"]["y"], fr["position"]["z"]]
+                           for fr in frames])
+    enu = EnuFrame(origin)
+    return transition_report(enu, enu.from_geodetic(lat, lon, alt), pos_sphere,
+                             lat, lon, alt, origin_source)
+
+
 def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
-            copy_images=True, write_exif=True):
+            copy_images=True, write_exif=True, origin: GeoPoint | None = None,
+            report_path=None):
+    """Write the COLMAP known-pose seed; returns the transition report dict."""
     data, frames = load_frames(json_path)
     n = len(frames)
     width, height = data["width"], data["height"]
@@ -204,28 +334,38 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
               f"({image_names[0]} ... {image_names[-1]}). images.txt will "
               f"NOT match real files until you rename/copy footage to match.")
 
-    pos_ecef = np.array([[fr["position"]["x"], fr["position"]["y"], fr["position"]["z"]]
-                          for fr in frames])
+    # `position` is the sphere model of `coordinate` (header note #1); it is
+    # only used to measure the sphere -> WGS84 transition, never as output.
+    pos_sphere = np.array([[fr["position"]["x"], fr["position"]["y"], fr["position"]["z"]]
+                           for fr in frames])
     rot_deg = np.array([[fr["rotation"]["x"], fr["rotation"]["y"], fr["rotation"]["z"]]
                          for fr in frames])
-    lat = np.array([fr["coordinate"]["latitude"] for fr in frames])
-    lon = np.array([fr["coordinate"]["longitude"] for fr in frames])
-    alt = np.array([fr["coordinate"]["altitude"] for fr in frames])
+    lat, lon, alt = frame_coordinates(frames)
 
-    # ---- ENU frame, origin at mean lat/lon/alt ----
-    lat0, lon0, alt0 = lat.mean(), lon.mean(), alt.mean()
-    lat0_r, lon0_r = np.radians(lat0), np.radians(lon0)
-    origin_ecef = np.array([
-        (EARTH_R + alt0) * np.cos(lat0_r) * np.cos(lon0_r),
-        (EARTH_R + alt0) * np.cos(lat0_r) * np.sin(lon0_r),
-        (EARTH_R + alt0) * np.sin(lat0_r),
-    ])
-    R_e2enu = np.array([
-        [-np.sin(lon0_r), np.cos(lon0_r), 0],
-        [-np.sin(lat0_r) * np.cos(lon0_r), -np.sin(lat0_r) * np.sin(lon0_r), np.cos(lat0_r)],
-        [np.cos(lat0_r) * np.cos(lon0_r), np.cos(lat0_r) * np.sin(lon0_r), np.sin(lat0_r)],
-    ])
-    pos_enu = (pos_ecef - origin_ecef) @ R_e2enu.T
+    # ---- Site ENU frame on WGS84, origin fixed by the Site ----
+    if origin is None:
+        origin = legacy_mean_origin(frames)
+        origin_source = "frames_mean (legacy)"
+        print("WARNING: no Site origin given -- ENU origin = mean of this capture's "
+              "frames (legacy; it moves with every capture). Use `aerosplat run --site`.")
+    else:
+        origin_source = "site"
+    lat0, lon0, alt0 = origin.lat, origin.lon, origin.h
+    enu = EnuFrame(origin)
+    R_e2enu = enu.rotation
+    pos_enu = enu.from_geodetic(lat, lon, alt)
+
+    report = transition_report(enu, pos_enu, pos_sphere, lat, lon, alt, origin_source)
+    check = report["export_check"]
+    if check["angular_residual_max_m"] > POSITION_MODEL_TOL_M:
+        print(f"⚠️  Earth Studio `position` points away from the spherical model of "
+              f"`coordinate` by up to {check['angular_residual_max_m']:.2f} m -- the export "
+              f"convention may have changed; re-run tools/validate_convention.py before "
+              f"trusting these poses.")
+    if check["radial_offset_m"]["spread"] > POSITION_MODEL_TOL_M:
+        print(f"⚠️  Earth Studio `position` radius minus (R + altitude) varies by "
+              f"{check['radial_offset_m']['spread']:.2f} m across frames -- altitude "
+              f"semantics differ per frame; check the export.")
 
     # ---- Real intrinsics from fovVertical ----
     f_px = (height / 2) / np.tan(np.radians(fov_v_deg) / 2)
@@ -247,7 +387,7 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
     lines.append("# Image list with two lines of data per image:\n")
     lines.append("#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n")
     lines.append("#   POINTS2D[] (empty here -- filled by feature extraction / matching)\n")
-    lines.append("# Poses are KNOWN (from Earth Studio ground truth), local ENU frame.\n")
+    lines.append("# Poses are KNOWN (from Earth Studio ground truth), Site ENU frame (WGS84).\n")
     lines.append(f"# ENU origin: lat={lat0:.8f} lon={lon0:.8f} alt={alt0:.3f}\n")
 
     geo_records = []
@@ -281,8 +421,9 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
         f.write("# Empty -- populate via point_triangulator against these known poses.\n")
 
     geo = {
-        "earth_model": "spherical, R=6371008.8m (IUGG mean radius) -- see module docstring",
+        "earth_model": "WGS84 (EPSG:4979); Earth Studio sphere converted at ingest",
         "enu_origin": {"latitude": lat0, "longitude": lon0, "altitude": alt0},
+        "origin_source": origin_source,
         "focal_length_px": f_px,
         "fov_vertical_deg": fov_v_deg,
         "principal_point": [cx, cy],
@@ -292,11 +433,19 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
     with open(os.path.join(out_dir, "geo_registration.json"), "w") as f:
         json.dump(geo, f, indent=2)
 
+    report_path = report_path or os.path.join(out_dir, "registration_report.json")
+    os.makedirs(os.path.dirname(os.path.abspath(report_path)), exist_ok=True)
+    with open(report_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    tr = report["sphere_to_wgs84"]
     print(f"Wrote {n} known poses to {out_dir}/")
     print(f"  focal length: {f_px:.2f}px (from fovVertical={fov_v_deg} deg)")
-    print(f"  ENU origin: lat={lat0:.6f} lon={lon0:.6f} alt={alt0:.2f}")
+    print(f"  ENU origin ({origin_source}): lat={lat0:.6f} lon={lon0:.6f} alt={alt0:.2f}")
     print(f"  orbit radius (ENU horiz extent): "
           f"~{np.abs(pos_enu[:, :2]).max():.1f} m")
+    print(f"  sphere -> WGS84 shift: frames max {tr['frames']['max_m']:.3f} m, "
+          f"1 km^2 site max {tr['site_1km2']['max_m']:.3f} m  ({report_path})")
 
     # ---- Copy footage into raw_images_<dataset>, optionally with real GPS EXIF ----
     if footage_dir and images_out_dir and copy_images:
@@ -339,6 +488,7 @@ def convert(json_path, dataset, out_dir, footage_dir=None, images_out_dir=None,
               "skipped copying. Point sfm_runner.py directly at "
               "--footage-dir if that's intentional, otherwise set "
               "--images-out-dir to the raw_images_<dataset> convention.")
+    return report
 
 
 def _write_gps_exif(path, lat, lon, alt):
@@ -387,10 +537,17 @@ def main(argv=None) -> int:
                          "convention sfm_runner.py/dense_runner.py expect).")
     ap.add_argument("--no-copy-images", dest="copy_images", action="store_false")
     ap.add_argument("--no-exif", dest="write_exif", action="store_false")
+    ap.add_argument("--origin", type=GeoPoint.parse, default=None, metavar="LAT,LON,H",
+                    help="Site ENU origin (WGS84, ellipsoidal height). Omit only for "
+                         "legacy --dataset runs: falls back to the mean of the frames.")
+    ap.add_argument("--report", default=None,
+                    help="Where to write registration_report.json "
+                         "(default: <out-dir>/registration_report.json)")
     args = ap.parse_args(argv)
     convert(args.json_path, args.dataset, args.out_dir,
             footage_dir=args.footage_dir, images_out_dir=args.images_out_dir,
-            copy_images=args.copy_images, write_exif=args.write_exif)
+            copy_images=args.copy_images, write_exif=args.write_exif,
+            origin=args.origin, report_path=args.report)
     return 0
 
 

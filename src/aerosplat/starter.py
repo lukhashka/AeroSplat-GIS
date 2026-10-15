@@ -6,8 +6,10 @@ aerosplat.starter — єдина точка входу в пайплайн AeroS
 footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat
 
 Приклади:
-    aerosplat run                          # весь пайплайн, дефолтний датасет
-    aerosplat run --dataset dataset_v6
+    aerosplat run --site default/dataset_v6   # ділянка з каталогу (ADR-0006): новий run
+    aerosplat run --site dataset_v6 --resume  # продовжити останній run ділянки
+    aerosplat run                          # legacy: data/<ds>, дефолтний датасет
+    aerosplat run --dataset dataset_v6     # legacy: data/<ds> (доки міграція не завершена)
     aerosplat run --from sfm               # почати з SfM (кадри вже геотеговані)
     aerosplat run --only train
     aerosplat run --stages exif,sfm,dense
@@ -45,7 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--config", type=Path,
                     help="JSON з будь-якими ключами CONFIG (перекриває дефолти)")
-    ap.add_argument("--dataset")
+    ap.add_argument("--dataset", help="legacy layout data/<dataset> (без Site)")
+    ap.add_argument("--site", help="ділянка з каталогу: project/site або id, якщо він унікальний")
+    ap.add_argument("--epoch", default="baseline", help="епоха ділянки (з --site)")
+    ap.add_argument("--capture", help="захоплення ділянки (з --site; потрібне, якщо їх кілька)")
+    ap.add_argument("--run-id", help="id run-а (з --site); за замовчуванням новий, з часу")
+    ap.add_argument("--projects-root", type=Path,
+                    help="корінь дерева проєктів (за замовчуванням $AEROSPLAT_PROJECTS або projects/)")
     ap.add_argument("--camera-source", choices=["auto", "synthetic", "earthstudio_json"])
     ap.add_argument("--footage-dir")
     ap.add_argument("--telemetry-csv")
@@ -145,25 +153,56 @@ def main(argv=None) -> int:
     log = get_logger()
     cfg = resolve_config(args)
     stages = resolve_stages(args)
-    if cfg["camera_source"] == "auto":
-        js = (abs_path(cfg["json_path"]) if cfg["json_path"]
-              else DATA_DIR / cfg["dataset"] / f"{cfg['dataset']}.json")
-        cfg["camera_source"] = "earthstudio_json" if js.is_file() else "synthetic"
-        log.info(f"camera_source=auto → {cfg['camera_source']}"
-                 f" ({'знайдено' if js.is_file() else 'немає'} {js})")
+    if args.site and args.dataset:
+        raise SystemExit("❌ --site і --dataset взаємовиключні: --dataset — це legacy layout data/<ds>")
     if cfg["recenter"] and "train" in stages:
         raise SystemExit("❌ recenter=true разом зі стадією train заборонено: "
                          "хмара зсувається відносно поз COLMAP і тренування тихо ламається. "
                          "Запускай train без recenter (центрування робить сервер).")
-    layout = RunLayout.from_config(cfg)
+
+    site_run = None
+    if args.site:
+        from aerosplat.pipeline.site_run import SiteRun
+        from aerosplat.store.catalog import CatalogError
+
+        try:
+            site_run = SiteRun.prepare(cfg, site_ref=args.site, epoch_id=args.epoch,
+                                       capture_id=args.capture, run_id=args.run_id,
+                                       resume=args.resume, projects_root=args.projects_root)
+        except CatalogError as e:
+            raise SystemExit(f"❌ {e}") from None
+        layout = site_run.layout
+        log.info(f"camera_source → {cfg['camera_source']} (захоплення {site_run.capture.id})")
+    else:
+        if cfg["camera_source"] == "auto":
+            js = (abs_path(cfg["json_path"]) if cfg["json_path"]
+                  else DATA_DIR / cfg["dataset"] / f"{cfg['dataset']}.json")
+            cfg["camera_source"] = "earthstudio_json" if js.is_file() else "synthetic"
+            log.info(f"camera_source=auto → {cfg['camera_source']}"
+                     f" ({'знайдено' if js.is_file() else 'немає'} {js})")
+        layout = RunLayout.from_config(cfg)
 
     preflight(cfg, layout, stages)
 
     t0 = time.perf_counter()
+    if site_run is not None and not args.dry_run:
+        site_run.begin(cfg)
     try:
         run_stages(cfg, layout, stages, dry_run=args.dry_run, resume=args.resume)
     except StageError as e:
+        if site_run is not None and not args.dry_run:
+            site_run.end(cfg, ok=False)
         raise SystemExit(f"\n❌ {e}") from None
+    except BaseException:
+        if site_run is not None and not args.dry_run:
+            site_run.end(cfg, ok=False)
+        raise
+    else:
+        if site_run is not None and not args.dry_run:
+            site_run.end(cfg, ok=True)
+    finally:
+        if site_run is not None:
+            site_run.close()
 
     if args.dry_run:
         log.info("\n(dry-run — нічого не виконано)")
@@ -187,12 +226,15 @@ def cli() -> int:
     if cmd == "doctor":
         from aerosplat import doctor
         return doctor.main(rest) or 0
+    if cmd == "catalog":
+        from aerosplat.store import cli as catalog_cli
+        return catalog_cli.main(rest)
     if cmd == "serve":
         import runpy
         sys.argv = ["aerosplat serve", *rest]
         runpy.run_module("aerosplat.server.main", run_name="__main__")
         return 0
-    raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve")
+    raise SystemExit(f"Невідома команда '{cmd}'. Доступні: run, doctor, serve, catalog")
 
 
 

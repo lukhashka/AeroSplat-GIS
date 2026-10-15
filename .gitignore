@@ -27,6 +27,8 @@ data/*
 *.xlsx
 colmap_output_*/
 runs/
+# Project tree + SQLite catalog (ADR-0006) — data, never commit
+/projects/
 
 # Third-party CUDA rasterizer (Inria, non-commercial licence) — built locally
 diff-gaussian-rasterization/

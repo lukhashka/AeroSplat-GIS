@@ -1,4 +1,4 @@
-# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-1-foundation`, стан на 2026-10-15)
+# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-1-foundation`, стан на 2026-10-15, + S1)
 
 > Документ описує **фактичний** стан коду, а не README. Там, де README
 > розходиться з кодом, правдою вважається код (див. §8).
@@ -21,11 +21,18 @@
 
 ## 2. Загальна схема
 
+Етап S1 ([TARGET_ARCHITECTURE §13](TARGET_ARCHITECTURE.md#13-шлях-від-поточного-стану),
+[ADR-0006](decisions/0006-project-site-epoch-capture.md)) додав каталог
+Project → Site → Epoch → Capture і дерево `projects/` (§3.9). Схема нижче
+показує стадії; звідки вони беруть і куди кладуть файли, визначає
+`RunLayout`: або run ділянки (`aerosplat run --site`), або legacy `data/<ds>`
+(`aerosplat run --dataset`, лишається до завершення міграції).
+
 ```mermaid
 flowchart TD
-    subgraph INPUT["Вхідні дані (data/<ds>/)"]
-        F[footage/*.jpeg]
-        J[<ds>.json<br/>Earth Studio 3D tracking]
+    subgraph INPUT["Вхідні дані: captures/<id>/ ділянки (або legacy data/<ds>/)"]
+        F[images/*.jpeg]
+        J[source/<ds>.json<br/>Earth Studio 3D tracking]
         CSV[flight_telemetry.csv<br/>опційно]
     end
 
@@ -44,19 +51,20 @@ flowchart TD
     F --> G
     F --> E
     CSV -.-> E
-    G -->|sparse_known/ + raw_images_<ds>| S
-    E -->|raw_images_<ds> з GPS EXIF| S
-    S -->|colmap_output_<ds>/sparse/0| D
-    D -->|dense/fused.ply| P
+    G -->|known_poses/ (Site ENU) + images/| S
+    E -->|images/ з GPS EXIF| S
+    S -->|sfm/sparse/0| D
+    D -->|mvs/fused.ply| P
     S -->|points3D.bin| P
-    P -->|data/<ds>_dense.pt / _cloud.pt| T
+    P -->|gs/dense.pt / cloud.pt| T
     S -->|пози камер| T
-    T -->|data/<ds>_splat.pt| SRV
+    T -->|gs/splat.pt| RUN
     T --> EV
-    EV -->|run/metrics.json, report.html| RUN[(data/<ds>/run/)]
+    EV -->|reports/metrics.json, report.html| RUN[(epochs/<e>/runs/<run_id>/<br/>+ запис у catalog.db)]
+    RUN --> SRV
 
     subgraph SRV["aerosplat/server/main.py — FastAPI"]
-        API["/api/v1/scene-meta<br/>/api/v1/spatial-chunk<br/>/api/v1/status<br/>/api/v1/reload"]
+        API["/api/v1/scene-meta (+ metric)<br/>/api/v1/spatial-chunk<br/>/api/v1/status<br/>/api/v1/reload"]
     end
 
     SRV -->|binary Float32 (SPLAT16 / dense6)| WEB
@@ -81,10 +89,19 @@ flowchart TD
   `main(argv)` свого модуля **в тому ж процесі** (скрипти лишаються придатними
   для окремого запуску), тож збій дає звичайний traceback. Конфіг — валідований
   `RunConfig` (`aerosplat/config.py`), перекривається `--config` та `--set KEY=VALUE`.
-* `RunLayout` (`aerosplat/pipeline/layout.py`) — єдине місце, де виводяться шляхи
-  з імені датасету (`data/raw_images_<ds>`, `data/colmap_output_<ds>`, `data/<ds>_*.pt`).
-* `data/<ds>/run/manifest.json` + `run.log`: конфіг, версія/коміт, статус, час,
-  входи/виходи кожної стадії. `--resume` пропускає стадії, що вже успішно пройшли
+* `RunLayout` (`aerosplat/pipeline/layout.py`) — єдине місце, де виводяться шляхи,
+  і **вид** на одне з двох джерел; стадії бачать лише його поля:
+  * `RunLayout.for_site_run` — `aerosplat run --site <project>/<site> [--epoch baseline]
+    [--capture <id>] [--run-id <id>]`: кадри й JSON беруться із захоплення ділянки,
+    усі виходи йдуть у `sites/<site>/epochs/<epoch>/runs/<run_id>/` (§3.9), ENU-початок —
+    `Site.origin`. `aerosplat/pipeline/site_run.py` створює запис run-а в каталозі на
+    старті й закриває його (`ok`/`failed` + продукти) наприкінці; `--dry-run` у каталог
+    не пише; `--resume` без `--run-id` продовжує останній run епохи;
+  * `RunLayout.from_config` — legacy `aerosplat run --dataset <ds>`: `data/raw_images_<ds>`,
+    `data/colmap_output_<ds>`, `data/<ds>_*.pt`, як і раніше; ENU-початок = середнє кадрів.
+* `manifest.json` + `run.log` у директорії run-а (legacy: `data/<ds>/run/`): конфіг,
+  версія/коміт, статус, час, входи/виходи кожної стадії, для run ділянки — ще site, epoch,
+  run_id, capture, origin. `--resume` пропускає стадії, що вже успішно пройшли
   з тим самим конфігом і чиї виходи існують (зміна стадії інвалідує наступні).
 * Два режими джерела камер (`camera_source`):
   * `synthetic` — пози невідомі, GPS синтезується по колу (exif-стадія),
@@ -96,7 +113,8 @@ flowchart TD
 
 | Модуль | Роль |
 |---|---|
-| `aerosplat/geo/earthstudio_to_colmap.py` | Earth Studio JSON → `cameras.txt` / `images.txt` / `points3D.txt` у **локальній ENU-системі (метри)** + `geo_registration.json` (ENU-origin, lat/lon/alt кожного кадру). Модель Землі — сфера R=6371008.8 м (емпірично підтверджено). Копіює кадри в `raw_images_<ds>` і пише GPS EXIF. |
+| `aerosplat/geo/crs.py` | WGS84 (EPSG:4979) ↔ ECEF (EPSG:4978) ↔ ENU через **pyproj** (`+proj=topocentric`); `GeoPoint`, `EnuFrame` (фіксований початок), матриця ECEF→ENU для орієнтацій. |
+| `aerosplat/geo/earthstudio_to_colmap.py` | Earth Studio JSON → `cameras.txt` / `images.txt` / `points3D.txt` у **Site ENU (метри, WGS84)** + `geo_registration.json` (ENU-origin, lat/lon/alt кожного кадру) + `registration_report.json`. ENU-початок приходить ззовні (`--origin`, від Site); без нього — legacy середнє кадрів із попередженням. Сфера Earth Studio (R=6371008.8 м, конвенція осей підтверджена емпірично) живе лише тут: `coordinate` читається як WGS84, орієнтації переносяться без змін (базис ENU при тих самих кутах однаковий на сфері й еліпсоїді). Звіт містить похибку переходу сфера→WGS84 на кадрах і на сітці 1 км² та перевірку експорту (див. §4). Копіює кадри в директорію для SfM і пише GPS EXIF. |
 | `aerosplat/geo/exif_injector.py` | Синтетичний GPS EXIF (коло навколо точки або CSV-телеметрія), `piexif.insert` без перекодування JPEG, опційно файл для `model_aligner`. |
 | `scripts/auto_photo.py` | Легасі: знімає скріншоти Google Earth через `pyautogui` + пише CSV. |
 
@@ -107,7 +125,8 @@ flowchart TD
   Автоматично визначає префікс опцій (`SiftExtraction` vs `FeatureExtraction`)
   за `colmap -h`. Перенумеровує IMAGE_ID known-poses за реальною БД.
 * `dense_runner.py` — `image_undistorter` → `patch_match_stereo` → `stereo_fusion`.
-  Шляхи виводить **сам** із `--dataset` (не приймає `--images-dir/--output-dir`).
+  Шляхи приймає явно (`--images-dir/--sparse-dir/--dense-dir`, їх передає стадія з
+  `RunLayout`); без них виводить legacy-шляхи з `--dataset`.
 
 ### 3.4 Хмара точок — `aerosplat/io/{cloud_io,ply_parser,colmap_parser}.py`
 
@@ -144,10 +163,17 @@ flowchart TD
 
 ### 3.6 Сервер — `aerosplat/server/main.py` (FastAPI)
 
-* `DATASET_PATHS` — жорстко прописаний реєстр датасетів
-  (`zaporizhzhia`, `dataset_v6`, `mill19` → **усі три вказують на ті самі файли**).
+* Реєстр сцен читається з **каталогу** (`aerosplat/store/scenes.py`): одна сцена на
+  Site — його останній успішний run із продуктом `splat` або `cloud`. Ключ
+  `?dataset=<project>/<site>`; голий `<site>` — аліас, якщо id унікальний. Поки
+  міграція не завершена, додатково підхоплюються legacy-виходи `data/<ds>_{dense,cloud,splat}.pt`
+  (сайт каталогу з тим самим іменем має пріоритет). Жорстко прописаного `DATASET_PATHS`
+  і аліасів `zaporizhzhia`/`mill19` більше немає. `AEROSPLAT_PROJECTS` / `AEROSPLAT_DATA`
+  перевизначають корені, `AEROSPLAT_DATASET` — сцену за замовчуванням (інакше перша
+  сцена каталогу). Сервер **не створює** каталог, якщо його ще немає.
+  `POST /api/v1/reload` без параметрів перечитує каталог.
 * Лінива завантаження `.pt` + LRU-кеш payload-ів (бюджет 1.5 GB), ключ
-  `(dataset, mode, step)`.
+  `(dataset, mode, step)`, де `dataset` — канонічне ім'я (аліаси ділять кеш і ETag).
 * Робастний «кадр сцени»: медіанний центр + 99.5-перцентиль радіуса,
   відсікання викидів > 3×extent, один кадр на обидва режими.
 * Сервер **лише центрує** (трансляція), поворот осі Z-up→Y-up і масштаб
@@ -158,7 +184,11 @@ flowchart TD
     цілого рядка текстури шириною 2048;
   * **dense** — 6 float32 (`xyz, rgb`).
 * ETag + `Cache-Control`, `scene-meta` як JSON (центр, extent, scale,
-  layout, `metric` — поки завжди `None`/«unparsed»).
+  layout, `metric`). `metric` заповнений, якщо run геоприв'язаний (SfM із відомими
+  позами Earth Studio): `{units_to_metres: 1.0, crs: "ENU", datum: "WGS84 (EPSG:4979)",
+  origin: {lat, lon, h}, served_offset: "enu = xyz + center", earth_model,
+  frame_error_m, site, epoch, run}`. Для run-ів без відомих поз (synthetic GPS,
+  вільний SfM) — чесний `None`: одиниці відносні. Заглушки `load_metric_scale()` більше немає.
 * `legacy/server/mainG.py` — стара версія сервера.
 
 ### 3.7 В'ювер — `web/`
@@ -183,42 +213,111 @@ flowchart TD
   EXIF, БД COLMAP, sparse, dense, `.pt`).
 * `tools/`: `compare_poses.py`, `diagnose_pose_axis.py`, `validate_convention.py`,
   `inspector_matches.py` — дослідницькі скрипти; `legacy/checker/checker_ply.py` — разовий.
+  `doctor.py` поки знає лише legacy-шляхи `data/<ds>`.
+
+### 3.9 Каталог і дерево проєктів — `aerosplat/store/`, `aerosplat/ingest/` (S1, ADR-0006)
+
+* **Доменна модель** (`store/models.py`, pydantic): `Project`, `Site` (`origin: GeoPoint`
+  — WGS84, фіксований; `kind`, `bbox`, `taxonomy_packs`), `Epoch`, `Capture` (джерело,
+  ліцензія, атрибуція, `metadata_file`, `frame_prefix`), `Image` (sha256, розмір, пріор
+  пози WGS84 + σ, поза в Site ENU — після реєстрації, статус, privacy-прапорці), `Run`
+  (статус, `earth_model`, `georeferenced`, конфіг, коміт, продукти).
+* **Каталог** (`store/db.py`, `store/catalog.py`): SQLite `projects/catalog.db` через
+  SQLAlchemy 2 (лише Core-типи — під майбутній PostgreSQL/PostGIS); схема — Alembic
+  (`store/migrations/`, застосовується автоматично в `Catalog.open`; тест звіряє міграції
+  з моделями). `Catalog` повертає лише pydantic-моделі й поруч пише YAML-копії
+  (`project.yaml`, `site.yaml`, `epoch.yaml`, `capture.yaml`, `images.jsonl`).
+* **Фіксований початок Site** захищено тричі: API не має операції зміни; ORM-валідатор
+  (`OriginImmutableError`); SQLite-тригер `site_origin_immutable`. Повторне створення
+  ділянки з іншим origin поверх наявного `site.yaml` також відхиляється.
+* **Дерево** (`store/paths.py`, корінь `$AEROSPLAT_PROJECTS` або `<repo>/projects`, у `.gitignore`):
+
+  ```
+  projects/catalog.db
+  projects/<project>/project.yaml
+  projects/<project>/sites/<site>/
+  ├── site.yaml
+  ├── captures/<capture>/{capture.yaml, images/, images_private/, images.jsonl, source/}
+  ├── epochs/<epoch>/{epoch.yaml, runs/<run_id>/}
+  │     runs/<run_id>/{manifest.json, run.log, images/, known_poses/, sfm/, mvs/, gs/, reports/}
+  ├── authored/      # авторське, пайплайн сюди не пише
+  └── missions/
+  ```
+
+  `known_poses/` лежить поза `sfm/`, бо `sfm --fresh` видаляє `sfm/` повністю.
+* **Ingest** (`ingest/earthstudio.py`, `ingest/folder.py`): експорт Earth Studio (JSON +
+  кадри + `.esp`/`ImagerySources.txt`) або тека зображень → `Capture` + `Image[]`. Пози тут
+  **не** конвертуються: це робить стадія `geo` кожного run-а з origin ділянки, тож одне
+  захоплення служить усім run-ам і епохам.
+* **Міграція legacy** (`store/legacy.py`, CLI `tools/migrate_dataset.py` або
+  `aerosplat catalog migrate-dataset`): `data/<ds>` → Site `default/<ds>`; origin = ENU-початок
+  legacy run-а (`sparse_known/geo_registration.json`), тож перенесений run лишається в
+  системі ділянки з точністю до переходу сфера→WGS84; run позначається
+  `earth_model="sphere-legacy"`, а `reports/registration.json` фіксує його відхилення
+  (`legacy_shift`). Копіює за замовчуванням (`--move` — переносить), ідемпотентна,
+  `--dry-run` показує план; сторонні файли (`*.xlsx` тощо) лишаються в `data/<ds>`.
+* **CLI** `aerosplat catalog list | create-site | import-earthstudio | import-folder |
+  migrate-dataset | upgrade | revision`.
+
+`dataset_v6` перенесено: `default/dataset_v6`, origin (40.89104597, −74.21634205, 233.0),
+захоплення `earthstudio-dataset_v6` (31 кадр), run `20260930-215021-legacy`
+(`sphere-legacy`, геоприв'язаний, `frame_error_m` ≈ 1.53 м). Legacy-копія в `data/` лишилась.
 
 ---
 
 ## 4. Системи координат (ключове для GIS)
 
 ```
-Earth Studio position  ── сферичний геоцентр (R=6371008.8) ──┐
-                                                             ▼
-                         earthstudio_to_colmap: ENU (метри), origin = mean(lat,lon,alt)
-                                                             ▼
-COLMAP world (known-poses)  = ENU, метри  ← метрика ЗБЕРЕЖЕНА
+Earth Studio coordinate (lat, lon, alt)  ── читається як WGS84 (EPSG:4979) ──┐
+Earth Studio position (сфера R=6371008.8) ── лише для звіту/перевірки ────────┤
+                                                                             ▼
+             earthstudio_to_colmap + aerosplat.geo.crs (pyproj topocentric):
+             Site ENU (метри), origin = Site.origin — фіксований при створенні Site
+                                                                             ▼
+COLMAP world (known-poses)  = Site ENU, метри  ← метрика ЗБЕРЕЖЕНА
 COLMAP world (synthetic)    = довільна подібність, одиниці НЕ метри
-                                                             ▼
+                                                                             ▼
 gs_trainer / .pt            = та сама система, що COLMAP (Z-up)
-                                                             ▼
-server                      = мінус median-центр (float32-безпечно)
-                                                             ▼
+                                                                             ▼
+server                      = мінус median-центр (float32-безпечно); scene-meta.metric:
+                              enu = xyz + center, origin (WGS84) → будь-яка точка в lat/lon/h
+                                                                             ▼
 viewer sceneRoot            = Rx(+90°) · (100 / extent)   → Y-up, радіус 100
 ```
 
-Висновок: у режимі `earthstudio_json` сцена вже **метрична і
-геоприв'язана** (ENU-origin лежить у `data/<ds>/sparse_known/geo_registration.json`),
-але ця інформація **не доходить** до сервера і в'ювера.
+Метрика й геоприв'язка тепер **доходять** до сервера (`scene-meta.metric`); в'ювер
+їх ще не використовує (Фаза 3.3). Legacy-run (`aerosplat run --dataset`) будується
+так само, але з origin = середнє кадрів (воно зсувається з кожним новим захопленням).
+
+**Перехід сфера → WGS84, виміряно на `dataset_v6`** (орбіта радіусом ≈386 м,
+origin = legacy-центр): горизонтальне зміщення кадрів до 0.96 м (RMS 0.76 м), на
+кутах ділянки 1×1 км — до 1.43 м; вертикальне — < 0.1 мм. Це різниця масштабів
+сфери й еліпсоїда на 41° пн. ш. (≈0.1–0.3 %), а не шум. Окремо: `position` Earth Studio
+лежить на **сталі 1.2 м** далі від центру Землі, ніж `R + altitude` (кутова розбіжність
+≈1e-9 м) — сумісно з R≈6371010 м у Google; legacy-кадр через це був ще й піднятий на
+1.2 м. Разом `legacy_shift` для `dataset_v6` — до 1.53 м. Яка модель правдива для
+рендерів Google (і чи `altitude` — еліпсоїдальна висота), ще треба перевірити
+емпірично (порівняти кількість тріангульованих точок, як у `validate_convention.py`);
+до того припущення записано у звіті (`altitude_reference`).
 
 ---
 
 ## 5. Контракти даних
 
+Шляхи — відносно директорії run-а ділянки (у дужках — legacy `data/`).
+
 | Артефакт | Виробник | Споживач | Формат |
 |---|---|---|---|
-| `raw_images_<ds>/*.jpeg` | geo / exif | sfm, dense, train | JPEG + GPS EXIF |
-| `<ds>/sparse_known/{cameras,images,points3D}.txt` | geo | sfm | COLMAP text |
-| `colmap_output_<ds>/sparse/0/*.bin` | sfm | dense, parse, train | COLMAP binary |
-| `colmap_output_<ds>/dense/fused.ply` | dense | parse | PLY |
-| `<ds>_dense.pt`, `<ds>_cloud.pt` | parse | train, server | `torch.save` dict (pickle) |
-| `<ds>_splat.pt` | train | server | `torch.save` dict (pickle) |
+| `images/*.jpeg` (`raw_images_<ds>/`) | geo / exif | sfm, dense, train | JPEG + GPS EXIF |
+| `known_poses/{cameras,images,points3D}.txt` (`<ds>/sparse_known/`) | geo | sfm | COLMAP text |
+| `known_poses/geo_registration.json` | geo | migrate, server (legacy) | JSON: ENU-origin, lat/lon/alt кадрів |
+| `reports/registration.json` (`sparse_known/registration_report.json`) | geo, migrate | server (`frame_error_m`), людина | JSON: перехід сфера→WGS84, перевірка експорту |
+| `sfm/sparse/0/*.bin` (`colmap_output_<ds>/sparse/0/`) | sfm | dense, parse, train | COLMAP binary |
+| `mvs/fused.ply` (`colmap_output_<ds>/dense/`) | dense | parse | PLY |
+| `gs/dense.pt`, `gs/cloud.pt` (`<ds>_dense.pt`, `<ds>_cloud.pt`) | parse | train, server | `torch.save` dict (pickle) |
+| `gs/splat.pt` (`<ds>_splat.pt`) | train | server | `torch.save` dict (pickle) |
+| `reports/metrics.json`, `report.html` (`<ds>/run/`) | eval | людина | JSON / HTML |
+| рядок `runs` + `products` у `catalog.db` | `run --site`, migrate | server | SQLite (шляхи відносно run-а) |
 | HTTP `spatial-chunk` | server | viewer | raw Float32 LE |
 
 ---
@@ -226,6 +325,7 @@ viewer sceneRoot            = Rx(+90°) · (100 / extent)   → Y-up, радіу
 ## 6. Технологічний стек
 
 * Python 3.11, PyTorch 2.6 + CUDA 12.6, NumPy, Pillow, piexif, FastAPI/uvicorn.
+* pyproj (WGS84/ECEF/ENU), SQLAlchemy 2 + Alembic, SQLite (каталог).
 * COLMAP (зовнішній бінарник у PATH), опційно GLOMAP.
 * `diff-gaussian-rasterization` (Inria, CUDA-розширення, збирається з MSVC).
 * Three.js r128 (2021) з CDN, GLSL ES 1.0, Web Worker.
@@ -240,8 +340,10 @@ AeroSplat-GIS/
 ├── src/aerosplat/                 # пакет (pip install -e .)
 │   ├── starter.py, doctor.py      # оркестратор (`aerosplat run`), діагностика
 │   ├── config.py, paths.py, logging_utils.py
-│   ├── pipeline/                  # stages, runner, layout (RunLayout), manifest
-│   ├── geo/                       # earthstudio_to_colmap, exif_injector, compare_poses
+│   ├── pipeline/                  # stages, runner, layout (RunLayout), manifest, site_run
+│   ├── geo/                       # crs (pyproj), earthstudio_to_colmap, exif_injector, compare_poses
+│   ├── store/                     # models, db, catalog, paths, scenes, legacy, cli, migrations/ (Alembic)
+│   ├── ingest/                    # earthstudio, folder, images
 │   ├── sfm/                       # sfm_runner, dense_runner
 │   ├── io/                        # cloud_io, ply_parser, colmap_parser
 │   ├── gs/                        # trainer (активний), evaluate, report
@@ -249,11 +351,12 @@ AeroSplat-GIS/
 ├── web/                           # index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
 ├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)
 ├── tests/                         # CPU-тести + golden-фікстури Earth Studio
-├── tools/                         # дослідницькі скрипти, gsplat_env.bat
+├── tools/                         # дослідницькі скрипти, gsplat_env.bat, migrate_dataset.py
 ├── legacy/                        # optimization/, reconstruction/ (v2, TRIPS), scripts/, server/mainG.py, checker/
 ├── docs/                          # ARCHITECTURE, TARGET_ARCHITECTURE, ACCESS_POINTS, ROADMAP, decisions/
 ├── diff-gaussian-rasterization/   # сторонній репо (ignored, non-commercial)
-├── data/                          # датасети (ignored; у git лише data/README.md)
+├── data/                          # legacy-датасети (ignored; у git лише data/README.md)
+├── projects/                      # дерево проєктів + catalog.db (ignored, ADR-0006)
 └── pyproject.toml, requirements.txt, package.json (eslint)
 ```
 
@@ -269,4 +372,5 @@ AeroSplat-GIS/
 | кадри в `data/raw_images_3d/` | `data/<ds>/footage/` → `data/raw_images_<ds>/` |
 | запуск 5 скриптів вручну | є `starter.py` |
 | `pip install fastapi uvicorn pillow pyautogui piexif` | потрібні ще numpy, torch, COLMAP, збірка CUDA-растеризатора |
-| «1 unit ≈ 1 m» | правда лише для `earthstudio_json`; в'ювер перемасштабовує сцену до радіуса 100 |
+| «1 unit ≈ 1 m» | правда лише для `earthstudio_json` (тоді `scene-meta.metric` заповнений); в'ювер перемасштабовує сцену до радіуса 100 |
+| запуск через `--dataset` | основний шлях тепер `aerosplat run --site <project>/<site>` + `aerosplat catalog`; README цього ще не описує |

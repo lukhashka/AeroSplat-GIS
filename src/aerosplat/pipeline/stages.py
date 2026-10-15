@@ -37,8 +37,12 @@ def _known_poses(cfg: Cfg) -> bool:
 
 # ── argv builders ────────────────────────────────────────────────────────
 def argv_geo(cfg: Cfg, L: RunLayout) -> list[str]:
-    return [str(L.json_path), "--dataset", L.dataset, "--out-dir", str(L.known_poses_dir),
-            "--footage-dir", str(L.footage), "--images-out-dir", str(L.geotagged)]
+    a = [str(L.json_path), "--dataset", L.frame_prefix, "--out-dir", str(L.known_poses_dir),
+         "--footage-dir", str(L.footage), "--images-out-dir", str(L.geotagged),
+         "--report", str(L.registration_report)]
+    if L.origin is not None:
+        a += ["--origin", ",".join(repr(v) for v in L.origin.as_tuple())]
+    return a
 
 
 def argv_exif(cfg: Cfg, L: RunLayout) -> list[str]:
@@ -83,9 +87,9 @@ def argv_sfm(cfg: Cfg, L: RunLayout) -> list[str]:
 
 
 def argv_dense(cfg: Cfg, L: RunLayout) -> list[str]:
-    # dense_runner derives its own data/raw_images_<ds> and colmap_output_<ds>.
     a = ["--dataset", L.dataset, "--colmap-bin", cfg["colmap_bin"],
-         "--gpu-index", cfg["gpu_index"]]
+         "--gpu-index", cfg["gpu_index"], "--images-dir", str(L.geotagged),
+         "--sparse-dir", str(L.sparse), "--dense-dir", str(L.dense)]
     for k in ("window_step", "num_samples", "num_iterations", "cache_size",
               "min_num_pixels", "max_reproj_error"):
         _flag("--" + k.replace("_", "-"), cfg[k], a)
@@ -145,7 +149,7 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
 def argv_eval(cfg: Cfg, L: RunLayout) -> list[str]:
     colmap_dir, images_dir = train_inputs(cfg, L)
     a = ["--splat", str(L.splat_pt), "--colmap", str(colmap_dir), "--images", str(images_dir),
-         "--out-dir", str(L.run_dir), "--eval-every", str(cfg["eval_every"]),
+         "--out-dir", str(L.reports_dir), "--eval-every", str(cfg["eval_every"]),
          "--max-res", str(cfg["max_res"]), "--rasterizer", cfg["rasterizer"],
          "--manifest", str(L.manifest_path)]
     _switch("--no-lpips", not cfg["eval_lpips"], a)
@@ -209,7 +213,7 @@ def _exif_skip(cfg: Cfg) -> str | None:
 
 
 STAGES: dict[str, Stage] = {s.name: s for s in [
-    Stage("geo", "0/6  Earth Studio JSON → відомі пози COLMAP + raw_images_<ds>",
+    Stage("geo", "0/6  Earth Studio JSON → відомі пози COLMAP (Site ENU, WGS84) + кадри для SfM",
           lambda c: "aerosplat.geo.earthstudio_to_colmap", argv_geo,
           lambda c, L: [L.json_path],
           lambda c, L: [L.known_poses_dir, L.geotagged],

@@ -20,6 +20,8 @@ class StageError(RuntimeError):
 def _fingerprint(stage: Stage, cfg: dict[str, Any], L: RunLayout) -> str:
     values = {k: cfg[k] for k in stage.keys}
     values.update(dataset=L.dataset, footage=str(L.footage), json=str(L.json_path))
+    if L.origin is not None:   # absent for legacy runs, keeping their old fingerprints
+        values["origin"] = L.origin.as_tuple()
     return fingerprint(values)
 
 
@@ -39,7 +41,11 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
     log = get_logger(log_file=None if dry_run else L.log_path)
     manifest = Manifest.load(L.manifest_path)
     if not dry_run:
-        manifest.start_run(L.dataset, cfg, L.project_dir)
+        site_info = None
+        if L.is_site_run and L.origin is not None:
+            site_info = {"site": L.site_key, "epoch": L.epoch_id, "run_id": L.run_id,
+                         "capture": L.capture_id, "origin": L.origin.model_dump()}
+        manifest.start_run(L.dataset, cfg, L.project_dir, extra=site_info)
     upstream_ran = False
 
     for name in names:
@@ -84,7 +90,14 @@ def preflight(cfg: dict[str, Any], L: RunLayout, names: list[str]) -> None:
     log = get_logger()
     log.info("── Preflight ─────────────────────────────────────────────────")
     log.info(f"  проєкт:      {L.project_dir}")
-    log.info(f"  датасет:     {L.dataset}")
+    if L.is_site_run:
+        assert L.origin is not None
+        log.info(f"  ділянка:     {L.site_key}  епоха={L.epoch_id}  run={L.run_id}  "
+                 f"захоплення={L.capture_id}")
+        log.info(f"  Site ENU:    lat={L.origin.lat:.8f} lon={L.origin.lon:.8f} h={L.origin.h:.3f}")
+        log.info(f"  run:         {L.run_dir}")
+    else:
+        log.info(f"  датасет:     {L.dataset}  (legacy data/<ds>, без Site)")
     log.info(f"  джерело камер: {cfg['camera_source']}")
     if cfg["camera_source"] == "earthstudio_json":
         log.info(f"  JSON:        {L.json_path}")

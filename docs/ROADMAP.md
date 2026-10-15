@@ -414,6 +414,15 @@ M0–M6 — з [ACCESS_POINTS §12](ACCESS_POINTS.md#12-етапи-впрова�
 | 6.3 | Веб-UI: Vite + TS + React; dashboard з картою (MapLibre), ingest wizard, run monitor, перегляд сцени (поточний рендерер в обгортці) | S2 | повний цикл «створив ділянку → завантажив кадри → запустив → подивився» без CLI |
 | 6.4 | Render service 3DGS (перспектива/орто) | S2–S3 | рендер за позою з UI; база для орто фасадів |
 
+**Статус 6.1 (2026-10-15):** ✅ код у `phase-1-foundation` — `aerosplat.store` (модель, SQLite + Alembic, дерево `projects/`),
+`aerosplat.geo.crs` (pyproj), Site-origin у `earthstudio_to_colmap` зі звітом переходу
+сфера→WGS84, `RunLayout` як вид, `aerosplat run --site`, `aerosplat catalog`,
+`tools/migrate_dataset.py`, сервер із каталогу, `scene-meta.metric`; деталі —
+[ARCHITECTURE §3.9, §4](ARCHITECTURE.md). `dataset_v6` перенесено як `default/dataset_v6`
+(run `sphere-legacy`, похибка кадру до 1.53 м). Лишилось: перерахувати `dataset_v6` у
+WGS84 (`aerosplat run --site default/dataset_v6`, GPU) і перевірити, яка модель Землі/висот
+правдива для рендерів Google; `doctor` і README під `--site`.
+
 ### Фаза 7 — «Точки доступу» (6–10 тижнів)
 
 | Крок | Зміст | Етап |
