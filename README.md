@@ -222,16 +222,19 @@ synthetic-режим. Тренер без `--self-test` вимагає явні 
 cd web/app && npm ci && npm run build
 ```
 
-Сервер разом із GPU- і CPU-воркером:
+Сервер разом із GPU- і CPU-воркером та сервісом рендерингу:
 
 ``` bash
-aerosplat up            # http://127.0.0.1:8000/  →  веб-UI на /app/
+aerosplat up            # http://127.0.0.1:8000/  →  веб-UI на /app/; рендер на :8001
 ```
 
 Задачі виконують воркери з черги в каталозі (`projects/catalog.db`), по одній
 GPU-задачі за раз. Окремо: `aerosplat worker --resource gpu`, `aerosplat serve`.
+Сервіс рендерингу (`aerosplat render-service`) малює навчену сцену з довільної пози,
+перспективою чи ортографічно — сторінка «Вид із камери» в UI або
+`POST /api/v2/sites/<project>/<site>/render`.
 Для розробки UI з hot reload: `cd web/app && npm run dev` (проксіює API на :8000).
-Архітектура — [docs/ARCHITECTURE.md §3.10–3.11](docs/ARCHITECTURE.md).
+Архітектура — [docs/ARCHITECTURE.md §3.10–3.12](docs/ARCHITECTURE.md).
 
 #  Launch Visualization Server
 

@@ -1,3 +1,5 @@
+import type { RenderMeta, RenderRequest } from "./types";
+
 export const API = "/api/v2";
 
 export class ApiError extends Error {
@@ -78,4 +80,31 @@ export const viewerUrl = (scene: string, mode: "splat" | "dense" = "splat") =>
 export function wsUrl(path: string): string {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}${API}${path}`;
+}
+
+/** POST a render request; resolves to the PNG as an object URL plus the camera/georeference the server used. */
+export async function renderSite(
+  project: string,
+  site: string,
+  body: RenderRequest,
+  signal?: AbortSignal,
+): Promise<{ url: string; meta: RenderMeta }> {
+  const res = await fetch(`${API}/sites/${project}/${site}/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: unknown = text;
+    try {
+      detail = JSON.parse(text).detail ?? text;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const meta = JSON.parse(res.headers.get("X-Render-Meta") ?? "{}") as RenderMeta;
+  return { url: URL.createObjectURL(await res.blob()), meta };
 }

@@ -10,11 +10,14 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -33,6 +36,7 @@ from aerosplat.jobs.models import (PIPELINE_STAGES, DiagnosticSpec, Job, JobEven
 from aerosplat.jobs.queue import JobNotFoundError, JobQueue
 from aerosplat.paths import PROJECT_DIR
 from aerosplat.pipeline.manifest import git_commit
+from aerosplat.render.models import RenderRequest
 from aerosplat.store.catalog import Catalog, CatalogError, NotFoundError
 from aerosplat.store.models import (BBox, Capture, CaptureSource, Epoch, Image, Project, Run,
                                     RunStatus, Site, SiteKind)
@@ -520,6 +524,66 @@ def system(cat: Catalog = Depends(get_catalog), q: JobQueue = Depends(get_queue)
     return SystemInfo(version=__version__, git_commit=_COMMIT["commit"],
                       projects_root=str(cat.paths.root), workers=q.workers(),
                       queue=q.counts(), gpu=_gpu_info())
+
+
+# ── render service (a separate GPU process, aerosplat.render) ────────────
+RENDER_TIMEOUT_S = 120.0
+RENDER_META_HEADER = "X-Render-Meta"
+
+
+def _render_url() -> str:
+    return os.environ.get("AEROSPLAT_RENDER_URL", "http://127.0.0.1:8001").rstrip("/")
+
+
+def _render_status() -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(f"{_render_url()}/health", timeout=1.5) as r:
+            return {"online": True, **json.loads(r.read())}
+    except (OSError, ValueError):
+        return {"online": False}
+
+
+def _render_call(scene: str, body: str) -> tuple[bytes, str]:
+    """POST the request to the render service; returns (png, meta json). Raises HTTPException."""
+    req = urllib.request.Request(
+        f"{_render_url()}/scenes/{scene}/render", data=body.encode(), method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=RENDER_TIMEOUT_S) as r:
+            return r.read(), r.headers.get(RENDER_META_HEADER, "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read()).get("detail", e.reason)
+        except ValueError:
+            detail = e.reason
+        raise HTTPException(e.code, detail) from None
+    except (urllib.error.URLError, OSError):
+        raise HTTPException(503, "render service is offline (start it with `aerosplat up` "
+                                 "or `aerosplat render-service`)") from None
+
+
+@router.get("/render/status")
+def render_status() -> dict[str, Any]:
+    """Whether the render service answers, and what it holds on the GPU."""
+    return _render_status()
+
+
+@router.post("/sites/{project_id}/{site_id}/render",
+             responses={200: {"content": {"image/png": {}}, "description":
+                              "PNG; the camera, intrinsics and georeference are in the "
+                              f"`{RENDER_META_HEADER}` header (JSON)"}})
+async def render_site(project_id: str, site_id: str, body: RenderRequest,
+                      cat: Catalog = Depends(get_catalog)) -> Response:
+    """Render the Site's latest 3DGS scene from a pose, perspective or orthographic.
+
+    Poses are Site ENU metres or WGS84; `output` picks colour, alpha or 16-bit depth.
+    """
+    site = _site(cat, project_id, site_id)
+    scene = _scene_name(cat, site)
+    if scene is None:
+        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    png, meta = await run_in_threadpool(_render_call, scene, body.model_dump_json(exclude_none=True))
+    return Response(content=png, media_type="image/png", headers={RENDER_META_HEADER: meta})
 
 
 @router.get("/pipeline")

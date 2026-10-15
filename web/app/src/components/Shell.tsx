@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 
-import { useSystem } from "../api/hooks";
+import { useRenderStatus, useSystem } from "../api/hooks";
 import type { SystemInfo, WorkerInfo } from "../api/types";
 import { Icon } from "./Icon";
 
@@ -18,6 +18,20 @@ function WorkerLine({ label, workers }: { label: string; workers: WorkerInfo[] }
   );
 }
 
+function RenderLine() {
+  const { data } = useRenderStatus();
+  const loaded = data?.loaded?.length ?? 0;
+  const state = !data?.online ? "" : loaded ? "busy" : "on";
+  const text = !data?.online ? "офлайн" : loaded ? "сцена в VRAM" : "очікує";
+  return (
+    <div className="line" title="Сервіс рендерингу 3DGS (вид із камери, ортофото)">
+      <span className={`led ${state}`} />
+      <span className="grow">Рендер</span>
+      <span style={{ color: data?.online ? "var(--text)" : "var(--text-faint)" }}>{text}</span>
+    </div>
+  );
+}
+
 function SystemWidget({ sys }: { sys: SystemInfo | undefined }) {
   if (!sys) return <div className="sys faint">З'єднання з сервером…</div>;
   const gpu = sys.gpu?.[0];
@@ -26,6 +40,7 @@ function SystemWidget({ sys }: { sys: SystemInfo | undefined }) {
     <div className="sys">
       <WorkerLine label="GPU-воркер" workers={workers.filter((w) => w.resource === "gpu")} />
       <WorkerLine label="CPU-воркер" workers={workers.filter((w) => w.resource === "cpu")} />
+      <RenderLine />
       {gpu && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
           <div className="line">

@@ -7,6 +7,7 @@ import { Shell } from "./components/Shell";
 import { Dashboard } from "./pages/Dashboard";
 import { JobPage } from "./pages/JobPage";
 import { JobsPage } from "./pages/JobsPage";
+import { RenderPage } from "./pages/RenderPage";
 import { SitePage } from "./pages/SitePage";
 import { ViewerPage } from "./pages/ViewerPage";
 import "./styles.css";
@@ -35,6 +36,7 @@ createRoot(document.getElementById("root")!).render(
             <Route index element={<Dashboard />} />
             <Route path="sites/:project/:site" element={<SitePage />} />
             <Route path="viewer/:project/:site" element={<ViewerPage />} />
+            <Route path="render/:project/:site" element={<RenderPage />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="jobs/:id" element={<JobPage />} />
             <Route path="*" element={<NotFound />} />
