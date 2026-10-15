@@ -1,7 +1,9 @@
-# AeroSplat-GIS — поточна архітектура (v0.6, стан робочого дерева на 2026-09-27)
+# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `phase-1-foundation`, стан на 2026-10-15)
 
 > Документ описує **фактичний** стан коду, а не README. Там, де README
 > розходиться з кодом, правдою вважається код (див. §8).
+> Куди рухаємось — [TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md) і
+> [ACCESS_POINTS.md](ACCESS_POINTS.md).
 
 ---
 
@@ -27,14 +29,15 @@ flowchart TD
         CSV[flight_telemetry.csv<br/>опційно]
     end
 
-    subgraph ORCH["aerosplat/starter.py — оркестратор (in-process)"]
+    subgraph ORCH["aerosplat/starter.py — оркестратор (in-process, pipeline/stages.py)"]
         direction TB
         G["geo<br/>earthstudio_to_colmap.py"]
         E["exif<br/>geo/exif_injector.py"]
         S["sfm<br/>sfm_runner.py → COLMAP"]
         D["dense<br/>dense_runner.py → COLMAP MVS"]
         P["parse<br/>ply_parser.py / colmap_parser.py<br/>(cloud_io.py)"]
-        T["train<br/>gs_trainer_v3.py"]
+        T["train<br/>gs/trainer.py"]
+        EV["eval<br/>gs/evaluate.py + report.py"]
     end
 
     J --> G
@@ -49,6 +52,8 @@ flowchart TD
     P -->|data/<ds>_dense.pt / _cloud.pt| T
     S -->|пози камер| T
     T -->|data/<ds>_splat.pt| SRV
+    T --> EV
+    EV -->|run/metrics.json, report.html| RUN[(data/<ds>/run/)]
 
     subgraph SRV["aerosplat/server/main.py — FastAPI"]
         API["/api/v1/scene-meta<br/>/api/v1/spatial-chunk<br/>/api/v1/status<br/>/api/v1/reload"]
@@ -71,7 +76,7 @@ flowchart TD
 
 ### 3.1 Оркестрація — `aerosplat/starter.py`
 
-* Єдина точка входу. Стадії: `geo → exif → sfm → dense → parse → train`.
+* Єдина точка входу (`aerosplat run`). Стадії: `geo → exif → sfm → dense → parse → train → eval`.
 * Стадії — реєстр у `aerosplat/pipeline/stages.py`: кожна будує argv і викликає
   `main(argv)` свого модуля **в тому ж процесі** (скрипти лишаються придатними
   для окремого запуску), тож збій дає звичайний traceback. Конфіг — валідований
@@ -126,9 +131,16 @@ flowchart TD
 * Вихід: `{xyz, scale, rotation, opacity, rgb, activations}` — **вже
   активовані** значення + явний контракт `activations`.
 
-Паралельно існують експериментальні/легасі тренери: `gs_trainer_v2.py`,
-`trips_trainer.py` (TRIPS без нейро-реконструктора), `optimization/gs_trainer.py`
-(v0.1, «рандомний GT»). У пайплайні не використовуються.
+* Тренування: перестановка камер по епохах, prune за екранним радіусом
+  (`max_screen_radius`=20 px), регуляризація анізотропії (`scale_reg`,
+  `max_aniso_ratio`); test-спліт кожен 8-й кадр (`eval_every`).
+* `gs/evaluate.py` + `gs/report.py` — PSNR/SSIM/LPIPS, FPS, розмір →
+  `run/metrics.json` + `report.html` (стадія `eval`, baseline — [BASELINE.md](BASELINE.md)).
+* gsplat 1.5.3 збирається на Windows ([tools/gsplat_env.bat](../tools/gsplat_env.bat)),
+  але в тренер **ще не інтегрований**.
+
+Легасі-тренери (`gs_trainer_v2.py`, `trips_trainer.py`, `optimization/gs_trainer.py`)
+перенесено в `legacy/`; у пайплайні не використовуються.
 
 ### 3.6 Сервер — `aerosplat/server/main.py` (FastAPI)
 
@@ -147,7 +159,7 @@ flowchart TD
   * **dense** — 6 float32 (`xyz, rgb`).
 * ETag + `Cache-Control`, `scene-meta` як JSON (центр, extent, scale,
   layout, `metric` — поки завжди `None`/«unparsed»).
-* `mainG.py` — стара версія сервера (легасі).
+* `legacy/server/mainG.py` — стара версія сервера.
 
 ### 3.7 В'ювер — `web/`
 
@@ -169,9 +181,8 @@ flowchart TD
 
 * `aerosplat/doctor.py` — read-only перевірка кожної стадії (кадри, інтринсики,
   EXIF, БД COLMAP, sparse, dense, `.pt`).
-* `compare_poses.py`, `diagnose_pose_axis.py`, `validate_convention.py`,
-  `inspector_matches.py`, `checker/checker_ply.py` — разові дослідницькі скрипти
-  (частина з них має захардкоджені шляхи на кшталт `camera_track.json`).
+* `tools/`: `compare_poses.py`, `diagnose_pose_axis.py`, `validate_convention.py`,
+  `inspector_matches.py` — дослідницькі скрипти; `legacy/checker/checker_ply.py` — разовий.
 
 ---
 
@@ -226,28 +237,24 @@ viewer sceneRoot            = Rx(+90°) · (100 / extent)   → Y-up, радіу
 
 ```
 AeroSplat-GIS/
-├── src/
-│   ├── aerosplat/                 # пакет
-│   │   ├── starter.py, doctor.py  # оркестратор (`aerosplat run`), діагностика
-│   │   ├── server/main.py         # FastAPI (активний; mainG.py — легасі)
-│   │   ├── config.py, paths.py, logging_utils.py
-│   │   ├── pipeline/              # stages, runner, layout (RunLayout), manifest
-│   │   ├── geo/                   # earthstudio_to_colmap.py, exif_injector.py
-│   │   ├── sfm/                   # sfm_runner.py, dense_runner.py
-│   │   ├── io/                    # cloud_io.py, ply_parser.py, colmap_parser.py
-│   │   └── gs/trainer.py          # АКТИВНИЙ тренер (був gs_trainer_v3)
-│   │                              # (gs_trainer_v2, trips_trainer, colmap_loader — у legacy/)
-│   ├── optimization/gs_trainer.py, gs_compressor.py               # легасі v0.1
-│   ├── scripts/auto_photo.py      # легасі
-│   ├── checker/checker_ply.py     # разовий скрипт
-│   └── cloud_src_project.zip      # архів коду (untracked)
-├── web/index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
-├── diff-gaussian-rasterization/   # сторонній репо + build-артефакти (untracked)
-├── data/                          # датасети, частково ЗАКОМІЧЕНІ в git
-├── gis.zip                        # архів (untracked)
-├── venv/                          # ігнорується
-├── requirements.txt               # неповний
-└── README.md                      # застарів
+├── src/aerosplat/                 # пакет (pip install -e .)
+│   ├── starter.py, doctor.py      # оркестратор (`aerosplat run`), діагностика
+│   ├── config.py, paths.py, logging_utils.py
+│   ├── pipeline/                  # stages, runner, layout (RunLayout), manifest
+│   ├── geo/                       # earthstudio_to_colmap, exif_injector, compare_poses
+│   ├── sfm/                       # sfm_runner, dense_runner
+│   ├── io/                        # cloud_io, ply_parser, colmap_parser
+│   ├── gs/                        # trainer (активний), evaluate, report
+│   └── server/main.py             # FastAPI
+├── web/                           # index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
+├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)
+├── tests/                         # CPU-тести + golden-фікстури Earth Studio
+├── tools/                         # дослідницькі скрипти, gsplat_env.bat
+├── legacy/                        # optimization/, reconstruction/ (v2, TRIPS), scripts/, server/mainG.py, checker/
+├── docs/                          # ARCHITECTURE, TARGET_ARCHITECTURE, ACCESS_POINTS, ROADMAP, decisions/
+├── diff-gaussian-rasterization/   # сторонній репо (ignored, non-commercial)
+├── data/                          # датасети (ignored; у git лише data/README.md)
+└── pyproject.toml, requirements.txt, package.json (eslint)
 ```
 
 ---
