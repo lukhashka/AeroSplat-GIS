@@ -29,6 +29,7 @@ F64 = NDArray[np.float64]
 I64 = NDArray[np.int64]
 
 # Voxel states. The grid stores the first three; OUTSIDE is only ever returned by queries.
+# FREE stays 0: the distance field reads the state array as is (non-zero = blocked).
 FREE, OCCUPIED, UNKNOWN, OUTSIDE = 0, 1, 2, 3
 STATE_NAMES = ("free", "occupied", "unknown", "outside")
 
@@ -36,14 +37,17 @@ STATE_NAMES = ("free", "occupied", "unknown", "outside")
 OCCUPANCY_JSON = "occupancy.json"
 OCCUPANCY_NPZ = "occupancy.npz"
 # Bumped whenever the meaning of the files changes; also the stage version for `--resume`.
-FORMAT_VERSION = "occupancy-v1"
+# v2: space carving (free voxels under the 2.5-D surface, ColumnSource.CARVED, `free_from`).
+FORMAT_VERSION = "occupancy-v2"
 
 
 class ColumnSource(IntEnum):
     """Where the surface height of a voxel column came from.
 
-    Free space is only ever free ABOVE a column's surface, so this is also the provenance of
-    every free voxel: observed for POINTS and CELL, assumed for FILLED and SKYLINE.
+    In the 2.5-D model a column is free from layer `free_from` up (occupancy.npz), and this
+    says whether that free air is observed (POINTS, CELL, CARVED) or assumed (FILLED,
+    SKYLINE). Free voxels BELOW `free_from` exist only where camera rays carved them, and
+    those are observed whatever the column's source.
     """
 
     POINTS = 1      # points inside this voxel column: its highest point
@@ -52,6 +56,10 @@ class ColumnSource(IntEnum):
     SKYLINE = 4     # nothing within fill_radius_m: unknown up to the site skyline + margin
     SKY = 5         # nothing within fill_radius_m, unknown="sky": unknown all the way up
     PILLAR = 6      # surface above the grid's ceiling: blocked all the way up
+    # Was FILLED / SKYLINE / SKY, but camera rays carved the column's top blocked voxel: no
+    # ground-standing matter reaches that high, so the air above is evidence, like above a
+    # measured surface (carving.py). Below it, uncarved voxels stay unknown.
+    CARVED = 7
 
 
 ASSUMED_FREE = (int(ColumnSource.FILLED), int(ColumnSource.SKYLINE))
@@ -144,6 +152,29 @@ class EsdfInfo(_Model):
                        "voxel centre)")
 
 
+class CarvingStats(_Model):
+    """What space carving did (aerosplat.surface.carving)."""
+
+    min_views: int = Field(ge=1)
+    margin_m: float = Field(ge=0)
+    under_surface: bool
+    frame_offset_m: float = Field(ge=0)     # median cloud -> fused-point distance (0: same set)
+    rays_total: int = Field(ge=0)           # (point, camera) pairs the fusion recorded
+    rays_unsupported: int = Field(ge=0)     # endpoint not in a voxel holding cloud points
+    rays_through_occupied: int = Field(ge=0)    # crossed an occupied voxel: discarded whole
+    rays_used: int = Field(ge=0)
+    samples: int = Field(ge=0)              # ray samples inspected (free air is skipped)
+    voxels_crossed: int = Field(ge=0)       # unknown voxels crossed by >= min_views cameras
+    voxels_carved: int = Field(ge=0)        # of those, opened (unknown -> free)
+    voxels_eroded: int = Field(ge=0)        # of those, given back: next to blocked space
+    carved_under_surface: int = Field(ge=0)     # opened in measured columns (overhangs)
+    carved_assumed: int = Field(ge=0)       # opened in filled / skyline / sky columns
+    columns_upgraded: dict[str, int]        # former ColumnSource -> columns now CARVED
+    seconds_rays: float = Field(ge=0)
+    seconds_total: float = Field(ge=0)
+    visibility: dict[str, Any] = Field(default_factory=dict)    # what the loader found
+
+
 class OccupancyStats(_Model):
     voxels: int = Field(ge=0)
     free: int = Field(ge=0)
@@ -157,6 +188,7 @@ class OccupancyStats(_Model):
     unknown_ceiling_z: Optional[float]      # how high unknown columns reach (None: to the sky)
     ceiling_z: float                        # top of the grid
     n_points: int = Field(ge=0)             # cloud points inside the grid
+    carving: Optional[CarvingStats] = None  # None: built without camera rays (2.5-D only)
 
 
 class OccupancyReport(_Model):

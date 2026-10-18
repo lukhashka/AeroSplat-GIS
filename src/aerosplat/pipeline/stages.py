@@ -211,7 +211,22 @@ def argv_occupancy(cfg: Cfg, L: RunLayout) -> list[str]:
     if cfg["occupancy_bbox"]:
         # One token: argparse would read a bbox starting with "-" as an option.
         a.append(f"--bbox={cfg['occupancy_bbox']}")
+    if not cfg["occupancy_carve"]:
+        return a + ["--no-carve"]
+    # The dense workspace: fused points, their visibility, and the model its indices count.
+    a += ["--fused", str(L.fused_ply), "--sparse", str(L.dense / "sparse")]
+    if _known_poses(cfg):
+        # Points and cameras are in the reconstruction frame, like semantics' cameras.
+        _flag("--registration", L.registration_report, a)
+    _flag("--carve-min-views", cfg["occupancy_carve_min_views"], a)
+    _flag("--carve-margin", cfg["occupancy_carve_margin"], a)
+    _switch("--no-carve-under", not cfg["occupancy_carve_under"], a)
     return a
+
+
+def _occupancy_inputs(cfg: Cfg, L: RunLayout) -> list[Path]:
+    return [_semantic_cloud(cfg, L), L.semantics_dir] + (
+        [L.fused_ply] if cfg["occupancy_carve"] else [])
 
 
 # ── registry ─────────────────────────────────────────────────────────────
@@ -275,6 +290,8 @@ _OCCUPANCY = ("occupancy_res", "occupancy_headroom", "occupancy_max_distance",
               "occupancy_fill_radius", "occupancy_close_radius", "occupancy_assumed_margin",
               "occupancy_unknown",
               "occupancy_skyline_quantile", "occupancy_bbox", "occupancy_max_voxels",
+              "occupancy_carve", "occupancy_carve_min_views", "occupancy_carve_margin",
+              "occupancy_carve_under",
               "semantics_res", "camera_source", "known_poses", "cloud_source")
 
 
@@ -363,7 +380,7 @@ STAGES: dict[str, Stage] = {s.name: s for s in [
           _SEMANTICS, _semantics_skip),
     Stage("occupancy", "9/9  Зайнятість: воксельна сітка + ESDF (кліренси, промені)",
           lambda c: "aerosplat.surface.stage", argv_occupancy,
-          lambda c, L: [_semantic_cloud(c, L), L.semantics_dir],
+          _occupancy_inputs,
           lambda c, L: [L.occupancy_dir],
           _OCCUPANCY, _occupancy_skip, version=OCCUPANCY_FORMAT),
 ]}

@@ -17,6 +17,12 @@ comes from is recorded per column (`ColumnSource`), because only some of it is m
 * SKYLINE / SKY — no data within `fill_radius_m`: unknown up to the site's skyline plus the
   margin (free above it, an assumption), or with unknown="sky" unknown all the way up.
 
+Camera rays then carve that model (carving.py, when the dense workspace's visibility is
+given): unknown voxels that segments from cameras to the points they saw cross become free —
+under overhangs too — and a FILLED / SKYLINE / SKY column whose top blocked voxel is carved
+becomes CARVED, its free air observed. `free_from` keeps the 2.5-D boundary per column, so a
+free voxel's provenance is always known: below it, carved (observed); above it, the column's.
+
 Queries say when a path relies on assumed free space, so a planner can treat that as a
 risk rather than as evidence.
 """
@@ -34,10 +40,12 @@ from numpy.typing import NDArray
 from scipy import ndimage
 
 from aerosplat.semantics.models import TerrainModel
+from aerosplat.surface.carving import CameraRays, carve, frame_offset_m
 from aerosplat.surface.esdf import DEFAULT_TILE_VOXELS, distance_field_cm
 from aerosplat.surface.models import (ASSUMED_FREE, FORMAT_VERSION, FREE, OCCUPANCY_JSON,
-                                      OCCUPANCY_NPZ, OCCUPIED, OUTSIDE, UNKNOWN, ColumnSource,
-                                      GridSpec, OccupancyReport, OccupancyStats, state_name)
+                                      OCCUPANCY_NPZ, OCCUPIED, OUTSIDE, UNKNOWN, CarvingStats,
+                                      ColumnSource, GridSpec, OccupancyReport, OccupancyStats,
+                                      state_name)
 
 F64 = NDArray[np.float64]
 SQRT3 = math.sqrt(3.0)
@@ -101,6 +109,8 @@ class OccupancyGrid:
     esdf_cm: NDArray[np.integer]        # same shape: see EsdfInfo (uint16, or int16 if signed)
     column_top: NDArray[np.float32]     # (rows, cols): surface height, NaN where unknown
     column_source: NDArray[np.uint8]    # (rows, cols): ColumnSource
+    # (rows, cols): first free layer of the 2.5-D model; free voxels below it were carved.
+    free_from: NDArray[np.int16]
     max_distance_m: float
 
     def __post_init__(self) -> None:
@@ -110,8 +120,11 @@ class OccupancyGrid:
         if self.esdf_cm.shape != shape or self.esdf_cm.dtype not in (np.uint16, np.int16):
             raise ValueError(f"esdf_cm must be (u)int16 {shape}, got "
                              f"{self.esdf_cm.dtype} {self.esdf_cm.shape}")
-        if self.column_top.shape != shape[:2] or self.column_source.shape != shape[:2]:
+        if (self.column_top.shape != shape[:2] or self.column_source.shape != shape[:2]
+                or self.free_from.shape != shape[:2]):
             raise ValueError(f"column arrays must be {shape[:2]}")
+        if self.free_from.dtype != np.int16:
+            raise ValueError(f"free_from must be int16, got {self.free_from.dtype}")
 
     @property
     def res_m(self) -> float:
@@ -147,6 +160,20 @@ class OccupancyGrid:
         out = np.zeros(len(i), np.uint8)
         m = (i >= 0) & (i < s.rows) & (j >= 0) & (j < s.cols)
         out[m] = self.column_source[i[m], j[m]]
+        return out
+
+    def assumed_at(self, xyz) -> NDArray[np.bool_]:
+        """Whether each point is in free space that is assumed rather than observed: above the
+        2.5-D surface of a FILLED / SKYLINE column (carved voxels below it are observed).
+        Above the grid the top layer's answer holds, as for the state."""
+        p = as_points(xyz, "query points")
+        s = self.spec
+        i, j, k = s.index_of(p)
+        out = np.zeros(len(p), np.bool_)
+        m = self._codes(i, j, k) == FREE
+        im, jm, km = i[m], j[m], np.minimum(k[m], s.layers - 1)
+        out[m] = (np.isin(self.column_source[im, jm], ASSUMED_FREE)
+                  & (km >= self.free_from[im, jm]))
         return out
 
     # -- clearance -------------------------------------------------------
@@ -272,7 +299,7 @@ class OccupancyGrid:
         if first_s is not None:
             lower = 0.0
 
-        assumed = (codes == FREE) & np.isin(self.source_at(samples), ASSUMED_FREE)
+        assumed = self.assumed_at(samples)
         return PathClearance(
             length_m=float(s_start[-1]), n_samples=len(samples), step_m=spacing,
             min_clearance_m=lower, min_at=(float(samples[m, 0]), float(samples[m, 1]),
@@ -381,7 +408,10 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
                     skyline_quantile: float = 0.9999,
                     bbox: Optional[tuple[float, float, float, float]] = None,
                     max_voxels: int = 400_000_000, signed: bool = False,
-                    tile_voxels: int = DEFAULT_TILE_VOXELS
+                    tile_voxels: int = DEFAULT_TILE_VOXELS,
+                    rays: Optional[CameraRays] = None, carve_min_views: int = 2,
+                    carve_margin_m: float = 1.0, carve_under_surface: bool = True,
+                    frame_tolerance_m: float = 0.01
                     ) -> tuple[OccupancyGrid, OccupancyStats, list[str]]:
     """Voxelise a dense cloud over the semantics terrain raster (see the module docstring).
 
@@ -395,6 +425,10 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     they are. In a sparse cloud a lone noise point under a roof otherwise defines its column
     and opens a free shaft into the building; the price is that slots narrower than ~2 m
     between buildings are closed too, which no corridor needs.
+
+    With `rays` (carving.load_colmap_rays), camera rays then carve the 2.5-D model; the cloud
+    must be the fused points the rays end at (or a filtered subset), in the same frame to
+    `frame_tolerance_m`, or the build fails.
     """
     p = as_points(xyz, "cloud")
     dsm = np.asarray(dsm, np.float64)
@@ -425,6 +459,13 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     if headroom_m < assumed_margin_m + 2 * res_m:
         raise ValueError(f"headroom_m={headroom_m} must exceed assumed_margin_m + 2 voxels "
                          f"({assumed_margin_m + 2 * res_m}), or the skyline rule has no room")
+    if rays is not None:
+        if int(carve_min_views) != carve_min_views or not 1 <= carve_min_views <= 255:
+            raise ValueError(f"carve_min_views must be an integer in 1..255, got {carve_min_views}")
+        if not (math.isfinite(carve_margin_m) and carve_margin_m >= 0):
+            raise ValueError(f"carve_margin_m must be >= 0, got {carve_margin_m}")
+        if not (math.isfinite(frame_tolerance_m) and frame_tolerance_m > 0):
+            raise ValueError(f"frame_tolerance_m must be positive, got {frame_tolerance_m}")
 
     # Lateral lattice: the terrain raster split k_per_cell times, optionally cropped.
     i_lo, i_hi = 0, terrain.rows * k_per_cell
@@ -451,11 +492,21 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     top_pts = np.full(rows * cols, -np.inf)
     np.maximum.at(top_pts, pi * cols + pj, pz)
     top_pts = top_pts.reshape(rows, cols)
+    low_pts = np.full(rows * cols, np.inf)                  # ... and the lowest
+    np.minimum.at(low_pts, pi * cols + pj, pz)
+    low_pts = low_pts.reshape(rows, cols)
 
     ti = (i_lo + np.arange(rows)) // k_per_cell
     tj = (j_lo + np.arange(cols)) // k_per_cell
     dsm_c = dsm[np.ix_(ti, tj)]
     dtm_c = dtm[np.ix_(ti, tj)]
+    # Lowest point per terrain cell, for the columns that take their surface from the cell.
+    ci = np.floor((p[:, 1] - terrain.y0) / terrain.res_m).astype(np.int64)
+    cj = np.floor((p[:, 0] - terrain.x0) / terrain.res_m).astype(np.int64)
+    on = (ci >= 0) & (ci < terrain.rows) & (cj >= 0) & (cj < terrain.cols)
+    low_cell = np.full(terrain.rows * terrain.cols, np.inf)
+    np.minimum.at(low_cell, ci[on] * terrain.cols + cj[on], p[on, 2])
+    low_cell_c = low_cell.reshape(shape_t)[np.ix_(ti, tj)]
     # Gap filling runs on the whole raster, so a crop still sees the data beyond its edge.
     radius_cells = fill_radius_m / terrain.res_m
     if radius_cells >= 1:
@@ -486,6 +537,8 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     z0 = math.floor(z_low / res_m) * res_m - res_m          # a whole voxel under all ground
     layers = int(math.ceil((skyline_z + headroom_m - z0) / res_m))
     spec = GridSpec(res_m=res_m, x0=x0, y0=y0, z0=z0, rows=rows, cols=cols, layers=layers)
+    if layers >= np.iinfo(np.int16).max:
+        raise ValueError(f"{layers} layers: more than free_from (int16) can index")
     if spec.voxels > max_voxels:
         raise ValueError(f"grid {rows}×{cols}×{layers} = {spec.voxels:,} voxels exceeds "
                          f"max_voxels={max_voxels:,}: give a bbox, a coarser res_m or a "
@@ -519,6 +572,14 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     pillar = (k_solid >= layers - 1) & (source != ColumnSource.SKY)
     source[pillar] = ColumnSource.PILLAR
     k_solid = np.minimum(k_solid, layers - 1)
+    # Ground under a measured column is matter — below the DTM and below the lowest point
+    # seen in the column (its terrain cell, for a CELL column). A DTM that runs over a canopy
+    # or a bridge deck would otherwise make the air under it matter, which no camera ray
+    # could ever open. Between the two the column is unknown: blocked all the same.
+    lowest = np.where(has_pts, low_pts, low_cell_c)
+    seen_low = np.isfinite(lowest)
+    k_fill = np.where(seen_low, np.minimum(k_ground, k_of(np.where(seen_low, lowest, 0.0))),
+                      k_ground)
 
     state = np.empty(spec.shape, np.uint8)
     kk = np.arange(layers, dtype=np.int64)[None, None, :]
@@ -526,23 +587,39 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     for a in range(0, rows, chunk):
         b = min(rows, a + chunk)
         blk = np.where(kk > k_solid[a:b, :, None], FREE, UNKNOWN).astype(np.uint8)
-        # Ground under a measured column is matter; under a guessed one it stays unknown.
-        blk[(kk <= k_ground[a:b, :, None]) & observed[a:b, :, None]] = OCCUPIED
+        # Under a guessed column the ground stays unknown.
+        blk[(kk <= k_fill[a:b, :, None]) & observed[a:b, :, None]] = OCCUPIED
         state[a:b] = blk
     pk = k_of(pz)
     ok = pk < layers                     # points above the grid stand in pillar columns
     state[pi[ok], pj[ok], pk[ok]] = OCCUPIED
+    free_from = (k_solid + 1).astype(np.int16)
+
+    carving: Optional[CarvingStats] = None
+    if rays is not None:
+        offset = frame_offset_m(p, rays.points)
+        if offset > frame_tolerance_m:
+            raise ValueError(f"the cloud is not the fused point set the rays end at: median "
+                             f"distance to the nearest fused point {offset:.3f} m "
+                             f"(> {frame_tolerance_m} m) — another run, or a wrong registration?")
+        point_voxels = np.unique((pi[ok] * cols + pj[ok]) * layers + pk[ok])
+        found = carve(state, spec, free_from, source, rays, point_voxels,
+                      min_views=int(carve_min_views), margin_m=carve_margin_m,
+                      under_surface=carve_under_surface)
+        carving = CarvingStats(min_views=int(carve_min_views), margin_m=carve_margin_m,
+                               under_surface=carve_under_surface, frame_offset_m=offset,
+                               visibility=rays.info, **found)
 
     counts = np.zeros(3, np.int64)
     for a in range(0, rows, chunk):
         blk = state[a:a + chunk]
         counts += [np.count_nonzero(blk == FREE), np.count_nonzero(blk == OCCUPIED),
                    np.count_nonzero(blk == UNKNOWN)]
-    esdf = distance_field_cm(state != FREE, res_m, max_distance_m, signed=signed,
+    esdf = distance_field_cm(state, res_m, max_distance_m, signed=signed,     # FREE == 0
                              tile_voxels=tile_voxels)
     grid = OccupancyGrid(spec=spec, state=state, esdf_cm=esdf,
                          column_top=top.astype(np.float32), column_source=source,
-                         max_distance_m=max_distance_m)
+                         free_from=free_from, max_distance_m=max_distance_m)
 
     n_cols = rows * cols
     by_source = {src.name.lower(): int(np.count_nonzero(source == src)) for src in ColumnSource}
@@ -551,7 +628,8 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
         voxels=spec.voxels, free=int(counts[0]), occupied=int(counts[1]), unknown=int(counts[2]),
         columns=by_source, observed_fraction=float(observed.mean()),
         assumed_fraction=assumed / n_cols, closed_columns=closed_columns, skyline_z=skyline_z,
-        unknown_ceiling_z=unknown_ceiling, ceiling_z=spec.z1, n_points=int(len(pz)))
+        unknown_ceiling_z=unknown_ceiling, ceiling_z=spec.z1, n_points=int(len(pz)),
+        carving=carving)
 
     warnings: list[str] = []
     pct = {k: 100.0 * v / n_cols for k, v in by_source.items()}
@@ -573,6 +651,12 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     if observed.mean() < 0.5:
         warnings.append(f"лише {100 * observed.mean():.0f}% колонок мають виміряну поверхню: "
                         f"карта здебільшого складається з припущень і невідомого")
+    if carving is not None:
+        ended = carving.rays_total - carving.rays_unsupported
+        through = carving.rays_through_occupied / ended if ended else 0.0
+        if through > 0.25:
+            warnings.append(f"{100 * through:.0f}% променів перетинають зайняті вокселі перед "
+                            f"своєю точкою: видимість або пози камер суперечать хмарі")
     return grid, stats, warnings
 
 
@@ -585,7 +669,8 @@ def write_occupancy(folder: Path, grid: OccupancyGrid, report: OccupancyReport) 
     if marker.exists():
         marker.unlink()
     np.savez_compressed(folder / OCCUPANCY_NPZ, state=grid.state, esdf_cm=grid.esdf_cm,
-                        column_top=grid.column_top, column_source=grid.column_source)
+                        column_top=grid.column_top, column_source=grid.column_source,
+                        free_from=grid.free_from)
     marker.write_text(report.model_dump_json(indent=2), encoding="utf-8")
 
 
@@ -597,5 +682,5 @@ def read_occupancy(folder: Path) -> tuple[OccupancyGrid, OccupancyReport]:
     with np.load(folder / OCCUPANCY_NPZ) as z:
         grid = OccupancyGrid(spec=report.grid, state=z["state"], esdf_cm=z["esdf_cm"],
                              column_top=z["column_top"], column_source=z["column_source"],
-                             max_distance_m=report.esdf.max_distance_m)
+                             free_from=z["free_from"], max_distance_m=report.esdf.max_distance_m)
     return grid, report

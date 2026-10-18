@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import torch
 
 # ---------------------------------------------------------------------------
 # COLMAP points3D.bin
@@ -315,6 +314,8 @@ def save_cloud(out_path: Path, xyz: np.ndarray, rgb: np.ndarray,
                source: Path, stats: dict, recenter: bool = False,
                extra_meta: dict | None = None) -> dict:
     """Write the .pt in the format the rest of the pipeline expects."""
+    import torch            # here, not at module level: the PLY / COLMAP readers stay torch-free
+
     centroid = xyz.mean(axis=0)
     if recenter:
         xyz = xyz - centroid

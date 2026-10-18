@@ -454,7 +454,7 @@ def random_grid(seed: int, rows=13, cols=11, layers=9, res=0.5) -> OccupancyGrid
     return OccupancyGrid(spec=spec, state=state, esdf_cm=esdf,
                          column_top=np.full((rows, cols), np.nan, np.float32),
                          column_source=np.full((rows, cols), ColumnSource.POINTS, np.uint8),
-                         max_distance_m=50.0)
+                         free_from=(heights + 1).astype(np.int16), max_distance_m=50.0)
 
 
 def brute_clearance(grid: OccupancyGrid, p: np.ndarray) -> np.ndarray:
@@ -536,8 +536,18 @@ def test_tiled_field_equals_one_piece(limit, signed):
     assert np.array_equal(tiled.astype(np.int64), reference_field(blocked, 0.5, limit, signed))
 
 
+def test_field_reads_a_state_array_like_its_mask():
+    """The build passes the state array itself (FREE == 0) to save a full-size copy."""
+    rng = np.random.default_rng(5)
+    state = rng.choice(np.array([FREE, OCCUPIED, UNKNOWN], np.uint8), size=(9, 8, 7),
+                       p=[0.8, 0.1, 0.1])
+    for signed in (False, True):
+        assert np.array_equal(distance_field_cm(state, 0.5, 3.0, signed=signed, tile_voxels=200),
+                              distance_field_cm(state != FREE, 0.5, 3.0, signed=signed))
+
+
 @pytest.mark.parametrize("kw, match", [
-    (dict(blocked=np.zeros((3, 3, 3), np.uint8)), "boolean"),
+    (dict(blocked=np.zeros((3, 3, 3), np.float32)), "boolean or uint8"),
     (dict(blocked=np.zeros((3, 3), bool)), "3-D"),
     (dict(max_distance_m=700.0), "fit"),
     (dict(max_distance_m=400.0, signed=True), "fit"),

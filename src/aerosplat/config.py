@@ -153,6 +153,12 @@ class RunConfig(BaseModel):
     occupancy_skyline_quantile: float = Field(0.9999, gt=0.5, le=1)
     occupancy_bbox: Optional[str] = None                       # "xmin,ymin,xmax,ymax", Site ENU
     occupancy_max_voxels: int = Field(400_000_000, ge=1)
+    # Space carving (aerosplat.surface.carving): промені камер до точок, які вони бачили
+    # (dense/fused.ply.vis), відкривають невідомий простір. Без видимості — лише 2.5D.
+    occupancy_carve: bool = True
+    occupancy_carve_min_views: int = Field(2, ge=1)            # різних камер на воксель
+    occupancy_carve_margin: float = Field(1.0, ge=0)           # не вирізати останні N м променя
+    occupancy_carve_under: bool = True                         # і під виміряною поверхнею (навіси)
 
     colmap_bin: str = "colmap"
 

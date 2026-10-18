@@ -23,10 +23,13 @@ from scipy import ndimage
 DEFAULT_TILE_VOXELS = 12_000_000
 
 
-def distance_field_cm(blocked: NDArray[np.bool_], res_m: float, max_distance_m: float, *,
-                      signed: bool = False,
+def distance_field_cm(blocked: NDArray[np.bool_] | NDArray[np.uint8], res_m: float,
+                      max_distance_m: float, *, signed: bool = False,
                       tile_voxels: int = DEFAULT_TILE_VOXELS) -> NDArray[np.integer]:
     """Distance from each voxel centre to the nearest blocked voxel centre, in centimetres.
+
+    `blocked` is boolean, or uint8 with every non-zero value blocked — an occupancy state
+    array (FREE == 0) can be passed as it is, without a full-size boolean copy.
 
     Values are rounded DOWN to whole centimetres, so a stored distance never exceeds the true
     one, and truncated at `max_distance_m`. Blocked voxels hold 0 — or, with `signed`, minus
@@ -35,8 +38,8 @@ def distance_field_cm(blocked: NDArray[np.bool_], res_m: float, max_distance_m: 
     Returns uint16, or int16 when signed; `max_distance_m` must fit that range.
     """
     b = np.asarray(blocked)
-    if b.ndim != 3 or b.dtype != np.bool_:
-        raise ValueError(f"expected a 3-D boolean volume, got {b.dtype} {b.shape}")
+    if b.ndim != 3 or b.dtype not in (np.bool_, np.uint8):
+        raise ValueError(f"expected a 3-D boolean or uint8 volume, got {b.dtype} {b.shape}")
     if not (math.isfinite(res_m) and res_m > 0):
         raise ValueError(f"res_m must be positive, got {res_m}")
     if not (math.isfinite(max_distance_m) and max_distance_m > 0):

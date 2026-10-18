@@ -116,8 +116,8 @@ def _read_cameras_txt(path: Path) -> dict[int, Intrinsics]:
     return out
 
 
-def _read_images_bin(path: Path, cams: dict[int, Intrinsics]) -> list[CameraPose]:
-    out: list[CameraPose] = []
+def _read_images_bin(path: Path, cams: dict[int, Intrinsics]) -> list[tuple[int, CameraPose]]:
+    out: list[tuple[int, CameraPose]] = []
     with path.open("rb") as f:
         for _ in range(_unpack(f, "Q")[0]):
             d = _unpack(f, "idddddddi")
@@ -126,29 +126,33 @@ def _read_images_bin(path: Path, cams: dict[int, Intrinsics]) -> list[CameraPose
                 name += ch
             n_pts = _unpack(f, "Q")[0]
             f.seek(24 * n_pts, 1)                      # skip the 2-D observations
-            out.append(CameraPose(name=name.decode(), R=quat_to_rotmat(d[1:5]),
-                                  t=np.array(d[5:8], float), intrinsics=cams[d[8]]))
+            out.append((d[0], CameraPose(name=name.decode(), R=quat_to_rotmat(d[1:5]),
+                                         t=np.array(d[5:8], float), intrinsics=cams[d[8]])))
     return out
 
 
-def _read_images_txt(path: Path, cams: dict[int, Intrinsics]) -> list[CameraPose]:
+def _read_images_txt(path: Path, cams: dict[int, Intrinsics]) -> list[tuple[int, CameraPose]]:
     # Keep blank lines: an image with no 2-D observations has an empty second
     # line, and dropping it would shift every pose after it onto the wrong row.
     lines = [ln for ln in path.read_text(encoding="utf-8").splitlines()
              if not ln.lstrip().startswith("#")]
-    out: list[CameraPose] = []
+    out: list[tuple[int, CameraPose]] = []
     for i in range(0, len(lines), 2):                   # every second line is the observations
         p = lines[i].split()
         if len(p) < 10:
             continue
-        out.append(CameraPose(name=p[9], R=quat_to_rotmat([float(v) for v in p[1:5]]),
-                              t=np.array([float(v) for v in p[5:8]]),
-                              intrinsics=cams[int(p[8])]))
+        out.append((int(p[0]), CameraPose(name=p[9], R=quat_to_rotmat([float(v) for v in p[1:5]]),
+                                          t=np.array([float(v) for v in p[5:8]]),
+                                          intrinsics=cams[int(p[8])])))
     return out
 
 
-def read_model(sparse_dir: Path | str) -> list[CameraPose]:
-    """Camera poses of a COLMAP sparse model, sorted by image name."""
+def read_model_ids(sparse_dir: Path | str) -> list[tuple[int, CameraPose]]:
+    """(image_id, pose) of a COLMAP sparse model, in the order the images file stores them.
+
+    Dense products number images by their position in the model (fused.ply.vis), so callers
+    that need that numbering get the ids and the file order rather than a name sort.
+    """
     d = Path(sparse_dir)
     if (d / "cameras.bin").is_file():
         cams = _read_cameras_bin(d / "cameras.bin")
@@ -157,9 +161,12 @@ def read_model(sparse_dir: Path | str) -> list[CameraPose]:
     else:
         raise FileNotFoundError(f"no cameras.bin or cameras.txt in {d}")
     if (d / "images.bin").is_file():
-        poses = _read_images_bin(d / "images.bin", cams)
-    elif (d / "images.txt").is_file():
-        poses = _read_images_txt(d / "images.txt", cams)
-    else:
-        raise FileNotFoundError(f"no images.bin or images.txt in {d}")
-    return sorted(poses, key=lambda c: c.name)
+        return _read_images_bin(d / "images.bin", cams)
+    if (d / "images.txt").is_file():
+        return _read_images_txt(d / "images.txt", cams)
+    raise FileNotFoundError(f"no images.bin or images.txt in {d}")
+
+
+def read_model(sparse_dir: Path | str) -> list[CameraPose]:
+    """Camera poses of a COLMAP sparse model, sorted by image name."""
+    return sorted((pose for _, pose in read_model_ids(sparse_dir)), key=lambda c: c.name)
