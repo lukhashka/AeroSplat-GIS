@@ -66,6 +66,8 @@ class RunLayout:
     splat_wgs84: Path
     # Semantic layer (terrain, buildings, facades) derived from the mapped cloud.
     semantics_dir: Path
+    # Occupancy grid + distance field, built from the same cloud and the semantics terrain.
+    occupancy_dir: Path
     # Earth Studio frames are matched as '<frame_prefix>_<n>.<ext>'.
     frame_prefix: str
     # Site ENU origin; None only for legacy runs (origin = mean of the frames).
@@ -124,6 +126,7 @@ class RunLayout:
             cloud_wgs84=_wgs84(cloud_in),
             splat_wgs84=_wgs84(data_dir / f"{ds}_splat.pt"),
             semantics_dir=run_dir / "semantics",
+            occupancy_dir=run_dir / "occupancy",
             frame_prefix=ds,
         )
 
@@ -170,6 +173,7 @@ class RunLayout:
             cloud_wgs84=_wgs84(cloud_in),
             splat_wgs84=_wgs84(run.gs / "splat.pt"),
             semantics_dir=run.root / "semantics",
+            occupancy_dir=run.root / "occupancy",
             frame_prefix=capture.frame_prefix or site.id,
             origin=site.origin,
             site_key=site.key,

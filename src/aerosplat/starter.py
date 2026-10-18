@@ -14,6 +14,7 @@ footage → EXIF GPS → COLMAP SfM → COLMAP MVS → .pt cloud → 3DGS splat 
     aerosplat run --from sfm               # почати з SfM (кадри вже геотеговані)
     aerosplat run --only train
     aerosplat run --stages exif,sfm,dense
+    aerosplat run --site dataset_v6 --resume --from semantics   # + рельєф/фасади і зайнятість
     aerosplat run --dry-run                # тільки показати команди
     aerosplat run --config my_run.json     # усі параметри з файлу
 """
@@ -33,6 +34,10 @@ from aerosplat.pipeline.layout import DATA_DIR, RunLayout, abs_path
 from aerosplat.pipeline.runner import StageCallback, StageError, preflight, run_stages
 
 STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval", "georef"]
+# Run only when named (--stages / --only / --from / --to): they read what the stages above
+# wrote, and a plain `aerosplat run` should not grow by minutes for products not asked for.
+OPTIONAL_STAGES = ["semantics", "occupancy"]
+ALL_STAGES = STAGES + OPTIONAL_STAGES
 
 # Параметри: src/aerosplat/config.py (RunConfig, валідація pydantic).
 # Перекриття: --config run.yaml|json, прапорці CLI, --set KEY=VALUE.
@@ -73,11 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                     help="перекрити будь-який ключ CONFIG, напр. --set chunk=32")
 
-    ap.add_argument("--stages", help=f"через кому, з: {','.join(STAGES)}")
-    ap.add_argument("--from", dest="from_stage", choices=STAGES,
-                    help="почати з цієї стадії і далі до кінця")
-    ap.add_argument("--to", dest="to_stage", choices=STAGES)
-    ap.add_argument("--only", choices=STAGES, help="лише одна стадія")
+    ap.add_argument("--stages", help=f"через кому, з: {','.join(ALL_STAGES)}")
+    ap.add_argument("--from", dest="from_stage", choices=ALL_STAGES,
+                    help=f"почати з цієї стадії і далі до кінця ({', '.join(OPTIONAL_STAGES)} — "
+                         f"лише якщо названі тут чи в --to)")
+    ap.add_argument("--to", dest="to_stage", choices=ALL_STAGES)
+    ap.add_argument("--only", choices=ALL_STAGES, help="лише одна стадія")
     ap.add_argument("--skip", help="пропустити стадії, через кому")
     ap.add_argument("--resume", action="store_true",
                     help="пропустити стадії, що вже успішно виконані з тим самим конфігом "
@@ -137,13 +143,16 @@ def resolve_stages(args) -> list:
         return [args.only]
     if args.stages:
         chosen = [s.strip() for s in args.stages.split(",") if s.strip()]
-        bad = [s for s in chosen if s not in STAGES]
+        bad = [s for s in chosen if s not in ALL_STAGES]
         if bad:
             raise SystemExit(f"Невідомі стадії: {bad}")
         return chosen
-    start = STAGES.index(args.from_stage) if args.from_stage else 0
-    end = STAGES.index(args.to_stage) + 1 if args.to_stage else len(STAGES)
-    chosen = STAGES[start:end]
+    start = ALL_STAGES.index(args.from_stage) if args.from_stage else 0
+    if args.to_stage:
+        end = ALL_STAGES.index(args.to_stage) + 1
+    else:   # optional stages only when --from names one of them
+        end = len(ALL_STAGES) if start >= len(STAGES) else len(STAGES)
+    chosen = ALL_STAGES[start:end]
     if args.skip:
         skip = {s.strip() for s in args.skip.split(",")}
         chosen = [s for s in chosen if s not in skip]

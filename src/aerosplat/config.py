@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RunConfig(BaseModel):
@@ -139,12 +139,42 @@ class RunConfig(BaseModel):
     coverage_max_gsd: float = Field(0.05, gt=0)
     semantics_seed: int = Field(0, ge=0)
 
+    # -- occupancy: voxel grid + ESDF (Фаза 8.1a, aerosplat.surface) --------
+    # Невідоме = зайняте (internal reliability requirements §3 п. 3); кожне припущення про вільний
+    # простір записується по колонках (ColumnSource) і в occupancy.json.
+    occupancy_res: float = Field(0.5, gt=0, le=2)              # воксель, м; ділить semantics_res
+    occupancy_headroom: float = Field(10.0, gt=0)              # сітка над лінією дахів, м
+    occupancy_max_distance: float = Field(20.0, gt=0, le=600)  # обрізання ESDF, м
+    occupancy_fill_radius: float = Field(5.0, ge=0)            # дірки в хмарі до цього радіуса, м
+    occupancy_close_radius: float = Field(1.0, ge=0)           # ями вужчі за ~2 радіуси, м
+    occupancy_assumed_margin: float = Field(1.0, ge=0)         # запас над припущеною висотою, м
+    # Колонки без даних: невідомі до лінії дахів ("skyline") або до неба ("sky").
+    occupancy_unknown: Literal["skyline", "sky"] = "skyline"
+    occupancy_skyline_quantile: float = Field(0.9999, gt=0.5, le=1)
+    occupancy_bbox: Optional[str] = None                       # "xmin,ymin,xmax,ymax", Site ENU
+    occupancy_max_voxels: int = Field(400_000_000, ge=1)
+
     colmap_bin: str = "colmap"
+
+    @field_validator("occupancy_bbox")
+    @classmethod
+    def _check_bbox(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            from aerosplat.surface.models import parse_bbox
+
+            parse_bbox(v)
+        return v
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "RunConfig":
         if self.warmup_iters >= self.iterations and self.warmup_iters:
             raise ValueError("warmup_iters must be smaller than iterations")
+        ratio = self.semantics_res / self.occupancy_res
+        if round(ratio) < 1 or abs(ratio - round(ratio)) > 1e-6:
+            raise ValueError(f"occupancy_res={self.occupancy_res} must divide "
+                             f"semantics_res={self.semantics_res}")
+        if self.occupancy_headroom < self.occupancy_assumed_margin + 2 * self.occupancy_res:
+            raise ValueError("occupancy_headroom must exceed occupancy_assumed_margin + 2 voxels")
         return self
 
     def to_dict(self) -> dict[str, Any]:

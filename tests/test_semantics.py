@@ -350,11 +350,11 @@ def test_pose_carried_through_an_affine_projects_the_same_point():
 
 
 # ── pipeline wiring ──────────────────────────────────────────────────────
-def test_semantics_stage_is_registered_and_last():
+def test_semantics_stage_is_registered_before_occupancy():
     from aerosplat.jobs.models import PIPELINE_STAGES
     from aerosplat.pipeline.stages import STAGES
 
-    assert PIPELINE_STAGES[-1] == "semantics"
+    assert PIPELINE_STAGES[-2:] == ("semantics", "occupancy")      # occupancy reads its terrain
     assert list(STAGES) == list(PIPELINE_STAGES)
     assert STAGES["semantics"].entry({}) is not None            # module imports, main() exists
 

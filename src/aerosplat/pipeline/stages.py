@@ -16,6 +16,7 @@ from typing import Any, Callable
 from aerosplat.geo.sphere_enu import EARTH_MODEL
 from aerosplat.logging_utils import get_logger
 from aerosplat.pipeline.layout import RunLayout, abs_path
+from aerosplat.surface.models import FORMAT_VERSION as OCCUPANCY_FORMAT
 
 Cfg = dict[str, Any]
 
@@ -170,8 +171,13 @@ def argv_georef(cfg: Cfg, L: RunLayout) -> list[str]:
             "--splat", str(L.splat_pt), str(L.splat_wgs84)]
 
 
+def _semantic_cloud(cfg: Cfg, L: RunLayout) -> Path:
+    """The Site ENU cloud that semantics and occupancy both read."""
+    return L.cloud_wgs84 if _known_poses(cfg) else L.cloud_in
+
+
 def argv_semantics(cfg: Cfg, L: RunLayout) -> list[str]:
-    a = ["--cloud", str(L.cloud_wgs84 if _known_poses(cfg) else L.cloud_in),
+    a = ["--cloud", str(_semantic_cloud(cfg, L)),
          "--out-dir", str(L.semantics_dir), "--sparse", str(L.sparse),
          "--seed", str(cfg["semantics_seed"])]
     for key, flag in (("semantics_res", "--res"), ("min_building_height", "--min-building-height"),
@@ -188,6 +194,23 @@ def argv_semantics(cfg: Cfg, L: RunLayout) -> list[str]:
     if _known_poses(cfg):
         # The cameras are in the reconstruction frame; this is how they reach Site ENU.
         _flag("--registration", L.registration_report, a)
+    return a
+
+
+def argv_occupancy(cfg: Cfg, L: RunLayout) -> list[str]:
+    a = ["--cloud", str(_semantic_cloud(cfg, L)), "--semantics-dir", str(L.semantics_dir),
+         "--out-dir", str(L.occupancy_dir), "--unknown", cfg["occupancy_unknown"]]
+    for key, flag in (("occupancy_res", "--res"), ("occupancy_headroom", "--headroom"),
+                      ("occupancy_max_distance", "--max-distance"),
+                      ("occupancy_fill_radius", "--fill-radius"),
+                      ("occupancy_close_radius", "--close-radius"),
+                      ("occupancy_assumed_margin", "--assumed-margin"),
+                      ("occupancy_skyline_quantile", "--skyline-quantile"),
+                      ("occupancy_max_voxels", "--max-voxels")):
+        _flag(flag, cfg[key], a)
+    if cfg["occupancy_bbox"]:
+        # One token: argparse would read a bbox starting with "-" as an option.
+        a.append(f"--bbox={cfg['occupancy_bbox']}")
     return a
 
 
@@ -248,6 +271,11 @@ _SEMANTICS = ("semantics_res", "min_building_height", "min_building_area", "faca
               "max_facades_per_building", "coverage_cell", "coverage_max_angle",
               "coverage_max_gsd", "semantics_seed", "camera_source", "known_poses",
               "cloud_source")
+_OCCUPANCY = ("occupancy_res", "occupancy_headroom", "occupancy_max_distance",
+              "occupancy_fill_radius", "occupancy_close_radius", "occupancy_assumed_margin",
+              "occupancy_unknown",
+              "occupancy_skyline_quantile", "occupancy_bbox", "occupancy_max_voxels",
+              "semantics_res", "camera_source", "known_poses", "cloud_source")
 
 
 def _geo_skip(cfg: Cfg) -> str | None:
@@ -266,6 +294,18 @@ def _georef_skip(cfg: Cfg) -> str | None:
     return None
 
 
+def _semantics_skip(cfg: Cfg) -> str | None:
+    if cfg["cloud_source"] != "dense":
+        return "cloud_source='sparse' — розрідженої хмари замало на фасади"
+    return None
+
+
+def _occupancy_skip(cfg: Cfg) -> str | None:
+    if cfg["cloud_source"] != "dense":
+        return "cloud_source='sparse' — semantics пропущено, рельєфу для зайнятості немає"
+    return None
+
+
 def _exif_skip(cfg: Cfg) -> str | None:
     if cfg["camera_source"] == "earthstudio_json":
         return "camera_source='earthstudio_json' — raw_images_<ds> вже заповнено стадією 'geo'"
@@ -273,54 +313,57 @@ def _exif_skip(cfg: Cfg) -> str | None:
 
 
 STAGES: dict[str, Stage] = {s.name: s for s in [
-    Stage("geo", "0/8  Earth Studio JSON → відомі пози COLMAP (сферичний ENU ділянки) + кадри для SfM",
+    Stage("geo", "0/9  Earth Studio JSON → відомі пози COLMAP (сферичний ENU ділянки) + кадри для SfM",
           lambda c: "aerosplat.geo.earthstudio_to_colmap", argv_geo,
           lambda c, L: [L.json_path],
           lambda c, L: [L.known_poses_dir, L.geotagged],
           ("camera_source",), _geo_skip, version=EARTH_MODEL),
-    Stage("exif", "1/8  EXIF GPS injection",
+    Stage("exif", "1/9  EXIF GPS injection",
           lambda c: "aerosplat.geo.exif_injector", argv_exif,
           lambda c, L: [L.footage],
           lambda c, L: [L.geotagged],
           ("camera_source",) + _SYNTH, _exif_skip),
-    Stage("sfm", "2/8  COLMAP SfM (sparse)",
+    Stage("sfm", "2/9  COLMAP SfM (sparse)",
           lambda c: "aerosplat.sfm.sfm_runner", argv_sfm,
           lambda c, L: [L.geotagged],
           lambda c, L: [L.sparse],
           ("camera_source",) + _SFM),
-    Stage("dense", "3/8  COLMAP Dense MVS",
+    Stage("dense", "3/9  COLMAP Dense MVS",
           lambda c: "aerosplat.sfm.dense_runner", argv_dense,
           lambda c, L: [L.sparse],
           lambda c, L: [L.fused_ply],
           _DENSE),
-    Stage("parse", "4/8  point cloud → .pt",
+    Stage("parse", "4/9  point cloud → .pt",
           lambda c: ("aerosplat.io.ply_parser" if c["cloud_source"] == "dense"
                   else "aerosplat.io.colmap_parser"),
           argv_parse,
           lambda c, L: [L.fused_ply if c["cloud_source"] == "dense" else L.points3d],
           lambda c, L: [L.cloud_in],
           _PARSE),
-    Stage("train", "5/8  3D Gaussian Splatting (aerosplat.gs.trainer)",
+    Stage("train", "5/9  3D Gaussian Splatting (aerosplat.gs.trainer)",
           lambda c: "aerosplat.gs.trainer", argv_train,
           lambda c, L: [L.cloud_in],
           lambda c, L: [L.splat_pt],
           _TRAIN, extra_keys=_gsplat_keys),
-    Stage("eval", "6/8  Оцінка якості на test-кадрах (metrics.json + report.html)",
+    Stage("eval", "6/9  Оцінка якості на test-кадрах (metrics.json + report.html)",
           lambda c: "aerosplat.gs.evaluate", argv_eval,
           lambda c, L: [L.splat_pt],
           lambda c, L: [L.metrics_json, L.report_html],
           _EVAL,
           lambda c: ("eval_every=0 — test-спліту немає" if not c["eval_every"] else None)),
-    Stage("georef", "7/8  Продукти: сферичний ENU → WGS84 Site ENU (афінне з reports/registration.json)",
+    Stage("georef", "7/9  Продукти: сферичний ENU → WGS84 Site ENU (афінне з reports/registration.json)",
           lambda c: "aerosplat.geo.georef", argv_georef,
           lambda c, L: [L.registration_report, L.cloud_in, L.splat_pt],
           lambda c, L: [L.cloud_wgs84, L.splat_wgs84],
           ("camera_source", "known_poses", "cloud_source"), _georef_skip),
-    Stage("semantics", "8/8  Семантика: рельєф, будівлі, фасади, карта покриття",
+    Stage("semantics", "8/9  Семантика: рельєф, будівлі, фасади, карта покриття",
           lambda c: "aerosplat.semantics.stage", argv_semantics,
-          lambda c, L: [L.cloud_wgs84 if _known_poses(c) else L.cloud_in],
+          lambda c, L: [_semantic_cloud(c, L)],
           lambda c, L: [L.semantics_dir],
-          _SEMANTICS,
-          lambda c: ("cloud_source='sparse' — розрідженої хмари замало на фасади"
-                     if c["cloud_source"] != "dense" else None)),
+          _SEMANTICS, _semantics_skip),
+    Stage("occupancy", "9/9  Зайнятість: воксельна сітка + ESDF (кліренси, промені)",
+          lambda c: "aerosplat.surface.stage", argv_occupancy,
+          lambda c, L: [_semantic_cloud(c, L), L.semantics_dir],
+          lambda c, L: [L.occupancy_dir],
+          _OCCUPANCY, _occupancy_skip, version=OCCUPANCY_FORMAT),
 ]}

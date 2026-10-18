@@ -12,8 +12,8 @@ from aerosplat.pipeline.layout import RunLayout
 from aerosplat.pipeline.manifest import git_commit
 from aerosplat.store.catalog import Catalog, new_run_id
 from aerosplat.store.models import Capture, CaptureSource, RunStatus, Site
-from aerosplat.store.scenes import (CLOUD, CLOUD_RECON, REGISTRATION, SEMANTICS, SPLAT,
-                                    SPLAT_RECON, is_georeferenced, run_earth_model)
+from aerosplat.store.scenes import (CLOUD, CLOUD_RECON, OCCUPANCY, REGISTRATION, SEMANTICS,
+                                    SPLAT, SPLAT_RECON, is_georeferenced, run_earth_model)
 
 
 @dataclass
@@ -88,7 +88,7 @@ class SiteRun:
         products = {"sparse": L.sparse, "fused_ply": L.fused_ply,
                     "known_poses": L.known_poses_dir, "metrics": L.metrics_json,
                     "report": L.report_html, REGISTRATION: L.registration_report,
-                    SEMANTICS: L.semantics_dir}
+                    SEMANTICS: L.semantics_dir, OCCUPANCY: L.occupancy_dir}
         if is_georeferenced(cfg):
             # Served products must be in WGS84 Site ENU: only the georef stage's
             # outputs qualify; the sphere-ENU originals are kept for reference.

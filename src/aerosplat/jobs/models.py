@@ -88,7 +88,7 @@ class WorkerInfo(_Model):
 
 # ── payloads ─────────────────────────────────────────────────────────────
 PIPELINE_STAGES = ("geo", "exif", "sfm", "dense", "parse", "train", "eval", "georef",
-                   "semantics")
+                   "semantics", "occupancy")
 
 
 class PipelineSpec(_Model):
