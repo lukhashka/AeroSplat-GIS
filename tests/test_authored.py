@@ -238,3 +238,75 @@ def test_authored_files_sit_outside_every_run_directory(tmp_path):
         assert path.parent == site.authored
         assert run not in path.parents            # ADR-0006: a run may be deleted
     assert AuthoredStore.for_site(site, "demo/pier").state_path == site.access_points
+
+
+# ── pads, uncertainty, flags (step 8.1b) ─────────────────────────────────
+def test_a_roof_pad_is_an_outline_without_a_facade(store):
+    from aerosplat.authored import make_pad_point
+    pad = store.create(make_pad_point(site_key="demo/pier", class_id="pad.roof_flat",
+                                      taxonomy="core@1.1", z=20.0, building_id="B01",
+                                      polygon_enu=[(0, 0), (4, 0), (4, 2), (0, 2)]))
+    assert pad.host is None and pad.geometry is None and pad.facade_id is None
+    assert pad.pad.center == pytest.approx((2.0, 1.0, 20.0)) and pad.pad.area_m2 == pytest.approx(8)
+    assert pad.where == "roof of B01"
+    assert store.features(facade_id="B01/N1") == []           # a facade filter never returns it
+    assert store.get(pad.id) == pad and "roof of B01" in store.audit()[-1].what
+
+
+def test_a_pad_centre_is_the_area_centroid_not_the_vertex_mean():
+    from aerosplat.authored import pad_geometry
+    # An L: vertex mean and area centroid differ.
+    pts = [(0, 0), (4, 0), (4, 1), (1, 1), (1, 4), (0, 4)]
+    g = pad_geometry(pts, z=0.0)
+    assert g.area_m2 == pytest.approx(7.0)
+    # A 4x1 strip centred at (2, 0.5) and a 1x3 strip centred at (0.5, 2.5), weighted by area.
+    c = (4 * 2.0 + 3 * 0.5) / 7.0
+    assert g.center[:2] == pytest.approx((c, c))
+    assert sum(p[0] for p in pts) / len(pts) != pytest.approx(c)
+
+
+@pytest.mark.parametrize("polygon", [[(0, 0), (0.5, 0), (0.5, 0.5)], [(0, 0), (1, 1)],
+                                     [(0, 0), (float("nan"), 0), (1, 1)]],
+                         ids=["tiny", "two-points", "nan"])
+def test_a_degenerate_pad_is_refused(polygon):
+    from aerosplat.authored import pad_geometry
+    with pytest.raises(ValueError):
+        pad_geometry(polygon, z=0.0)
+
+
+def test_an_access_point_is_either_on_a_facade_or_a_pad():
+    from aerosplat.authored import pad_geometry
+    record = a_point().model_dump(by_alias=True)
+    pad = pad_geometry([(0, 0), (2, 0), (2, 2)], z=1.0).model_dump()
+    with pytest.raises(ValueError, match="exactly one"):
+        AccessPoint(**{**record, "pad": pad})                   # both
+    with pytest.raises(ValueError, match="exactly one"):
+        AccessPoint(**{**record, "host": None, "geometry": None})   # neither
+    with pytest.raises(ValueError, match="go together"):
+        AccessPoint(**{**record, "geometry": None})
+    with pytest.raises(ValueError, match="needs a pad class"):
+        AccessPoint(**{**record, "host": None, "geometry": None, "pad": pad})
+
+
+def test_uncertainty_must_be_a_covariance():
+    from aerosplat.authored import ApUncertainty
+    ApUncertainty(center_cov=((0.04, 0.01, 0), (0.01, 0.09, 0), (0, 0, 0.01)))
+    with pytest.raises(ValueError, match="symmetric"):
+        ApUncertainty(center_cov=((0.04, 0.01, 0), (0.0, 0.09, 0), (0, 0, 0.01)))
+    with pytest.raises(ValueError, match="non-negative"):
+        ApUncertainty(center_cov=((-0.04, 0, 0), (0, 0.09, 0), (0, 0, 0.01)))
+
+
+def test_an_unknown_flag_is_refused():
+    record = a_point().model_dump(by_alias=True)
+    assert AccessPoint(**{**record, "flags": ["not_redetected"]}).flags
+    with pytest.raises(ValueError):
+        AccessPoint(**{**record, "flags": ["looks_fine"]})
+
+
+def test_files_written_before_pads_existed_still_load(store):
+    # Version 1.0 records have host + geometry and none of the new fields.
+    old = a_point().model_dump(by_alias=True, mode="json")
+    for k in ("pad", "uncertainty", "flags"):
+        old.pop(k)
+    assert AccessPoint(**old).host.facade_id == "B01/N1"

@@ -80,13 +80,21 @@ class SizePrior(_Model):
 
 
 class Handover(_Model):
-    """Default approach numbers for the class (§7.1). The operator may override them per target."""
+    """Default approach numbers for the class (§7.1). The operator may override them per target,
+    but only towards caution (aerosplat.mission.targets)."""
 
     allowed: list[HandoverMode] = Field(min_length=1)
     default: HandoverMode
+    # Openings: hover distance in front of the opening. Pads: hover height above the pad.
     standoff_m: float = Field(gt=0, le=100)
     min_clearance_m: float = Field(gt=0, le=100)
+    # Full apex angle of the cone the approach direction may tilt within (half each side).
     approach_cone_deg: float = Field(gt=0, le=180)
+    # Openings only: distance of the entry point E from the opening, along the approach
+    # direction (§7.2). Unset = the class cannot be approached horizontally.
+    entry_distance_m: Optional[float] = Field(None, gt=0, le=200)
+    # Openings only: hover this much above the opening's centre (§7.2, `up·Δh`).
+    hover_dh_m: float = Field(0.0, ge=-10, le=10)
 
     @model_validator(mode="after")
     def _default_is_allowed(self) -> "Handover":
@@ -94,7 +102,21 @@ class Handover(_Model):
             raise ValueError(f"handover.default '{self.default.value}' is not in allowed")
         if len(set(self.allowed)) != len(self.allowed):
             raise ValueError("handover.allowed has duplicates")
+        if self.entry_distance_m is not None and self.entry_distance_m <= self.standoff_m:
+            raise ValueError(f"handover.entry_distance_m ({self.entry_distance_m}) must be beyond "
+                             f"standoff_m ({self.standoff_m})")
         return self
+
+
+class HandoverModeSpec(_Model):
+    """Numbers that belong to the way of handing over, whatever the class (§6.3, SIMULATION §5.4).
+
+    `max_sigma_m` gates designation: a target whose centre is known worse than this (1σ, metres,
+    access point and georeferencing together) cannot be confirmed for this mode, because the
+    drone's own guidance would start from a prior too vague to find the right opening.
+    """
+
+    max_sigma_m: float = Field(gt=0, le=50)
 
 
 class Attribute(_Model):
@@ -170,6 +192,7 @@ class TaxonomyPack(_Model):
     requires: dict[str, str] = Field(default_factory=dict)
     attributes: list[Attribute] = Field(default_factory=list)
     classes: list[TaxonomyClass] = Field(default_factory=list)
+    handover_modes: dict[HandoverMode, HandoverModeSpec] = Field(default_factory=dict)
 
     @property
     def short_version(self) -> str:

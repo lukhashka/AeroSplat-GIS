@@ -10,6 +10,9 @@ The drawing itself is `geometry.polygon_uv` — facade (u, v) metres, with `u` g
 to the right of an observer standing outside facing the wall. The ENU fields beside
 it are derived from that polygon and the host frame, so a consumer that only wants a
 point in the world needs no facade lookup.
+
+A pad (a flat roof or a patch of ground, §3.2) has no facade: it is drawn as a
+horizontal outline in Site ENU (`pad`), and then carries neither `host` nor `geometry`.
 """
 
 from __future__ import annotations
@@ -41,14 +44,19 @@ def _base32(value: int, length: int) -> str:
     return "".join(reversed(out))
 
 
+def new_ulid(prefix: str, now_ms: Optional[int] = None) -> str:
+    """`prefix` + a ULID: 48 bits of millisecond timestamp then 80 random bits."""
+    ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    return prefix + _base32(ms, 10) + _base32(secrets.randbits(80), 16)
+
+
 def new_ap_id(now_ms: Optional[int] = None) -> str:
-    """`ap_` + a ULID: 48 bits of millisecond timestamp then 80 random bits (§3.1).
+    """`ap_` + a ULID (§3.1).
 
     Sortable by creation time, unique without a central counter, and stable for the
     life of the feature across runs.
     """
-    ms = now_ms if now_ms is not None else int(time.time() * 1000)
-    return AP_PREFIX + _base32(ms, 10) + _base32(secrets.randbits(80), 16)
+    return new_ulid(AP_PREFIX, now_ms)
 
 
 class Lifecycle(str, Enum):
@@ -67,6 +75,14 @@ class Lifecycle(str, Enum):
 class Origin(str, Enum):
     pipeline = "pipeline"
     manual = "manual"
+
+
+class ApFlag(str, Enum):
+    """Conditions that block designation without changing the lifecycle (§5.9, §6.3)."""
+
+    # A new run did not find this verified feature again: maybe the building changed,
+    # maybe the detector failed. Somebody has to look before it becomes a target.
+    not_redetected = "not_redetected"
 
 
 class _Model(BaseModel):
@@ -114,6 +130,43 @@ class Geometry(_Model):
         return min(vs), max(vs)
 
 
+class PadGeometry(_Model):
+    """A horizontal pad (§3.2): an outline in Site ENU on a flat surface.
+
+    v0 keeps only what approach planning needs. `center` and `area_m2` are derived from
+    the outline (aerosplat.authored.geometry.pad_geometry), like the ENU block of an opening.
+    """
+
+    frame: str = "site_enu"
+    polygon_enu: list[tuple[float, float]] = Field(min_length=3)   # (east, north), metres
+    z: float                                    # ENU height of the flat surface
+    building_id: Optional[str] = None           # the roof's building; None for a ground pad
+    center: tuple[float, float, float]          # area centroid, at z
+    area_m2: float = Field(gt=0)
+
+
+class ApUncertainty(_Model):
+    """§3.1: how well the feature's centre is known in Site ENU (1σ, the model's frame).
+
+    Georeferencing (model -> WGS84) is a separate term, added where the target is built.
+    """
+
+    center_cov: tuple[tuple[float, float, float], tuple[float, float, float],
+                      tuple[float, float, float]]                   # m²
+    sigma_normal_deg: Optional[float] = Field(None, ge=0)
+
+    @model_validator(mode="after")
+    def _covariance(self) -> "ApUncertainty":
+        c = self.center_cov
+        for a in range(3):
+            if not c[a][a] >= 0:
+                raise ValueError("center_cov must have a non-negative diagonal")
+            for b in range(3):
+                if abs(c[a][b] - c[b][a]) > 1e-9:
+                    raise ValueError("center_cov must be symmetric")
+        return self
+
+
 class Address(_Model):
     """§4. A wrong floor or column sends the drone to someone else's window, so
     `floor_ambiguous` blocks confirming a target without an explicit human check (§6.3)."""
@@ -156,12 +209,16 @@ class AccessPoint(_Model):
     class_: str = Field(alias="class")
     kind: str                                   # the class's kind, denormalised for filtering
     taxonomy: str                               # "core@1.0+residential@1.0" (§2.5)
-    host: HostFacade
-    geometry: Geometry
+    # Drawn on a facade: `host` + `geometry`. A pad: `pad` alone.
+    host: Optional[HostFacade] = None
+    geometry: Optional[Geometry] = None
+    pad: Optional[PadGeometry] = None
+    uncertainty: Optional[ApUncertainty] = None
     attributes: dict[str, str] = Field(default_factory=dict)
     address: Optional[Address] = None
     confidence: Optional[float] = Field(None, ge=0, le=1)
     lifecycle: Lifecycle = Lifecycle.verified
+    flags: list[ApFlag] = Field(default_factory=list)
     provenance: Provenance
     notes: str = ""
 
@@ -170,11 +227,26 @@ class AccessPoint(_Model):
         head = self.class_.split(".", 1)[0]
         if self.kind != head:
             raise ValueError(f"kind '{self.kind}' does not match class '{self.class_}'")
+        if (self.host is None) != (self.geometry is None):
+            raise ValueError("host and geometry go together: a facade frame and the shape in it")
+        if (self.host is not None) == (self.pad is not None):
+            raise ValueError("an access point is drawn either on a facade (host + geometry) "
+                             "or as a pad (pad), exactly one of the two")
+        if self.pad is not None and self.kind != "pad":
+            raise ValueError(f"a pad outline needs a pad class, not '{self.class_}'")
         return self
 
     @property
-    def facade_id(self) -> str:
-        return self.host.facade_id
+    def facade_id(self) -> Optional[str]:
+        return self.host.facade_id if self.host is not None else None
+
+    @property
+    def where(self) -> str:
+        """Where it is, for humans and audit lines: the facade, or the pad's host."""
+        if self.host is not None:
+            return self.host.facade_id
+        assert self.pad is not None
+        return f"roof of {self.pad.building_id}" if self.pad.building_id else "ground"
 
 
 class AuthoredFile(_Model):

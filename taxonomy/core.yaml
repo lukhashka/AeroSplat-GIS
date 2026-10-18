@@ -3,11 +3,25 @@
 # Класи — це дані, не код: новий клас додається тут, а не релізом (§2.1).
 # Формат класу — §2.4; валідація — aerosplat.taxonomy.
 #
-# Числа в `handover` — плейсхолдери з §7.1, доки не відоме обладнання
-# замовника (§13). Вони задають, звідки дрон передає вантаж, а не те,
+# Числа в `handover` і `handover_modes` — плейсхолдери з §7.1, доки не відоме
+# обладнання замовника (§13). Вони задають, звідки дрон передає вантаж, а не те,
 # що він зробить у останні метри: це задача бортового наведення (ADR-0009).
+#
+# 1.1: `entry_distance_m` / `hover_dh_m` у `handover` (геометрія підльоту §7.2) і
+# `handover_modes` (поріг σ цілі для способу передачі, §6.3) — для aerosplat.mission.
 pack: core
-version: 1.0.0
+version: 1.1.0
+
+# Пороги, що належать способу передачі, а не класу. `max_sigma_m` — найбільша σ (1σ, м)
+# центру цілі у світі (AP + геоприв'язка), за якої ціль ще можна підтвердити (§6.3).
+# Більша σ — підтвердження блокується (`sigma_too_large`).
+handover_modes:
+  hover_handoff: {max_sigma_m: 1.5}
+  tether_lower: {max_sigma_m: 1.5}
+  land: {max_sigma_m: 1.5}
+  drop: {max_sigma_m: 1.0}
+  pickup: {max_sigma_m: 1.5}
+  enter: {max_sigma_m: 0.3}
 
 # Атрибути, на які можуть посилатися класи цього й залежних пакетів (§2.3).
 # `dynamic` — значення залежить від епохи (вікно відчинили) і не переноситься
@@ -56,6 +70,8 @@ classes:
       standoff_m: 3.0
       min_clearance_m: 1.5
       approach_cone_deg: 30
+      entry_distance_m: 12.0
+      hover_dh_m: 0.0
     citygml: Window
 
   - id: opening.door
@@ -70,6 +86,8 @@ classes:
       standoff_m: 3.0
       min_clearance_m: 1.5
       approach_cone_deg: 30
+      entry_distance_m: 12.0
+      hover_dh_m: 0.0
     citygml: Door
 
   # ── придатні горизонтальні ділянки ────────────────────────────────────

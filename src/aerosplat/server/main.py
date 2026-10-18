@@ -45,7 +45,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
-from aerosplat.server import api_semantics, api_v2
+from aerosplat.server import api_mission, api_semantics, api_v2
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
 from aerosplat.store.paths import default_projects_root
 from aerosplat.store.scenes import SceneSource, discover_scenes
@@ -1004,6 +1004,7 @@ def refresh_scenes() -> Dict[str, object]:
 app.state.refresh_scenes = refresh_scenes
 app.include_router(api_v2.router)
 app.include_router(api_semantics.router)
+app.include_router(api_mission.router)
 
 class _RevalidatedStaticFiles(StaticFiles):
     """The classic viewer's files are unversioned (no content hash in the name), so

@@ -127,8 +127,8 @@ def draw(client, u0, v0, u1, v1, class_id="opening.window", facade="B01/N1", **e
 # ── taxonomy ─────────────────────────────────────────────────────────────
 def test_the_site_serves_the_packs_it_names(client):
     body = client.get(f"{BASE}/taxonomy").json()
-    assert body["version"] == "core@1.0"
-    assert body["packs"] == [{"pack": "core", "version": "1.0.0"}]
+    assert body["version"] == "core@1.1"
+    assert body["packs"] == [{"pack": "core", "version": "1.1.0"}]
     window = next(c for c in body["classes"] if c["id"] == "opening.window")
     assert window["labels"]["uk"] == "Вікно" and window["kind"] == "opening"
     # Attributes and approach numbers arrive resolved, so a picker needs no inheritance logic.
@@ -238,7 +238,7 @@ def test_a_drawn_opening_is_stored_in_the_shape_the_doc_specifies(client):
     assert r.status_code == 201, r.text
     ap = r.json()
     assert ap["class"] == "opening.window" and ap["kind"] == "opening"
-    assert ap["taxonomy"] == "core@1.0" and ap["site_key"] == "demo/pier"
+    assert ap["taxonomy"] == "core@1.1" and ap["site_key"] == "demo/pier"
     assert ap["lifecycle"] == "verified"                 # drawn by hand (§3.4)
     assert ap["geometry"]["width"] == pytest.approx(1.3)
     assert ap["geometry"]["height"] == pytest.approx(1.5)

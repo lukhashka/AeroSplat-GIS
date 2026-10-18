@@ -236,8 +236,8 @@ def site_taxonomy(project_id: str, site_id: str,
 def _counts(store: AuthoredStore) -> dict[str, int]:
     out: dict[str, int] = {}
     for f in store.load().features:
-        if f.lifecycle is not Lifecycle.rejected:
-            out[f.host.facade_id] = out.get(f.host.facade_id, 0) + 1
+        if f.lifecycle is not Lifecycle.rejected and f.facade_id is not None:
+            out[f.facade_id] = out.get(f.facade_id, 0) + 1
     return out
 
 
@@ -346,9 +346,10 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
     store = _store(cat, site)
     features = [f for f in store.features(facade_id=facade_id)
                 if f.kind == ApKind.opening.value and f.lifecycle is not Lifecycle.rejected]
+    shapes = [(f.id, f.geometry) for f in features if f.geometry is not None]
     result = address_facade(
-        [Opening(id=f.id, u_center=f.geometry.u_center, v_center=f.geometry.v_center,
-                 height=f.geometry.height, width=f.geometry.width) for f in features],
+        [Opening(id=fid, u_center=g.u_center, v_center=g.v_center, height=g.height,
+                 width=g.width) for fid, g in shapes],
         v_ground=facade.v_ground, row_tol_m=body.row_tol_m, column_tol_m=body.column_tol_m,
         floor_offset=body.floor_offset)
 
@@ -483,13 +484,16 @@ def _host_facade(cat: Catalog, site: Site, feature: AccessPoint) -> Facade:
     Not looked up in the current run on purpose: the frame on the record is the one the
     polygon means, and a recomputed run may have moved or renamed the facade (§5.9).
     """
-    h = feature.host
+    h, g = feature.host, feature.geometry
+    if h is None or g is None:
+        raise HTTPException(422, f"{feature.id} is a pad, not a shape on a facade: "
+                                 f"it has no polygon_uv to redraw")
     return Facade(id=h.facade_id, building_id=h.building_id, origin=h.origin, normal=h.normal,
                   u_axis=h.u_axis, azimuth_deg=h.azimuth_deg,
-                  u_min=min(p[0] for p in feature.geometry.polygon_uv),
-                  u_max=max(p[0] for p in feature.geometry.polygon_uv),
+                  u_min=min(p[0] for p in g.polygon_uv),
+                  u_max=max(p[0] for p in g.polygon_uv),
                   v_ground=h.v_ground,
-                  v_max=max(p[1] for p in feature.geometry.polygon_uv),
+                  v_max=max(p[1] for p in g.polygon_uv),
                   plane_rms_m=0.0, n_points=0)
 
 

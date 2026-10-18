@@ -301,8 +301,8 @@ flowchart TD
   ├── captures/<capture>/{capture.yaml, images/, images_private/, images.jsonl, source/}
   ├── epochs/<epoch>/{epoch.yaml, runs/<run_id>/}
   │     runs/<run_id>/{manifest.json, run.log, images/, known_poses/, sfm/, mvs/, gs/, reports/}
-  ├── authored/      # авторське, пайплайн сюди не пише
-  └── missions/
+  ├── authored/      # авторське, пайплайн сюди не пише (access_points, targets, audit)
+  └── missions/<id>/ # mission.json + експорт (waypoints, plan, parm), §3.18
   ```
 
   `known_poses/` лежить поза `sfm/`, бо `sfm --fresh` видаляє `sfm/` повністю.
@@ -714,6 +714,84 @@ flowchart TD
   вирізано мало. Над сіткою окремого доказу немає: стан і походження продовжують верхній шар.
   Дзеркальні фасади — див. «Під виміряною поверхнею» вище.
 
+### 3.18 Місії v0 — `aerosplat/mission/` (Фаза 8.1b)
+
+Підтверджена ціль → геометрія підльоту → перевірка коридору по зайнятості (§3.17) → місія для
+ArduPilot. Це вхід для SITL-треку (SIM-1). Лише numpy, CPU.
+
+* **Ціль** (`targets.py`, [ACCESS_POINTS §6](ACCESS_POINTS.md), [ADR-0009](decisions/0009-human-in-the-loop-planning-grade.md)).
+  `MissionTarget` створюється **лише** з `verified` AP і лише названим оператором. Ціль
+  зберігається в `authored/targets.json` (авторські дані), а підтвердження дописується в
+  `authored/audit.jsonl` разом із ціллю в тому вигляді, в якому її підтвердили. Підтвердження
+  **блокується** з усіма причинами одразу: `not_verified`, `stale`, `not_redetected` (новий
+  прапорець AP), `floor_ambiguous`, `sigma_unknown`, `sigma_too_large`, `mode_not_allowed`,
+  `no_threshold`, `override_relaxes_taxonomy`. Перевизначення чисел класу дозволене **лише
+  в бік обережності**: більший standoff і кліренс, вужчий конус. Ціль несе відбиток AP; якщо AP
+  змінили після підтвердження, планування й експорт відмовляють (`target_changed`).
+* **σ.** `σ_AP` береться з `uncertainty` AP (нове поле за §3.1), а якщо його немає — зі слів
+  оператора, і це так і записується. `σ_georef` поки задає оператор, бо жодна стадія його не
+  вимірює. **Невідома σ — відмова, а не нуль.** Поріг σ цілі для способу передачі —
+  `handover_modes.<mode>.max_sigma_m` у таксономії (`core` 1.1, плейсхолдери).
+* **Геометрія** (`planner.py`, §7.2). Для отвору: `H = c + a·standoff + up·Δh`,
+  `E = c + a·D_entry + up·Δh`, курс `−a`. Для майданчика: `H = c + up·standoff`, вхід згори
+  з висоти транзиту. `a = n`; якщо коридор заблоковано, перебираються напрямки в конусі
+  (половина `approach_cone_deg` на бік, 3 нахили × 8 азимутів) і береться найчистіший.
+  `D_entry` і `Δh` — нові поля `handover` у таксономії.
+* **Коридор.** Шлях: дім → вертикально вгору → транзит на висоті `z_t` → над E → E → H (зависання)
+  → назад тим самим шляхом → посадка вдома. Кожна ділянка має свій радіус
+  `r = r_дрона + m + k·σ`: біля цілі `σ_total² = σ_AP² + σ_georef² + σ_GNSS²` і `m` класу,
+  на транзиті `σ² = σ_georef² + σ_GNSS²`. Транзит прокладається над найвищою зайнятою
+  колонкою в смузі `r` уздовж шляху. Перевірка дає `feasible` / `feasible_with_risks` /
+  `infeasible` з причинами: `unknown_space`, `obstacle_in_corridor`, `overhang_above`,
+  `standoff_too_small`, `transit_too_high`, `home_unknown`, `home_blocked`,
+  `home_not_on_surface` (блокуючі), а також `assumed_free_air`, `wire_risk` і ризики RTL
+  (ризики). **Поверхня, на якій ділянка закінчується за задумом** (стіна цілі для підльоту,
+  дах для майданчика, ґрунт під домом), в `r`-перевірці не рахується: відстань до неї
+  тримає бортове наведення. Рахується все перед її площиною далі ніж
+  `surface_relief_m + √3/2·воксель`. Межа сітки — це невідоме.
+* **Дім = origin ділянки** (або задана точка), висота — **виміряна поверхня** під ним.
+  Від нього рахуються всі відносні висоти, тому дім «у повітрі» чи в будівлі — відмова.
+* **Експорт** (`export.py`): `missions/<id>/mission.json` (повний план), а також
+  `mission.waypoints` (QGC WPL 110), `mission.plan` (QGC: місія + полігон геофенсу +
+  rally) і `mission.parm` (FENCE_*, RTL_*, FS_*, BATT_FS_*, WPNAV_*, AVOID_*; імена з
+  ArduCopter 4.5/4.6 — звірити з тегом SITL). **Висоти лише відносно дому**: AMSL
+  відмовляється, бо абсолютна висота Earth Studio не перевірена, а моделі геоїда немає.
+  Рядок дому у WPL і `plannedHomePosition` містять еліпсоїдну висоту з позначкою «не AMSL».
+  Кожен файл перед видачею читається назад і має повернутися в Site ENU **в межах 1 см**;
+  з квантуванням `MISSION_ITEM_INT` (1e-7°) похибка лишається < 1 см. Змішаний кадр висот
+  (абсолютна висота у відносному пункті, пункт в іншому `frame`, `AltitudeMode` ≠ 1)
+  ловиться тут, а не в польоті. Геофенс — опукла оболонка кіл радіуса `r + запас` навколо
+  вершин шляху. Тест перевіряє, що весь коридор лежить усередині.
+* **Ворота експорту:** `infeasible` не експортується; `feasible_with_risks` — лише з
+  `accept_risks` (у журнал пишеться, хто прийняв які ризики); відкликана ціль або змінена AP
+  зупиняють експорт навіть уже порахованої місії.
+* **API v2** (`server/api_mission.py`): `POST/GET …/targets`, `POST …/targets/{id}/confirm`,
+  `POST/GET …/missions`, `POST …/missions/{id}/export/{waypoints|plan|parm}`. Відмови
+  повертаються як 409 з `detail.reasons`.
+* **AP-майданчики.** `AccessPoint` тепер буває або на фасаді (`host` + `geometry`), або
+  майданчиком (`pad`: контур у Site ENU, висота, центроїд площі). Старі файли читаються без
+  змін. UI для малювання майданчиків ще немає (залишок 7.1).
+* **`dataset_v6` (2026-10-19).** Run-директорій каталожної ділянки локально немає, тож
+  використано legacy-хмару `data/dataset_v6_dense.pt` і семантику з прогону 8.1a. Зайнятість
+  v2 побудовано заново: ядро 300×300 м по 0.5 м, з вирізанням, 34 с. Origin — середнє кадрів
+  Earth Studio, тож lat/lon наближені. AP **розставлено скриптом**: тестове вікно посередині
+  фасаду на 6–7.5 м над `v_ground` і майданчик 6×6 м у центрі даху. Це не справжні вікна.
+  Результати:
+  * з `σ_georef` = 2.5 м (задокументована точність Earth Studio) ціль на вікно **відмовлена**
+    (`sigma_too_large`, поріг 1.5 м);
+  * з типовим профілем (`σ_GNSS` 1.5 м, `r` транзиту 5.66 м) у радіусі 80 м від origin
+    **немає жодної колонки, з якої дозволено зліт**: дерева, авто й нерівності ближче за `r`;
+  * з гіпотетичними `σ_georef` 0.5 м і RTK-подібним `σ_GNSS` 0.1 м вікна зі standoff 3 м дали
+    **0 з 39** придатних. Головна причина: у 2.5D-моделі стіна «товща» за площину фасаду на
+    1–2 м (невідоме/зайняте), плюс дерева вздовж вулиць. Зі standoff 6 м / `D_entry` 18 м
+    вийшло **7 з 39** `feasible_with_risks` (лише `wire_risk`). Майданчик на даху: 1 з 1
+    придатний; ще 8 дахів відсіяно як занадто нерівні під квадратом 6×6 м. Обидві місії
+    експортовано, найгірший зворотний перехід — 0.75 мм.
+
+  Висновок збігається з [SIMULATION §4.9](SIMULATION_AND_DELIVERY.md): двійник Earth Studio
+  годиться для перевірки коридорів із великими запасами, але не для вікна на 3 м.
+  Потрібен M0.
+
 ---
 
 ## 4. Системи координат (ключове для GIS)
@@ -875,7 +953,8 @@ AeroSplat-GIS/
 │   ├── render/                    # models, camera, engine, app, service (сервіс рендерингу, S2)
 │   ├── semantics/                 # terrain, buildings, facades, coverage (семантика, S3)
 │   ├── surface/                   # occupancy, esdf, stage, products (зайнятість + ESDF, 8.1a)
-│   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, up.py (`aerosplat up`)
+│   ├── mission/                   # targets, planner, corridor, export, store (місії v0, 8.1b)
+│   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, api_semantics.py, api_mission.py, up.py
 ├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
 │   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored)
 ├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)
