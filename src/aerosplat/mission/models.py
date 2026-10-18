@@ -230,6 +230,10 @@ class PlanningProfile(_Model):
     climb_speed_mps: float = Field(2.5, gt=0, le=10)
     descent_speed_mps: float = Field(1.5, gt=0, le=10)
     hold_s: float = Field(20.0, ge=0, le=600)           # at the hover point
+    # Stop at E before the approach. Copter plans the leg after a pass-through waypoint in
+    # advance, with the speed it has then, so the approach speed set at E would only apply
+    # late: in SITL (Copter-4.7.2) the 1 m/s approach was flown at 2.4 m/s without this stop.
+    entry_hold_s: float = Field(2.0, gt=0, le=60)
     fence_margin_m: float = Field(5.0, ge=0, le=100)    # beyond the corridor, horizontally
     fence_alt_margin_m: float = Field(10.0, ge=0, le=100)
     # Wires are not reconstructed (ACCESS_POINTS §5.8): a corridor this low over the surface

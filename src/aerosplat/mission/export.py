@@ -224,7 +224,10 @@ def format_plan(plan: MissionPlan, origin: GeoPoint, items: list[WireItem]) -> s
     if plan.rally_enu:
         r = np.asarray(plan.rally_enu, float)
         rlat, rlon, rh = geodetic(frame, r)
-        rally = [[float(a), float(b), float(h - home.alt)] for a, b, h in zip(rlat, rlon, rh)]
+        # ArduPilot keeps a rally point's altitude in whole metres (AP_Rally RallyLocation.alt,
+        # int16): 14.89 m would be held as 14 m, below the height that was checked. Round up.
+        rally = [[float(a), float(b), float(math.ceil(h - home.alt - 1e-6))]
+                 for a, b, h in zip(rlat, rlon, rh)]
     doc = {
         "fileType": "Plan",
         "groundStation": "AeroSplat-GIS",
@@ -247,7 +250,7 @@ def format_plan(plan: MissionPlan, origin: GeoPoint, items: list[WireItem]) -> s
         },
         "rallyPoints": {"version": 2, "points": rally},
         # Not read by QGroundControl; for people and for the SITL runner.
-        "aerosplat": _manifest(plan),
+        "aerosplat": _manifest(plan, origin),
     }
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
@@ -278,34 +281,56 @@ def read_plan(text: str) -> list[WireItem]:
 
 
 # ── .parm ────────────────────────────────────────────────────────────────
+# The firmware the parameter names, units and values below are written for. Copter 4.7 renamed
+# and re-unitised several (RTL_ALT [cm] -> RTL_ALT_M [m], WPNAV_SPEED [cm/s] -> WP_SPD [m/s]);
+# tests check every name and value against the snapshot of this build's own parameter table
+# (configs/ardupilot/<tag>.params.json), and that this is the build the SITL suite pins.
+PARAMS_FIRMWARE = "Copter-4.7.2"
+AVOID_MARGIN_RANGE_M = (1.0, 10.0)      # AVOID_MARGIN's documented range in PARAMS_FIRMWARE
+# FS_OPTIONS bit 3: a vehicle already landing keeps landing whatever failsafe follows. Every
+# other bit off, so no failsafe is ignored in AUTO ("continue mission" bits 0 and 1).
+FS_OPTIONS_CONTINUE_IF_LANDING = 1 << 3
+
+
 def parameters(plan: MissionPlan) -> list[tuple[str, float, str]]:
-    """(name, value, why). Names and units as of ArduCopter 4.5/4.6: check them against the
-    firmware tag the SITL suite pins before uploading (SIMULATION §4.5, idea 15)."""
+    """(name, value, why) for PARAMS_FIRMWARE (SIMULATION §4.5, idea 15).
+
+    Every failsafe that can fire during the mission has its action here, so what a fault does
+    follows from the package and not from whatever the vehicle was configured with. Trigger
+    thresholds (battery voltages, timeouts) belong to the vehicle, not to the mission."""
     p = plan.profile
     z_rel = plan.transit_z - plan.home.enu[2]
-    margin = plan.target.handover.min_clearance_m
+    lo, hi = AVOID_MARGIN_RANGE_M
+    margin = min(max(plan.target.handover.min_clearance_m, lo), hi)
     return [
         ("FENCE_ENABLE", 1, "geofence on"),
-        ("FENCE_TYPE", 7, "max altitude + circle + polygon (the polygon is in mission.plan)"),
+        ("FENCE_TYPE", 7, "max altitude + circle about home + polygon (the polygon is in mission.plan)"),
         ("FENCE_ACTION", 3, "breach: SmartRTL (retraces the checked path), else RTL, else land"),
-        ("FENCE_ALT_MAX", plan.fence.alt_max_rel_m, "m above home"),
+        ("FENCE_ALT_MAX", plan.fence.alt_max_rel_m, "m"),
+        ("FENCE_ALT_MAX_TP", 1, "FENCE_ALT_MAX is above home, like every altitude of the mission"),
         ("FENCE_RADIUS", plan.fence.radius_m, "m about home; holds the whole polygon"),
         ("FENCE_MARGIN", 2.0, "m"),
-        ("RTL_ALT", math.ceil(z_rel * 100.0), "cm above home: the transit height that was checked"),
-        ("RTL_ALT_FINAL", 0, "cm: land at home"),
-        ("RTL_CLIMB_MIN", 0, "cm"),
-        ("RTL_SPEED", 0, "cm/s: 0 = WPNAV_SPEED"),
-        ("WPNAV_SPEED", round(p.transit_speed_mps * 100), "cm/s"),
-        ("WPNAV_SPEED_UP", round(p.climb_speed_mps * 100), "cm/s"),
-        ("WPNAV_SPEED_DN", round(p.descent_speed_mps * 100), "cm/s"),
+        ("RTL_ALT_TYPE", 0, "RTL altitude relative to home"),
+        ("RTL_ALT_M", math.ceil(z_rel * 100.0) / 100.0, "m above home: the transit height that was checked"),
+        ("RTL_ALT_FINAL_M", 0, "m: land at home"),
+        ("RTL_CLIMB_MIN_M", 0, "m"),
+        ("RTL_SPEED_MS", 0, "m/s: 0 = WP_SPD"),
+        ("WP_SPD", p.transit_speed_mps, "m/s"),
+        ("WP_SPD_UP", p.climb_speed_mps, "m/s"),
+        ("WP_SPD_DN", p.descent_speed_mps, "m/s"),
         ("FS_THR_ENABLE", 4, "RC loss: SmartRTL or RTL"),
         ("FS_GCS_ENABLE", 3, "GCS loss: SmartRTL or RTL"),
+        ("FS_OPTIONS", FS_OPTIONS_CONTINUE_IF_LANDING,
+         "no failsafe is ignored in AUTO; one that comes while landing lets the landing finish"),
         ("BATT_FS_LOW_ACT", 3, "low battery: SmartRTL or RTL"),
         ("BATT_FS_CRT_ACT", 1, "critical battery: land"),
         ("FS_EKF_ACTION", 1, "EKF failsafe: land"),
+        ("FS_DR_ENABLE", 1, "dead reckoning (no position source, e.g. GPS lost): land, like the EKF "
+                            "failsafe; the firmware default (2) flies RTL without a position fix"),
         ("RALLY_INCL_HOME", 1, "home is a rally point (the only safe landing site v0 knows)"),
         ("AVOID_ENABLE", 3, "avoid fence + proximity sensors"),
-        ("AVOID_MARGIN", margin, "m: the class's minimum clearance, held on board"),
+        ("AVOID_MARGIN", margin, "m: the class's minimum clearance, held on board "
+                                 f"(clamped to the documented {lo:g}..{hi:g} m)"),
     ]
 
 
@@ -314,7 +339,7 @@ def format_parm(plan: MissionPlan) -> str:
              f"# site {plan.site_key}, target {plan.target.id} ({plan.target.ap_class}, "
              f"{plan.target.handover.mode.value}), verdict {plan.verdict.value}",
              "# altitudes relative to home; " + HOME_ALT_NOTE.split(";")[0],
-             "# names/units as of ArduCopter 4.5/4.6: verify against the pinned firmware tag"]
+             f"# names, units and values for {PARAMS_FIRMWARE} (checked against its parameter table)"]
     for name, value, why in parameters(plan):
         v = f"{value:g}" if isinstance(value, float) else str(value)
         lines.append(f"{name} {v}  # {why}")
@@ -333,8 +358,11 @@ def read_parm(text: str) -> dict[str, float]:
 
 
 # ── the whole export ─────────────────────────────────────────────────────
-def _manifest(plan: MissionPlan) -> dict:
+def _manifest(plan: MissionPlan, origin: GeoPoint) -> dict:
+    # `origin`: the Site ENU frame the plan is in, so that a simulator can judge the flight
+    # against the twin without the catalog.
     return {"mission_id": plan.id, "site": plan.site_key, "target_id": plan.target.id,
+            "origin": {"lat": origin.lat, "lon": origin.lon, "h": origin.h},
             "access_point": plan.target.ap_id, "verdict": plan.verdict.value,
             "risks": [f.code.value for f in plan.risks],
             "altitude_frame": plan.altitude_frame.value, "home_enu": list(plan.home.enu),

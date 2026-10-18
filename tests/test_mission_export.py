@@ -75,7 +75,11 @@ def test_plan_round_trips_and_carries_fence_and_rally(feasible):
     assert max(errors(wire_to_enu(read_plan(text), ms.ORIGIN), feasible)) < 0.01
     poly = doc["geoFence"]["polygons"]
     assert len(poly) == 1 and poly[0]["inclusion"] is True and len(poly[0]["polygon"]) >= 3
-    assert len(doc["rallyPoints"]["points"]) == 1
+    [rally] = doc["rallyPoints"]["points"]
+    # Whole metres (ArduPilot stores rally altitude as int16 m), never below the checked height.
+    z_rel = feasible.rally_enu[0][2] - feasible.home.enu[2]
+    assert rally[2] == math.ceil(z_rel - 1e-6) and rally[2] >= z_rel - 1e-6
+    assert doc["aerosplat"]["origin"] == {"lat": ms.ORIGIN.lat, "lon": ms.ORIGIN.lon, "h": ms.ORIGIN.h}
     assert doc["aerosplat"]["altitude_frame"] == "relative_home"
     assert doc["aerosplat"]["home_amsl_verified"] is False
 
@@ -126,10 +130,34 @@ def test_parm_package_matches_the_plan(feasible):
     z_rel = feasible.transit_z - feasible.home.enu[2]
     assert params["FENCE_ENABLE"] == 1 and params["FENCE_TYPE"] == 7
     assert params["FENCE_ALT_MAX"] == feasible.fence.alt_max_rel_m > z_rel
-    assert params["RTL_ALT"] == math.ceil(z_rel * 100)                 # centimetres
-    assert params["RTL_ALT"] / 100 < params["FENCE_ALT_MAX"]          # RTL stays inside the fence
+    assert params["FENCE_ALT_MAX_TP"] == 1 and params["RTL_ALT_TYPE"] == 0      # above home
+    assert params["RTL_ALT_M"] == math.ceil(z_rel * 100) / 100       # metres since Copter 4.7
+    assert params["RTL_ALT_M"] < params["FENCE_ALT_MAX"]             # RTL stays inside the fence
     assert params["FENCE_RADIUS"] >= 30
+    assert params["WP_SPD"] == feasible.profile.transit_speed_mps    # m/s since Copter 4.7
     assert params["FS_THR_ENABLE"] == 4 and params["BATT_FS_CRT_ACT"] == 1
+    assert params["FS_DR_ENABLE"] == params["FS_EKF_ACTION"] == 1    # no blind RTL on GPS loss
+    assert int(params["FS_OPTIONS"]) & 0b11 == 0                     # no failsafe ignored in AUTO
+    # The 4.5/4.6 names the firmware no longer has are gone (they would be silently ignored).
+    assert not {"RTL_ALT", "RTL_ALT_FINAL", "RTL_CLIMB_MIN", "RTL_SPEED", "WPNAV_SPEED",
+                "WPNAV_SPEED_UP", "WPNAV_SPEED_DN"} & set(params)
+
+
+@pytest.mark.hazard("H-002", "H-003")
+def test_parm_package_is_valid_for_the_pinned_firmware(feasible):
+    """Every name exists in the pinned build's own parameter table, every value is inside its
+    documented range / enumeration (configs/ardupilot/<tag>.params.json, taken from that build)."""
+    from aerosplat.mission.export import PARAMS_FIRMWARE
+    from aerosplat.sim.params import load_snapshot
+    from aerosplat.sim.sitl import load_config
+
+    assert PARAMS_FIRMWARE == load_config().ardupilot.tag   # a firmware update revisits the names
+    fw = load_snapshot()
+    params = read_parm(render(feasible, ms.ORIGIN, "parm")[2])
+    assert fw.problems(params) == []
+    assert fw["RTL_ALT_M"].units == "m" and fw["WP_SPD"].units == "m/s"
+    assert fw["FENCE_ALT_MAX_TP"].values[1] == "Above Home"
+    assert "SmartRTL or RTL" in fw["FS_THR_ENABLE"].values[4]
 
 
 def test_export_writes_files_and_audits(tmp_path, street):

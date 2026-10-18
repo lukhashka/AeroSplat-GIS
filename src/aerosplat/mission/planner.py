@@ -364,25 +364,31 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
                 break
 
     # ── mission items ────────────────────────────────────────────────────
+    descends = bool(np.linalg.norm(E - e_up) > 1e-6)
     items: list[MissionItem] = [
         MissionItem(command=NAV_TAKEOFF, role="takeoff", enu=_v(home_up)),
         MissionItem(command=DO_CHANGE_SPEED, role="transit_speed", param1=1.0,
                     param2=prof.transit_speed_mps, param3=-1.0),
-        MissionItem(command=NAV_WAYPOINT, role="over_entry", enu=_v(e_up)),
+        # The waypoint at E holds (param1), so the approach leg is planned at approach speed.
+        MissionItem(command=NAV_WAYPOINT, role="over_entry", enu=_v(e_up),
+                    param1=0.0 if descends else prof.entry_hold_s),
     ]
-    if np.linalg.norm(E - e_up) > 1e-6:
-        items.append(MissionItem(command=NAV_WAYPOINT, role="entry", enu=_v(E)))
+    if descends:
+        items.append(MissionItem(command=NAV_WAYPOINT, role="entry", enu=_v(E),
+                                 param1=prof.entry_hold_s))
     items.append(MissionItem(command=DO_CHANGE_SPEED, role="approach_speed", param1=1.0,
                              param2=prof.approach_speed_mps, param3=-1.0))
     heading = None
     if kind == "opening":
         heading = heading_deg(-a[:2]) if np.linalg.norm(a[:2]) > 1e-9 else None
         if heading is not None:
-            # Copter: executed while flying to the next waypoint; absolute, shortest turn.
+            # Absolute heading, shortest turn. Copter-4.7.2 starts it right after the leg to H
+            # (SITL, SIM-1: commanded 90° on a northbound approach, faced 2 s before arriving);
+            # the waypoint after H gives the yaw back to WP_YAW_BEHAVIOR.
             items.append(MissionItem(command=CONDITION_YAW, role="face_target", param1=heading,
                                      param2=0.0, param3=0.0, param4=0.0))
     items.append(MissionItem(command=NAV_WAYPOINT, role="hover", enu=_v(H), param1=prof.hold_s))
-    if np.linalg.norm(E - e_up) > 1e-6:
+    if descends:
         items.append(MissionItem(command=NAV_WAYPOINT, role="exit", enu=_v(E)))
     items.append(MissionItem(command=DO_CHANGE_SPEED, role="transit_speed", param1=1.0,
                              param2=prof.transit_speed_mps, param3=-1.0))

@@ -261,12 +261,14 @@ SITL збирається й працює у WSL2 (або Linux), тести г�
 ``` bash
 pip install -e ".[sim]"
 python -m aerosplat.sim.sitl setup     # раз: окремий worktree ArduPilot + збірка SITL
-pytest -m sitl                         # смоук: зліт на 10 м і посадка, перевірка за істиною SIM_STATE
+pytest -m sitl                         # смоук + 9 сценаріїв L2 (доставка, відмови), ~7 хв
+python -m aerosplat.sim.runner scenario.yaml   # L2: місія з експорту -> SITL -> оракули -> report.html
 python -m aerosplat.sim.sitl start     # вручну (Mission Planner: UDP 14550); ... stop
 ```
 
 Звичайний `pytest` sitl-тести пропускає. Подробиці, мережа WSL і обмеження —
-[docs/SIMULATION_AND_DELIVERY.md §4.8](docs/SIMULATION_AND_DELIVERY.md); журнал небезпек —
+[docs/SIMULATION_AND_DELIVERY.md §4.8](docs/SIMULATION_AND_DELIVERY.md); раннер сценаріїв,
+відмови, оракули й результати — [§4.10](docs/SIMULATION_AND_DELIVERY.md); журнал небезпек —
 [docs/HAZARDS.md](docs/HAZARDS.md).
 
 ------------------------------------------------------------------------

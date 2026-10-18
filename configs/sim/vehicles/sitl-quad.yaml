@@ -1,0 +1,16 @@
+# Vehicle profile for L2 scenarios (SIMULATION_AND_DELIVERY §4.5 `vehicle:`): the vehicle's own
+# configuration on top of the firmware defaults, BEFORE the mission package (.parm) is applied.
+#
+# ArduCopter SITL quad "+" with built-in physics (configs/sitl.yaml `vehicle`), wiped eeprom:
+# copter.parm defaults. Everything here is a property of the airframe / battery / radio, not of
+# the mission: the mission package says WHAT to do on a failsafe, the vehicle says WHEN it fires.
+# Placeholders until the delivery vehicle is chosen (SIMULATION §7 q. 4).
+
+vehicle: sitl-quad
+description: ArduCopter SITL quad (+), built-in physics, 3S battery (copter.parm defaults)
+params:
+  # Battery thresholds of a 3S pack. copter.parm has BATT_LOW_VOLT 10.5 but BATT_CRT_VOLT 0, which
+  # leaves the package's critical-battery action (BATT_FS_CRT_ACT) without a trigger.
+  BATT_LOW_VOLT: 10.5
+  BATT_CRT_VOLT: 10.0
+  BATT_LOW_TIMER: 10

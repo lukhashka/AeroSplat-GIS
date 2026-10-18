@@ -32,6 +32,7 @@ MSG_EXTENDED_SYS_STATE = 245
 
 CMD_NAV_TAKEOFF = 22
 CMD_DO_SET_MODE = 176
+CMD_MISSION_START = 300
 CMD_COMPONENT_ARM_DISARM = 400
 CMD_SET_MESSAGE_INTERVAL = 511
 CMD_REQUEST_MESSAGE = 512
@@ -45,8 +46,19 @@ MAV_AUTOPILOT_INVALID = 8
 MAV_STATE_ACTIVE = 4
 FORCE_DISARM_MAGIC = 21196
 
-COPTER_MODES = {"STABILIZE": 0, "ALT_HOLD": 2, "AUTO": 3, "GUIDED": 4, "LOITER": 5, "RTL": 6,
-                "LAND": 9, "BRAKE": 17}
+MAV_PARAM_TYPE_REAL32 = 9
+
+# ArduCopter custom modes (ArduCopter/mode.h, Copter-4.7.2). Failsafes switch to RTL, LAND,
+# SMART_RTL, BRAKE, ALT_HOLD or AUTO_RTL; a scenario oracle reads them by these names.
+COPTER_MODES = {"STABILIZE": 0, "ACRO": 1, "ALT_HOLD": 2, "AUTO": 3, "GUIDED": 4, "LOITER": 5,
+                "RTL": 6, "CIRCLE": 7, "LAND": 9, "DRIFT": 11, "SPORT": 13, "FLIP": 14,
+                "AUTOTUNE": 15, "POSHOLD": 16, "BRAKE": 17, "THROW": 18, "AVOID_ADSB": 19,
+                "GUIDED_NOGPS": 20, "SMART_RTL": 21, "FLOWHOLD": 22, "FOLLOW": 23, "ZIGZAG": 24,
+                "SYSTEMID": 25, "AUTOROTATE": 26, "AUTO_RTL": 27, "TURTLE": 28}
+
+
+def mode_name(custom_mode: int) -> str:
+    return next((k for k, v in COPTER_MODES.items() if v == custom_mode), str(custom_mode))
 
 EARTH_RADIUS_M = 6371008.8  # IUGG mean radius; plenty for metre-scale distances
 
@@ -81,6 +93,13 @@ class Firmware:
     version: tuple[int, int, int]
     release_type: int     # FIRMWARE_VERSION_TYPE: 255 = official
     git_hash: str         # first 8 hex digits of the commit the binary was built from
+
+
+def _param_id(raw: Any) -> str:
+    """PARAM_VALUE.param_id: str (pymavlink decodes it) or NUL-padded bytes."""
+    if isinstance(raw, bytes):
+        raw = raw.decode("ascii", "replace")
+    return str(raw).rstrip("\x00")
 
 
 def horizontal_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -149,7 +168,13 @@ class TruthMonitor:
 
 
 class Vehicle:
-    """One ArduCopter over MAVLink. Not thread-safe: every wait pumps the link itself."""
+    """One ArduCopter over MAVLink. Not thread-safe: every wait pumps the link itself.
+
+    `heartbeat_period` and `send_heartbeats` belong to the GCS role: a scenario that makes this
+    client the vehicle's GCS (MAV_GCS_SYSID = our system id) simulates losing the GCS link by
+    switching heartbeats off; ArduPilot counts only heartbeats, RC overrides and MANUAL_CONTROL
+    from that id as "GCS seen" (GCS_Common.cpp, Copter-4.7.2), never commands or parameter traffic.
+    """
 
     def __init__(self, conn: Any):
         self.conn = conn
@@ -159,8 +184,15 @@ class Vehicle:
         self.received_at: dict[str, float] = {}
         self.statustext: list[str] = []
         self.listeners: list[Callable[[Any], None]] = []
+        self.params: dict[str, float] = {}
+        self.param_count: Optional[int] = None
+        self.heartbeat_period = 1.0
+        self.send_heartbeats = True
+        self.boot_ms: Optional[int] = None     # autopilot clock (time_boot_ms): simulation time
+        self.boot_wall = 0.0                   # host time when boot_ms last advanced
         self._acks: dict[int, tuple[float, Any]] = {}
         self._last_heartbeat_sent = -math.inf
+        self._param_index: dict[str, int] = {}
 
     @classmethod
     def connect(cls, endpoint: str, timeout: float = 30.0, source_system: int = 245,
@@ -194,7 +226,7 @@ class Vehicle:
         """Send a GCS heartbeat when due (1 Hz), then read everything pending, waiting up to
         `timeout` for the first message. Returns the number of messages handled."""
         now = time.monotonic()
-        if now - self._last_heartbeat_sent >= 1.0:
+        if self.send_heartbeats and now - self._last_heartbeat_sent >= self.heartbeat_period:
             self.conn.mav.heartbeat_send(MAV_TYPE_GCS, MAV_AUTOPILOT_INVALID, 0, 0, MAV_STATE_ACTIVE)
             self._last_heartbeat_sent = now
         n = 0
@@ -220,12 +252,35 @@ class Vehicle:
         now = time.monotonic()
         self.latest[kind] = msg
         self.received_at[kind] = now
+        boot = getattr(msg, "time_boot_ms", None)
+        if isinstance(boot, int) and boot > 0 and msg.get_srcComponent() == self.target_component:
+            # Monotonic, except for a reboot (the clock jumps back by more than reordering can).
+            if self.boot_ms is None or boot > self.boot_ms or boot < self.boot_ms - 5000:
+                self.boot_ms = boot
+                self.boot_wall = now
         if kind == "STATUSTEXT":
             self.statustext.append(msg.text)
         elif kind == "COMMAND_ACK":
             self._acks[msg.command] = (now, msg)
+        elif kind == "PARAM_VALUE":
+            name = _param_id(msg.param_id)
+            self.params[name] = float(msg.param_value)
+            self._param_index[name] = int(msg.param_index)
+            self.param_count = int(msg.param_count)
         for fn in self.listeners:
             fn(msg)
+
+    @property
+    def sim_time(self) -> Optional[float]:
+        """Seconds since the autopilot booted, from the latest message that carries it."""
+        return None if self.boot_ms is None else self.boot_ms / 1000.0
+
+    def sim_now(self, speedup: float = 1.0) -> float:
+        """Simulation time now: the latest autopilot timestamp, advanced by the wall-clock time
+        since it arrived times the speed-up (messages carry time_boot_ms at ~10 Hz)."""
+        if self.boot_ms is None:
+            raise VehicleError("no message with time_boot_ms yet (no simulation clock)")
+        return self.boot_ms / 1000.0 + (time.monotonic() - self.boot_wall) * speedup
 
     def wait(self, what: str, predicate: Callable[[], bool], timeout: float) -> None:
         deadline = time.monotonic() + timeout
@@ -309,9 +364,7 @@ class Vehicle:
     @property
     def mode(self) -> Optional[str]:
         hb = self.latest.get("HEARTBEAT")
-        if hb is None:
-            return None
-        return next((k for k, v in COPTER_MODES.items() if v == hb.custom_mode), str(hb.custom_mode))
+        return None if hb is None else mode_name(hb.custom_mode)
 
     def truth(self, max_age: float = 1.0) -> GeoState:
         msg = self.fresh("SIM_STATE", max_age)
@@ -368,3 +421,70 @@ class Vehicle:
     def takeoff(self, alt_m: float) -> None:
         """GUIDED take-off to `alt_m` above home."""
         self.command_ok(CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, alt_m)
+
+    def start_mission(self) -> None:
+        """MAV_CMD_MISSION_START: switch to AUTO and run the mission from the first item.
+        Copter marks the vehicle auto-armed on this command, so a TAKEOFF item flies without a
+        throttle input (GCS_MAVLink_Copter.cpp)."""
+        self.command_ok(CMD_MISSION_START, 0, 0)
+
+    # ── parameters ───────────────────────────────────────────────────────
+    def fetch_params(self, timeout: float = 60.0) -> dict[str, float]:
+        """The whole parameter table (PARAM_REQUEST_LIST, missing indices re-requested)."""
+        self.params.clear()
+        self._param_index.clear()
+        self.param_count = None
+        self.conn.mav.param_request_list_send(self.target_system, self.target_component)
+        deadline = time.monotonic() + timeout
+        quiet_since = time.monotonic()
+        seen = 0
+        while self.param_count is None or len(self._param_index) < self.param_count:
+            if time.monotonic() > deadline:
+                raise VehicleTimeout(f"parameter list incomplete after {timeout:.0f} s: "
+                                     f"{len(self._param_index)} of {self.param_count}")
+            self.pump(0.1)
+            if len(self._param_index) != seen:
+                seen, quiet_since = len(self._param_index), time.monotonic()
+            elif time.monotonic() - quiet_since > 2.0 and self.param_count is not None:
+                have = set(self._param_index.values())
+                for i in [i for i in range(self.param_count) if i not in have][:40]:
+                    self.conn.mav.param_request_read_send(self.target_system, self.target_component,
+                                                          b"", i)
+                quiet_since = time.monotonic()
+        return dict(self.params)
+
+    def get_param(self, name: str, timeout: float = 5.0) -> float:
+        """Read one parameter from the vehicle (not from the cache)."""
+        sent = time.monotonic()
+        self.conn.mav.param_request_read_send(self.target_system, self.target_component,
+                                              name.encode("ascii"), -1)
+        self.wait(f"PARAM_VALUE {name}",
+                  lambda: self.received_at.get("PARAM_VALUE", -math.inf) >= sent
+                  and _param_id(self.latest["PARAM_VALUE"].param_id) == name, timeout)
+        return self.params[name]
+
+    def set_param(self, name: str, value: float, timeout: float = 5.0, retries: int = 3) -> float:
+        """PARAM_SET, confirmed by the PARAM_VALUE echo; returns the value the vehicle holds.
+
+        ArduPilot answers an unknown name with silence, so an unconfirmed set is an error, and a
+        confirmed value that differs from the one sent (out of range, wrong type) is one too."""
+        if len(name) > 16:
+            raise VehicleError(f"parameter name {name!r} is longer than 16 characters")
+        target = float(value)
+        for _ in range(retries):
+            sent = time.monotonic()
+            self.conn.mav.param_set_send(self.target_system, self.target_component,
+                                         name.encode("ascii"), target, MAV_PARAM_TYPE_REAL32)
+            try:
+                self.wait(f"PARAM_VALUE {name}",
+                          lambda: self.received_at.get("PARAM_VALUE", -math.inf) >= sent
+                          and _param_id(self.latest["PARAM_VALUE"].param_id) == name,
+                          timeout / retries)
+            except VehicleTimeout:
+                continue
+            got = self.params[name]
+            if not math.isclose(got, target, rel_tol=1e-6, abs_tol=1e-6):
+                raise VehicleError(f"{name}: set {target:g}, the vehicle holds {got:g}")
+            return got
+        raise VehicleError(f"{name}: no PARAM_VALUE after {retries} PARAM_SET (unknown to this "
+                           f"firmware?); last STATUSTEXT: {self.statustext[-6:]}")

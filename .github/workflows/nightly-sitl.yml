@@ -1,0 +1,80 @@
+# DRAFT — UNTESTED. Nightly L2 suite (SIMULATION_AND_DELIVERY §4.2, §4.10): ArduCopter SITL at the
+# pin of configs/sitl.yaml + `pytest -m sitl`. Written in SIM-1 (2026-10-19) and never run on
+# GitHub Actions; only the local WSL2 path is verified. Expect to fix paths and packages on the
+# first run. Disabled until then: the schedule is commented out, start it by hand.
+#
+# Assumptions to check on the first run:
+# * the harness's non-Windows branch (`bash tools/sitl/*.sh` directly, no wsl.exe) — unit-tested,
+#   never run live;
+# * configs/sitl.yaml paths are under $HOME (`~/xeyes/ardupilot` = the CI's own clone here, only
+#   its object store and tags are used; `~/ardupilot-aerosplat` = the pinned worktree);
+# * Tools/environment_install/install-prereqs-ubuntu.sh works non-interactively on ubuntu-24.04;
+# * MAVProxy `--out udpin:0.0.0.0:14570` is reachable as udpout:127.0.0.1:14570 (no NAT here).
+
+name: nightly-sitl (draft, untested)
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "17 2 * * *"
+
+jobs:
+  sitl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Read the pin
+        id: pin
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import yaml
+          c = yaml.safe_load(open("configs/sitl.yaml"))["ardupilot"]
+          print(f"tag={c['tag']}"); print(f"commit={c['commit']}"); print(f"remote={c['remote']}")
+          EOF
+
+      - name: ArduPilot clone at the pinned tag
+        run: |
+          git clone --filter=blob:none --no-checkout "${{ steps.pin.outputs.remote }}" ~/xeyes/ardupilot
+          git -C ~/xeyes/ardupilot fetch --no-tags origin "refs/tags/${{ steps.pin.outputs.tag }}:refs/tags/${{ steps.pin.outputs.tag }}"
+
+      - name: Build prerequisites and venv
+        run: |
+          git -C ~/xeyes/ardupilot checkout --detach "${{ steps.pin.outputs.commit }}" -- Tools/environment_install || true
+          sudo apt-get update
+          sudo apt-get install -y git gcc g++ make ccache python3-dev python3-venv libxml2-dev libxslt1-dev
+          python3 -m venv ~/venv-ardupilot
+          ~/venv-ardupilot/bin/pip install "empy==3.3.4" pexpect future MAVProxy==1.8.75 pymavlink==2.4.50
+
+      - name: Cache the SITL build
+        uses: actions/cache@v4
+        with:
+          path: ~/ardupilot-aerosplat/build
+          key: sitl-${{ steps.pin.outputs.commit }}
+
+      - name: Install AeroSplat-GIS (CPU only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,sim]"
+
+      - name: Pinned worktree + waf copter
+        run: python -m aerosplat.sim.sitl setup
+
+      - name: L2 suite
+        env:
+          AEROSPLAT_SCENARIO_SPEEDUP: "3"
+        run: pytest -m sitl -v -rxX --basetemp="$RUNNER_TEMP/sitl"
+
+      - name: Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sitl-reports
+          path: |
+            ${{ runner.temp }}/sitl/**/sim/**/report.*
+            ~/.aerosplat/sitl/i*/*.log
