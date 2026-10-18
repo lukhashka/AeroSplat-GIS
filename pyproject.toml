@@ -25,6 +25,8 @@ dependencies = [
 # torch must match your CUDA build — see requirements.txt / README for the index URL.
 train = ["torch>=2.2", "torchvision>=0.17"]
 dev = ["pytest", "ruff", "mypy", "httpx"]
+# ArduPilot SITL harness (aerosplat.sim, `pytest -m sitl`); SITL itself runs in WSL2 / Linux.
+sim = ["pymavlink==2.4.50"]
 
 [project.scripts]
 aerosplat = "aerosplat.starter:cli"
@@ -35,13 +37,17 @@ packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
             "aerosplat.sfm", "aerosplat.gs", "aerosplat.server", "aerosplat.store",
             "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
             "aerosplat.ingest", "aerosplat.jobs", "aerosplat.render", "aerosplat.semantics",
-            "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface"]
+            "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface", "aerosplat.sim"]
 
 [tool.setuptools.package-data]
 "aerosplat.store.migrations" = ["script.py.mako"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "sitl: flies ArduCopter SITL (opt-in: pytest -m sitl; docs/SIMULATION_AND_DELIVERY.md §4.8)",
+    "hazard(*ids): hazards from docs/HAZARDS.md this test covers, e.g. hazard('H-004')",
+]
 
 [tool.ruff]
 line-length = 110

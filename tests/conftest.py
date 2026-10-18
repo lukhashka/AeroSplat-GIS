@@ -1,6 +1,11 @@
 import json
+import os
+import re
+import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -12,6 +17,101 @@ for sub in ("src",):
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ES_JSON = FIXTURES / "earthstudio_3frames.json"
+
+
+# ── markers: `sitl` (opt-in) and `hazard("H-NNN")` (docs/HAZARDS.md) ─────────
+
+def pytest_addoption(parser):
+    parser.addoption("--sitl", action="store_true", default=False,
+                     help="run tests marked `sitl` against ArduCopter SITL "
+                          "(same as -m sitl or AEROSPLAT_SITL=1)")
+
+
+def sitl_requested(config) -> bool:
+    """SITL tests fly a vehicle, so a SITL that merely happens to be running is not enough:
+    they run only on --sitl, AEROSPLAT_SITL=1, or a -m expression that selects `sitl`."""
+    if config.getoption("--sitl") or os.environ.get("AEROSPLAT_SITL") == "1":
+        return True
+    return re.search(r"(?<!not )\bsitl\b", config.getoption("markexpr") or "") is not None
+
+
+def pytest_collection_modifyitems(config, items):
+    from aerosplat.hazards import HAZARDS_MD, load_hazards
+
+    known = load_hazards()
+    skip_sitl = pytest.mark.skip(reason="SITL tests are opt-in: pytest -m sitl (or --sitl)")
+    run_sitl = sitl_requested(config)
+    for item in items:
+        if item.get_closest_marker("sitl") is not None and not run_sitl:
+            item.add_marker(skip_sitl)
+        for mark in item.iter_markers("hazard"):
+            bad = [h for h in mark.args if h not in known] if mark.args else ["(no id)"]
+            if bad:
+                raise pytest.UsageError(f"{item.nodeid}: hazard {', '.join(map(str, bad))} "
+                                        f"is not in {HAZARDS_MD.relative_to(ROOT)}")
+
+
+# ── SITL fixtures (tests/sitl/; here, not in tests/sitl/conftest.py, because a second
+#    conftest module would shadow `from conftest import ...` in the other tests) ─────────
+#
+# A SITL instance that is already running (`python -m aerosplat.sim.sitl start`, perhaps with
+# Mission Planner attached) is used as is and left running. Otherwise the pinned build is started
+# for the session and stopped at the end; AEROSPLAT_SITL_AUTOSTART=0 makes that a failure instead.
+# AEROSPLAT_SITL_ENDPOINT=<pymavlink string> points the tests at some other SITL.
+# Once SITL tests are requested nothing here skips: no pymavlink or no SITL is a failure.
+
+@dataclass
+class SitlRun:
+    endpoint: str
+    home: Optional[object]          # aerosplat.sim.sitl.Home the instance was launched with
+    started_here: bool
+    session: dict = field(default_factory=dict)
+
+
+@pytest.fixture(scope="session")
+def sitl_cfg():
+    from aerosplat.sim.sitl import load_config
+
+    return load_config()
+
+
+@pytest.fixture(scope="session")
+def sitl_run(sitl_cfg):
+    try:
+        import pymavlink  # noqa: F401
+    except ImportError:
+        pytest.fail("pymavlink is not installed: pip install -e .[sim]")
+    from aerosplat.sim.sitl import ENDPOINT_ENV, Home, Sitl, SitlError, resolve_home
+
+    if os.environ.get(ENDPOINT_ENV):
+        yield SitlRun(os.environ[ENDPOINT_ENV], None, False)
+        return
+    sitl = Sitl(sitl_cfg)
+    try:
+        session = sitl.status()
+        started = session is None
+        if started:
+            if os.environ.get("AEROSPLAT_SITL_AUTOSTART", "1") == "0":
+                pytest.fail("SITL is not running and AEROSPLAT_SITL_AUTOSTART=0: "
+                            "python -m aerosplat.sim.sitl start")
+            session = sitl.start(resolve_home(sitl_cfg))
+        endpoint = sitl.endpoint()
+    except (SitlError, OSError, subprocess.SubprocessError) as e:
+        pytest.fail(f"cannot start or reach SITL: {e}")
+    home = Home.parse(session["home"], source="session") if session.get("home") else None
+    try:
+        yield SitlRun(endpoint, home, started, session)
+    finally:
+        if started:
+            sitl.stop()
+
+
+@pytest.fixture
+def vehicle(sitl_run):
+    from aerosplat.sim.vehicle import Vehicle
+
+    with Vehicle.connect(sitl_run.endpoint, timeout=30) as v:
+        yield v
 
 
 @pytest.fixture

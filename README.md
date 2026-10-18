@@ -253,6 +253,24 @@ Recommended browsers:
 
 ------------------------------------------------------------------------
 
+#  Simulation: ArduCopter SITL
+
+SITL збирається й працює у WSL2 (або Linux), тести ганяються з Windows через pymavlink.
+Версія ArduPilot зафіксована в [configs/sitl.yaml](configs/sitl.yaml) (Copter-4.7.2).
+
+``` bash
+pip install -e ".[sim]"
+python -m aerosplat.sim.sitl setup     # раз: окремий worktree ArduPilot + збірка SITL
+pytest -m sitl                         # смоук: зліт на 10 м і посадка, перевірка за істиною SIM_STATE
+python -m aerosplat.sim.sitl start     # вручну (Mission Planner: UDP 14550); ... stop
+```
+
+Звичайний `pytest` sitl-тести пропускає. Подробиці, мережа WSL і обмеження —
+[docs/SIMULATION_AND_DELIVERY.md §4.8](docs/SIMULATION_AND_DELIVERY.md); журнал небезпек —
+[docs/HAZARDS.md](docs/HAZARDS.md).
+
+------------------------------------------------------------------------
+
 ## Reconstruction Modes Comparison
 
 | Feature | Dense Point Cloud (MVS) | 3D Gaussian Splatting |

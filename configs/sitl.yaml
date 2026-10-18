@@ -1,0 +1,43 @@
+# ArduCopter SITL harness (SIM-0, docs/SIMULATION_AND_DELIVERY.md §4.8).
+# Read by aerosplat.sim.sitl; the WSL-side scripts in tools/sitl/ get these values as env vars.
+#
+# Changing `ardupilot.tag` / `ardupilot.commit` is a firmware update: a separate PR that reruns
+# the whole `pytest -m sitl` suite. The harness refuses to start a build that is not this commit,
+# and the smoke test checks the commit the running vehicle reports (AUTOPILOT_VERSION).
+
+ardupilot:
+  tag: Copter-4.7.2                                   # = ArduCopter-stable on 2026-10-18
+  commit: fb773567896014da007bca58358704d4a0d8516f
+  remote: https://github.com/ArduPilot/ardupilot.git
+  source_clone: ~/xeyes/ardupilot   # existing clone: only its object store and tags are used
+  worktree: ~/ardupilot-aerosplat   # detached `git worktree` at `commit`, own build/ directory
+
+# Tool versions the harness was verified with (recorded, not enforced).
+tools:
+  mavproxy: "1.8.75"
+  pymavlink: "2.4.50"
+
+wsl:
+  distro: Ubuntu-24.04
+  venv: ~/venv-ardupilot            # waf deps (empy 3.x, pexpect, future) + MAVProxy
+  run_dir: ~/.aerosplat/sitl        # pid files, logs, eeprom.bin, DataFlash logs, per instance
+
+vehicle:
+  model: "+"                        # = sim_vehicle.py -v ArduCopter -f quad
+  defaults: [Tools/autotest/default_params/copter.parm]   # relative to the worktree
+  speedup: 1
+  wipe: true                        # wipe eeprom on every start: parameters = defaults only
+
+# Home of the simulated vehicle (= sim_vehicle.py --custom-location). Resolution order:
+# --location on the command line, then this site's origin from the catalog, then `fallback`.
+home:
+  site: default/dataset_v6
+  heading_deg: 0
+  # Snapshot of the default/dataset_v6 origin (catalog, 2026-10-18) for checkouts without the
+  # catalog (worktrees, CI). `h` is the Site origin height as stored; Earth Studio altitudes are
+  # not verified yet (§4.8), so missions use heights above home.
+  fallback: {lat: 40.89104597075257, lon: -74.21634205070951, h: 233.0}
+
+ports:
+  test: 14560   # MAVProxy `udpin` for pytest / pymavlink: the client sends first, MAVProxy replies
+  gcs: 14550    # MAVProxy `udp` out to the Windows host (Mission Planner listens here by default)
