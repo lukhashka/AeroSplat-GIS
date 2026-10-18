@@ -19,8 +19,8 @@ from typing import Iterable, Optional
 import yaml
 
 from aerosplat.paths import PROJECT_DIR
-from aerosplat.taxonomy.models import (REQUIREMENT, ApKind, Attribute, TaxonomyClass,
-                                       TaxonomyPack)
+from aerosplat.taxonomy.models import (REQUIREMENT, ApKind, Attribute, Handover, HandoverMode,
+                                       HandoverModeSpec, TaxonomyClass, TaxonomyPack)
 
 CORE = "core"
 
@@ -53,8 +53,16 @@ class Taxonomy:
         self.packs = packs
         self.classes: dict[str, TaxonomyClass] = {}
         self.attributes: dict[str, Attribute] = {}
+        self.handover_modes: dict[HandoverMode, HandoverModeSpec] = {}
         attr_pack: dict[str, str] = {}
+        mode_pack: dict[HandoverMode, str] = {}
         for pack in packs:
+            for mode, spec in pack.handover_modes.items():
+                if mode in self.handover_modes:
+                    raise TaxonomyError(f"handover mode '{mode.value}' is defined by both "
+                                        f"'{mode_pack[mode]}' and '{pack.pack}'")
+                self.handover_modes[mode] = spec
+                mode_pack[mode] = pack.pack
             for attr in pack.attributes:
                 if attr.id in self.attributes:
                     raise TaxonomyError(f"attribute '{attr.id}' is defined by both "
@@ -118,13 +126,17 @@ class Taxonomy:
                 out.setdefault(name, self.attributes[name])
         return list(out.values())
 
-    def handover_of(self, class_id: str):
+    def handover_of(self, class_id: str) -> Optional[Handover]:
         """The class's handover defaults, inherited from the nearest ancestor that sets them."""
         for cid in [class_id, *self.ancestors(class_id)]:
             cls = self.classes[cid]
             if cls.handover is not None:
                 return cls.handover
         return None
+
+    def handover_mode(self, mode: HandoverMode) -> Optional[HandoverModeSpec]:
+        """Per-mode numbers (σ gate), or None when no loaded pack defines the mode."""
+        return self.handover_modes.get(mode)
 
     def ids_of_kind(self, kind: ApKind) -> list[str]:
         return sorted(c.id for c in self.classes.values() if c.kind == kind)

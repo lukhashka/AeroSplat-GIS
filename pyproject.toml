@@ -37,7 +37,8 @@ packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
             "aerosplat.sfm", "aerosplat.gs", "aerosplat.server", "aerosplat.store",
             "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
             "aerosplat.ingest", "aerosplat.jobs", "aerosplat.render", "aerosplat.semantics",
-            "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface", "aerosplat.sim"]
+            "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface", "aerosplat.mission",
+            "aerosplat.sim"]
 
 [tool.setuptools.package-data]
 "aerosplat.store.migrations" = ["script.py.mako"]

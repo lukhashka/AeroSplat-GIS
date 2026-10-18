@@ -37,7 +37,7 @@ def test_core_pack_has_the_classes_access_points_promises():
     assert set(tax.classes) == {"opening.window", "opening.door", "pad.roof_flat",
                                 "pad.roof_pitched", "pad.ground", "constraint.obstacle",
                                 "constraint.vegetation", "constraint.no_go"}
-    assert tax.version_string == "core@1.0"          # major.minor, as §2.5 writes it
+    assert tax.version_string == "core@1.1"          # major.minor, as §2.5 writes it
     assert tax.ids_of_kind(ApKind.opening) == ["opening.door", "opening.window"]
 
 
@@ -230,7 +230,7 @@ def test_attribute_values_are_checked_against_the_class():
 
 def test_an_unknown_class_names_the_taxonomy_version():
     tax = load_taxonomy()
-    with pytest.raises(TaxonomyError, match="core@1.0"):
+    with pytest.raises(TaxonomyError, match="core@1.1"):
         tax.get("opening.teleporter")
 
 
@@ -241,3 +241,37 @@ def test_the_cache_reloads_a_pack_that_changed(tmp_path):
     write(tmp_path, "core", pack(version="1.3.0"))
     # Classes are data; editing a pack has to take effect without restarting the server.
     assert cached_taxonomy(root=tmp_path).version_string == "core@1.3"
+
+
+# ── handover modes and approach geometry (step 8.1b) ─────────────────────
+def test_core_sets_a_sigma_gate_for_every_handover_mode_and_entry_for_openings():
+    from aerosplat.taxonomy import HandoverMode
+    tax = load_taxonomy()
+    assert set(tax.handover_modes) == set(HandoverMode)
+    assert all(tax.handover_mode(m).max_sigma_m > 0 for m in HandoverMode)
+    for cid in tax.ids_of_kind(ApKind.opening):
+        h = tax.handover_of(cid)
+        assert h.entry_distance_m is not None and h.entry_distance_m > h.standoff_m
+
+
+def test_an_entry_inside_the_standoff_is_refused(tmp_path):
+    bad = pack()
+    bad["classes"] = [dict(bad["classes"][0], handover=dict(bad["classes"][0]["handover"],
+                                                          entry_distance_m=2.0))]
+    write(tmp_path, "core", bad)
+    with pytest.raises(TaxonomyError, match="entry_distance_m"):
+        load_taxonomy(root=tmp_path)
+
+
+def test_two_packs_cannot_both_set_a_modes_gate(tmp_path):
+    write(tmp_path, "core", pack(handover_modes={"hover_handoff": {"max_sigma_m": 1.0}}))
+    write(tmp_path, "other", {"pack": "other", "version": "1.0.0",
+                              "handover_modes": {"hover_handoff": {"max_sigma_m": 9.0}}})
+    with pytest.raises(TaxonomyError, match="hover_handoff"):
+        load_taxonomy(["other"], root=tmp_path)
+
+
+def test_an_unknown_handover_mode_is_refused(tmp_path):
+    write(tmp_path, "core", pack(handover_modes={"teleport": {"max_sigma_m": 1.0}}))
+    with pytest.raises(TaxonomyError):
+        load_taxonomy(root=tmp_path)

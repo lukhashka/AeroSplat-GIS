@@ -68,6 +68,11 @@ class AuthoredStore:
     def audit_path(self) -> Path:
         return self.dir / AUDIT_JSONL
 
+    @property
+    def lock(self) -> threading.RLock:
+        """Serialises every write to this authored directory, the targets file included."""
+        return self._lock
+
     # ── read ─────────────────────────────────────────────────────────────
     def load(self) -> AuthoredFile:
         """The whole file, or an empty one when a Site has nothing authored yet."""
@@ -84,7 +89,7 @@ class AuthoredStore:
                  lifecycle: Optional[Iterable[Lifecycle]] = None) -> list[AccessPoint]:
         keep = set(lifecycle) if lifecycle is not None else None
         out = [f for f in self.load().features
-               if (facade_id is None or f.host.facade_id == facade_id)
+               if (facade_id is None or f.facade_id == facade_id)
                and (keep is None or f.lifecycle in keep)]
         return sorted(out, key=lambda f: f.id)
 
@@ -123,6 +128,12 @@ class AuthoredStore:
         with self.audit_path.open("a", encoding="utf-8") as fh:
             fh.write(entry.model_dump_json(by_alias=True) + "\n")
 
+    def append_audit(self, entry: AuditEntry) -> None:
+        """Record a decision about a feature made elsewhere (a target confirmed, a mission
+        exported), in the same append-only log as the edits."""
+        with self._lock:
+            self._append_audit(entry)
+
     def create(self, feature: AccessPoint, *, by: Optional[str] = None,
                what: str = "drew") -> AccessPoint:
         with self._lock:
@@ -133,7 +144,7 @@ class AuthoredStore:
             self._save(state)
             self._append_audit(AuditEntry(
                 by=actor(by), op="create", feature_id=feature.id, site_key=self.site_key,
-                what=f"{what} {feature.class_} on {feature.host.facade_id}",
+                what=f"{what} {feature.class_} on {feature.where}",
                 after=feature.model_dump(mode="json", by_alias=True)))
             return feature
 
@@ -193,6 +204,6 @@ class AuthoredStore:
             self._save(state)
             self._append_audit(AuditEntry(
                 by=actor(by), op="delete", feature_id=feature_id, site_key=self.site_key,
-                what=f"deleted {f.class_} on {f.host.facade_id}",
+                what=f"deleted {f.class_} on {f.where}",
                 before=f.model_dump(mode="json", by_alias=True)))
             return f
