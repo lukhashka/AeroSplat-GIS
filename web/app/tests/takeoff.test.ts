@@ -95,6 +95,15 @@ test("rejections keep the server's order and drop zeros", () => {
   assert.equal(rows.at(-1)!.label, "something_new"); // an unknown reason is shown by its code
 });
 
+test("a target too near the grid's edge is one row, in Ukrainian", () => {
+  // The search answers at once: every column under target_near_grid_edge, nothing else.
+  const rows = rejectedRows({ target_near_grid_edge: 25600, near_grid_edge: 0, not_checked: 0 });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.count, 25600);
+  assert.notEqual(rows[0]!.label, "target_near_grid_edge");
+  assert.match(rows[0]!.label, /краю сітки/);
+});
+
 test("a search is identified by its parameters", () => {
   const a = searchKey("tgt_1", { profile: { sigma_gnss_m: 1.5 } });
   assert.equal(a, searchKey("tgt_1", { profile: { sigma_gnss_m: 1.5 }, max_distance_m: 150, n: 5 })); // the defaults

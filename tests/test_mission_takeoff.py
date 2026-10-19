@@ -8,7 +8,10 @@ it never relaxes a criterion. The negative cases outnumber the positive ones.
 """
 
 import math
+import re
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 import mission_scenes as ms
@@ -16,8 +19,9 @@ from aerosplat.mission import planner
 from aerosplat.mission.corridor import check_leg
 from aerosplat.mission.models import (Code, HandoverOverride, MissionRefused, PlanningProfile,
                                       Severity, Verdict)
-from aerosplat.mission.planner import plan_mission
-from aerosplat.mission.takeoff import corridor_radius, find_takeoff_spots, transit_point
+from aerosplat.mission.planner import plan_mission, require_inside_grid
+from aerosplat.mission.takeoff import (REASONS, corridor_radius, find_takeoff_spots,
+                                       transit_point)
 from aerosplat.surface.models import OCCUPIED, UNKNOWN
 
 QUIET = PlanningProfile(wire_height_m=5.0)                # r = 0.5 + 2 + 2·hypot(0.3, 1.5)
@@ -129,9 +133,9 @@ def test_near_the_edge_the_search_aims_at_the_tilted_entry_the_planner_flies(tmp
     # max_checks" whatever the budget. Now it aims where the planner's transit ends.
     ap = ms.window_ap()
     target, _, _ = ms.confirmed(tmp_path, ap, **ENTRY50)
-    old = search(street, ground, DIRECT50, max_checks=100)
-    assert old.candidates == [] and old.rejected["transit_blocked"] == old.checked == 100
-    assert "raise max_checks" in old.message
+    old = search(street, ground, DIRECT50, max_checks=100)   # the direct E: refused at once
+    assert old.candidates == [] and old.checked == 0
+    assert old.rejected["target_near_grid_edge"] == old.searched_columns
 
     end = transit_point(target, ap, street, QUIET)
     assert abs(end.point[0]) == pytest.approx(50 * math.sin(math.radians(15)))
@@ -287,6 +291,78 @@ def test_spots_keep_the_planners_distance_from_the_grid_edge(street, ground):
     for c in res.candidates:
         assert min(40 - c.enu[0], c.enu[1] + 40) >= edge
     assert not search(street, ground, E, max_distance_m=5.0).grid_limited
+
+
+# ── a raw target too near the grid's edge: answered before any check ─
+# The API aims at `transit_point`, which already tilts away from the edge (above). A raw
+# target (CLI `--target`) gets the same answer as the planner's E check, at once.
+def test_a_target_too_near_the_grid_edge_is_answered_at_once(street, ground):
+    # Direct E 50 m out: (0, -35), 5 m from the edge, where a transit needs r + 2 voxels = 6.56 m.
+    # Every exact check used to fail with transit_blocked, and the search ended "not
+    # confirmed ... raise max_checks" even at 400 checks.
+    e = DIRECT50
+    res = search(street, ground, e, max_checks=400)
+    assert res.candidates == [] and res.checked == 0 and res.best_open is None
+    assert res.rejected["target_near_grid_edge"] == res.searched_columns > 0
+    assert sum(res.rejected.values()) == res.searched_columns          # under no other reason
+    msg = res.message
+    assert msg.startswith("no takeoff spot within 150 m of the target") and "max_checks" not in msg
+    assert ("the target (0.0, -35.0), where the transit ends, is 5.0 m from the edge of the "
+            "occupancy grid (x -40.0…40.0, y -40.0…40.0 m) and needs r + 2 voxels = 6.56 m, so no "
+            "transit to it can be checked") in msg
+    assert "the planner refuses any plan whose transit ends there (outside_grid)" in msg
+    # The planner's own hint for that point, word for word.
+    with pytest.raises(MissionRefused) as refused:
+        require_inside_grid(street, [("E", np.asarray(e), res.radius_m)])
+    hint = refused.value.findings[0].detail.split("cannot be checked. ", 1)[1]
+    assert msg.endswith(" " + hint) and "occupancy_bbox=-40,-60,40,40 " in hint
+
+
+def test_a_target_outside_the_grid_says_how_far_out(street, ground):
+    res = search(street, ground, (0.0, -45.0, 9.0), max_distance_m=20.0)
+    assert res.candidates == [] and res.rejected["target_near_grid_edge"] == res.searched_columns
+    assert ("the target (0.0, -45.0), where the transit ends, is 5.0 m outside the occupancy "
+            "grid") in res.message
+
+
+@pytest.mark.parametrize("inside", [False, True], ids=["1 cm short", "1 cm inside"])
+def test_the_edge_rule_is_the_planners_to_the_centimetre(street, ground, inside):
+    r, _ = corridor_radius(QUIET, GEOREF)
+    y = -40.0 + r + 2 * street.res_m + (0.01 if inside else -0.01)
+    res = search(street, ground, (0.0, y, 9.0))
+    if inside:                                             # searched as before, and found
+        assert res.rejected["target_near_grid_edge"] == 0 and res.checked >= 1
+        assert res.candidates
+    else:
+        assert res.rejected["target_near_grid_edge"] == res.searched_columns and res.checked == 0
+
+
+def test_the_guard_never_fires_on_the_planners_transit_end(tmp_path, street, ground):
+    # Entry 48.5 m: the direct E (0, -33.5) is 6.5 m from the edge, short of 6.56. Raw, it is
+    # refused at once; through transit_point the cone tilts and the search finds homes.
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path, ap,
+                                override=HandoverOverride(entry_distance_m=48.5))
+    assert search(street, ground, (0.0, -33.5, 9.0)).rejected["target_near_grid_edge"] > 0
+    res = search_for(target, ap, street, ground, n=2)
+    assert res.rejected["target_near_grid_edge"] == 0 and res.candidates
+
+
+def test_a_target_just_inside_the_margin_is_searched_and_planned(tmp_path, street, ground):
+    ap = ms.window_ap()                                   # E (0, -33): 7.0 m from the edge
+    target, _, _ = ms.confirmed(tmp_path, ap, override=HandoverOverride(entry_distance_m=48.0))
+    end = transit_point(target, ap, street, QUIET)
+    assert end.point == pytest.approx((0.0, -33.0, 9.0)) and end.note == ""
+    res = search(street, ground, end.point)
+    assert res.rejected["target_near_grid_edge"] == 0 and res.candidates
+    plan = plan_from(target, ap, street, res.candidates[0].enu)
+    assert plan.verdict is Verdict.feasible and plan.approach.entry == pytest.approx(end.point)
+
+
+def test_every_reason_has_a_label_in_the_web_app():
+    ts = Path(__file__).resolve().parents[1] / "web" / "app" / "src" / "lib" / "takeoff.ts"
+    block = ts.read_text(encoding="utf-8").split("REJECT_LABEL", 1)[1].split("};", 1)[0]
+    assert set(re.findall(r"^\s+(\w+): \"", block, re.M)) == set(REASONS)
 
 
 def test_none_is_reported_honestly_with_what_would_fit(street, ground):

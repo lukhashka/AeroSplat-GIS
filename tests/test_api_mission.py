@@ -344,6 +344,17 @@ def test_home_search_refuses_when_there_is_no_spot(env):
     assert both.status_code == 422
 
 
+def test_home_search_plans_a_target_just_inside_the_margin(env):
+    client, authored, _ = env
+    t = target(client, authored.create(ms.window_ap()).id,
+               override={"entry_distance_m": 48.0}).json()       # E (0, -33): 7.0 m from the edge
+    m = mission(client, t["id"], home_search=True)
+    assert m.status_code == 201, m.text
+    plan = m.json()
+    assert plan["verdict"] == "feasible" and plan["approach"]["entry"] == pytest.approx([0.0, -33.0, 9.0])
+    assert plan["home"]["source"].startswith("takeoff search: nearest of 5 spots within 150 m")
+
+
 def test_takeoff_search_needs_the_semantics_of_the_same_run(env, tmp_path):
     import shutil
 

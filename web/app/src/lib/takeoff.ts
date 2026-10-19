@@ -9,6 +9,7 @@ export const MAX_CHECKS_LIMIT = 400;
 
 /** Why columns were rejected (aerosplat.mission.takeoff.REASONS), each under its first failed test. */
 export const REJECT_LABEL: Record<string, string> = {
+  target_near_grid_edge: "ціль (кінець транзиту) ближче до краю сітки, ніж r + 2 вокселі",
   near_grid_edge: "біля краю сітки",
   not_measured: "поверхню не виміряно",
   building: "у контурі будівлі",
