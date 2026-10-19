@@ -549,6 +549,18 @@ export interface AddressOut {
   features: AccessPoint[];
 }
 
+// ── snapping openings to the facade's rows and columns (§5.6 item 3) ──
+export interface RegularizeOut {
+  facade_id: string;
+  run_id: string;
+  tol_m: number;
+  dry_run: boolean;
+  moves: { id: string; edge: string; old: number; new: number; delta: number; line: string }[];
+  kept: { id: string; edge: string; off_m: number; line: string; reason: string }[];
+  skipped: Record<string, string>;
+  features: AccessPoint[];
+}
+
 // ── facades across runs (ACCESS_POINTS §5.9; aerosplat.authored.carry) ──
 export interface FacadeFit {
   facade_id: string;

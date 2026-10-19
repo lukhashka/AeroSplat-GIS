@@ -36,7 +36,8 @@ from aerosplat.authored.carry import (PlacementStatus, foreign_on, is_native, na
 from aerosplat.authored.geometry import geometry_from_uv, make_access_point
 from aerosplat.authored.models import AccessPoint, Address, AuditEntry, Lifecycle, Origin, actor
 from aerosplat.authored.store import AuthoredError, AuthoredStore, NotFound as ApNotFound
-from aerosplat.semantics.addressing import Opening, address_facade, canonical_address, floor_label
+from aerosplat.semantics.addressing import (SNAP_TOL_M, Opening, SnapBox, address_facade,
+                                           canonical_address, floor_label, snap_to_grid)
 from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitResult, gridfit
 from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
                                           match_facades)
@@ -252,6 +253,48 @@ class AddressRequest(_In):
     row_tol_m: float = Field(0.6, gt=0.01, le=5.0)
     column_tol_m: float = Field(0.6, gt=0.01, le=5.0)
     by: Optional[str] = None
+
+
+class RegularizeRequest(_In):
+    """Snap the openings' edges to the facade's rows and columns (§5.6 item 3)."""
+
+    run_id: Optional[str] = None
+    tol_m: float = Field(SNAP_TOL_M, gt=0.0, le=0.5)
+    row_tol_m: float = Field(0.6, gt=0.01, le=5.0)
+    column_tol_m: float = Field(0.6, gt=0.01, le=5.0)
+    # Compute and return what would move, store nothing.
+    dry_run: bool = False
+    by: Optional[str] = None
+
+
+class EdgeMoveOut(BaseModel):
+    id: str
+    edge: str
+    old: float
+    new: float
+    delta: float
+    line: str
+
+
+class EdgeKeptOut(BaseModel):
+    id: str
+    edge: str
+    off_m: float
+    line: str
+    reason: str
+
+
+class RegularizeOut(BaseModel):
+    facade_id: str
+    run_id: str
+    tol_m: float
+    dry_run: bool
+    moves: list[EdgeMoveOut] = Field(default_factory=list)
+    kept: list[EdgeKeptOut] = Field(default_factory=list)
+    # Openings not considered at all, with the reason (e.g. not an axis-aligned rectangle).
+    skipped: dict[str, str] = Field(default_factory=dict)
+    # The changed features as stored (or, on a dry run, as they would be).
+    features: list[AccessPoint] = Field(default_factory=list)
 
 
 class RowOut(BaseModel):
@@ -566,6 +609,84 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
                       floor_height_m=result.floor_height_m, ambiguous=result.ambiguous,
                       reasons=result.reasons,
                       features=native_features(store.features(facade_id=facade_id), facade))
+
+
+EDGE_UK = {"u0": "лівий край", "u1": "правий край", "v0": "низ", "v1": "верх"}
+
+
+def _axis_box(polygon_uv: list[tuple[float, float]]) -> Optional[tuple[float, float, float, float]]:
+    """(u0, u1, v0, v1) of an axis-aligned rectangle; None for any other shape."""
+    if len(polygon_uv) != 4:
+        return None
+    us = [p[0] for p in polygon_uv]
+    vs = [p[1] for p in polygon_uv]
+    u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+    eps = 1e-6
+    if not all((abs(u - u0) < eps or abs(u - u1) < eps) and (abs(v - v0) < eps or abs(v - v1) < eps)
+               for u, v in polygon_uv):
+        return None
+    if len({(round(u, 6), round(v, 6)) for u, v in polygon_uv}) != 4:
+        return None
+    return u0, u1, v0, v1
+
+
+@router.post("/sites/{project_id}/{site_id}/facades/{facade_id:path}/regularize",
+             response_model=RegularizeOut)
+def facade_regularize(project_id: str, site_id: str, facade_id: str,
+                      body: RegularizeRequest = RegularizeRequest(),
+                      cat: Catalog = Depends(get_catalog)) -> RegularizeOut:
+    """Snap opening edges to the facade's row and column lines, within `tol_m` (§5.6 item 3).
+
+    Only when the operator asks. Lines come from the openings themselves (the clusters the
+    addressing uses, per class); an edge moves only if it is within `tol_m` of its line, so
+    nothing moves further than that, and every move is written to the feature's history and
+    the audit log (`op: regularize`). Edges further off are reported in `kept` and left
+    alone. Only this run's own openings (same frame), not rejected ones, and only
+    axis-aligned rectangles. A confirmed target on a moved opening sees `target_changed`
+    until it is confirmed again.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    facade = _facade(product, facade_id)
+    store = _store(cat, site)
+    with store.lock:
+        features = [f for f in native_features(store.features(facade_id=facade_id), facade)
+                    if f.kind == ApKind.opening.value and f.lifecycle is not Lifecycle.rejected]
+        boxes: list[SnapBox] = []
+        skipped: dict[str, str] = {}
+        for f in features:
+            assert f.geometry is not None
+            box = _axis_box(f.geometry.polygon_uv)
+            if box is None:
+                skipped[f.id] = "не прямокутник по осях (u, v): не вирівнюється"
+                continue
+            boxes.append(SnapBox(id=f.id, u0=box[0], u1=box[1], v0=box[2], v1=box[3], group=f.class_))
+        result = snap_to_grid(boxes, tol_m=body.tol_m, row_tol_m=body.row_tol_m,
+                              column_tol_m=body.column_tol_m)
+        changed: list[AccessPoint] = []
+        whats: list[str] = []
+        for f in features:
+            box = result.boxes.get(f.id)
+            if box is None:
+                continue
+            u0, u1, v0, v1 = box
+            try:
+                geometry = geometry_from_uv(facade, [(u0, v0), (u1, v0), (u1, v1), (u0, v1)])
+            except ValueError as e:
+                skipped[f.id] = str(e)
+                continue
+            changed.append(f.model_copy(update={"geometry": geometry}, deep=True))
+            whats.append(f"прив'язка до сітки фасаду (τ {body.tol_m:g} м): " + ", ".join(
+                f"{EDGE_UK[m.edge]} {m.delta:+.3f} м ({m.line})" for m in result.moves_of(f.id)))
+        if changed and not body.dry_run:
+            changed = store.replace_many(changed, by=body.by, op="regularize", whats=whats)
+    moved_ids = {f.id for f in changed}
+    return RegularizeOut(
+        facade_id=facade.id, run_id=product.run.id, tol_m=body.tol_m, dry_run=body.dry_run,
+        moves=[EdgeMoveOut(id=m.id, edge=m.edge, old=m.old, new=m.new, delta=m.delta, line=m.line)
+               for m in result.moves if m.id in moved_ids],
+        kept=[EdgeKeptOut(**dataclasses.asdict(k)) for k in result.kept],
+        skipped=skipped, features=changed)
 
 
 def _decode(png: bytes, what: str, shape: tuple[int, int]) -> np.ndarray:

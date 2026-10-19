@@ -9,6 +9,7 @@ import type {
   AuditEntry,
   CarriedOut,
   ReanchorOut,
+  RegularizeOut,
   GridfitOut,
   GridfitRequest,
   CaptureOut,
@@ -303,6 +304,15 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
           body,
         ),
       onSuccess: refresh,
+    }),
+    // Snap the openings' edges to the facade's rows and columns within a tolerance (§5.6
+    // item 3). A dry run first shows what would move; nothing moves further than tol_m.
+    regularize: useMutation({
+      mutationFn: (body: { run_id: string | null; tol_m?: number; dry_run?: boolean; by?: string }) =>
+        api.post<RegularizeOut>(`/sites/${project}/${site}/facades/${facadeId}/regularize`, body),
+      onSuccess: (r) => {
+        if (!r.dry_run) refresh();
+      },
     }),
     // Carry a feature of another run onto this facade -- only when the operator asks, and
     // only when it lands on exactly this facade (§5.9). The address is recomputed after.

@@ -11,6 +11,7 @@ import type {
   FacadeOrthoMeta,
   GridfitOut,
   Lifecycle,
+  RegularizeOut,
   TaxonomyClass,
 } from "../api/types";
 import { Icon } from "../components/Icon";
@@ -210,6 +211,9 @@ export function FacadePage() {
   const [hover, setHover] = useState<{ u: number; v: number } | null>(null);
   const [help, setHelp] = useState(false);
   const [addressNote, setAddressNote] = useState<string | null>(null);
+  // A dry run of snapping to the facade's rows and columns, waiting for "apply" (§5.6 п. 3).
+  const [snapPreview, setSnapPreview] = useState<RegularizeOut | null>(null);
+  useEffect(() => setSnapPreview(null), [facadeKey]);
   const [gridNote, setGridNote] = useState<{ text: string; warn: boolean } | null>(null);
   // The note is about one facade; moving to another must not leave it behind.
   useEffect(() => setGridNote(null), [facadeKey]);
@@ -309,6 +313,19 @@ export function FacadePage() {
   const setLifecycle = (id: string, lifecycle: Lifecycle) => edits.update.mutate({ id, lifecycle });
 
   /** Floors and columns from what has been drawn (§5.6). Never moves or invents an opening. */
+  /** Preview, then apply, snapping edges to the facade's rows and columns (≤ τ, audited). */
+  const previewSnap = () => {
+    if (!list.length || edits.regularize.isPending) return;
+    edits.regularize.mutate({ run_id: facadeRun, dry_run: true }, { onSuccess: setSnapPreview });
+  };
+  const applySnap = () => {
+    if (!snapPreview || edits.regularize.isPending) return;
+    edits.regularize.mutate(
+      { run_id: facadeRun, tol_m: snapPreview.tol_m },
+      { onSuccess: () => setSnapPreview(null) },
+    );
+  };
+
   const runAddress = () => {
     if (!list.length || edits.address.isPending) return;
     edits.address.mutate(
@@ -363,6 +380,7 @@ export function FacadePage() {
     if (e.key === "?" || (e.key === "/" && e.shiftKey)) return setHelp((h) => !h);
     if (e.key === "Escape") {
       if (help) return setHelp(false);
+      if (snapPreview) return setSnapPreview(null);
       if (draft) return setDraft(null);
       return setSelected(null);
     }
@@ -382,6 +400,7 @@ export function FacadePage() {
     if (e.key === "c" || e.key === "C") return setShowCoverage((v) => !v);
     if (e.key === "a" || e.key === "A") return void runAddress();
     if (e.key === "g" || e.key === "G") return void runGridfit();
+    if (e.key === "r" || e.key === "R") return void (snapPreview ? applySnap() : previewSnap());
     if (!current) return;
     if (e.key === "v" || e.key === "V") return setLifecycle(current.id, "verified");
     if (e.key === "x" || e.key === "X") return setLifecycle(current.id, "rejected");
@@ -499,7 +518,7 @@ export function FacadePage() {
       <ErrorBox
         error={
           edits.create.error ?? edits.update.error ?? edits.remove.error ?? edits.address.error ??
-          edits.gridfit.error ?? edits.reanchor.error
+          edits.gridfit.error ?? edits.reanchor.error ?? edits.regularize.error
         }
       />
 
@@ -570,6 +589,42 @@ export function FacadePage() {
                   <small className={gridNote.warn ? "" : "faint"} style={gridNote.warn ? { color: "var(--amber)" } : undefined}>
                     {gridNote.text}
                   </small>
+                </div>
+              )}
+              <button
+                className="btn sm"
+                style={{ width: "100%", marginBottom: 8 }}
+                disabled={!list.length || edits.regularize.isPending}
+                title="Підтягнути краї отворів до ліній рядів і колонок фасаду, якщо вони ближче за допуск (15 см). Далі допуску нічого не зсувається; кожен зсув записується в історію точки й журнал."
+                onClick={previewSnap}
+              >
+                Вирівняти за сіткою <kbd>R</kbd>
+              </button>
+              {snapPreview && (
+                <div className="draft-box" style={{ marginBottom: 8 }}>
+                  <small className="faint">
+                    {snapPreview.features.length
+                      ? `${snapPreview.features.length} рамок, ${snapPreview.moves.length} країв зсунуться ≤ ` +
+                        `${(100 * snapPreview.tol_m).toFixed(0)} см (найбільше ` +
+                        `${(100 * Math.max(...snapPreview.moves.map((m) => Math.abs(m.delta)))).toFixed(1)} см)`
+                      : "Нічого вирівнювати: краї вже на лініях або далі допуску"}
+                    {snapPreview.kept.length > 0 &&
+                      ` · ${snapPreview.kept.length} країв далі за допуск — лишаються, як намальовано`}
+                    {Object.keys(snapPreview.skipped).length > 0 &&
+                      ` · ${Object.keys(snapPreview.skipped).length} не прямокутні`}
+                  </small>
+                  <div className="row">
+                    <button
+                      className="btn primary sm grow"
+                      disabled={!snapPreview.features.length || edits.regularize.isPending}
+                      onClick={applySnap}
+                    >
+                      Застосувати <kbd>R</kbd>
+                    </button>
+                    <button className="btn sm" onClick={() => setSnapPreview(null)}>
+                      <kbd>Esc</kbd>
+                    </button>
+                  </div>
                 </div>
               )}
               {addressNote && (
@@ -840,6 +895,7 @@ export function FacadePage() {
             <div><kbd>C</kbd> карта покриття</div>
             <div><kbd>A</kbd> адресація (поверхи й колонки)</div>
             <div><kbd>G</kbd> знайти вікна за сіткою (кандидати на перевірку)</div>
+            <div><kbd>R</kbd> вирівняти краї за рядами й колонками (≤ 15 см; ще раз <kbd>R</kbd> — застосувати)</div>
           </div>
         </div>
       )}

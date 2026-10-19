@@ -485,6 +485,49 @@ def test_addressing_an_empty_facade_changes_nothing(client):
     assert client.get(f"{BASE}/audit").json() == []
 
 
+# ── snapping to the facade's frame (§5.6 item 3) ─────────────────────────
+def test_regularize_snaps_within_the_tolerance_and_audits_every_move(client):
+    ids = [draw(client, -9.0 + 3 * i, 3.0 + dv0, -7.6 + 3 * i, 4.5 + dv1).json()["id"]
+           for i, (dv0, dv1) in enumerate([(0.0, 0.0), (0.06, -0.03), (-0.04, 0.02), (0.0, 0.0),
+                                           (0.4, 0.0)])]
+    before = len(client.get(f"{BASE}/audit").json())
+    dry = client.post(f"{BASE}/facades/B01/N1/regularize", json={"dry_run": True}).json()
+    assert dry["dry_run"] and dry["tol_m"] == 0.15
+    assert {(m["id"], m["edge"]) for m in dry["moves"]} == {
+        (ids[1], "v0"), (ids[2], "v0"), (ids[1], "v1"), (ids[2], "v1")}
+    assert all(abs(m["delta"]) <= 0.15 for m in dry["moves"])
+    assert [(k["id"], k["edge"]) for k in dry["kept"]] == [(ids[4], "v0")]   # 0.4 m off: left
+    assert len(client.get(f"{BASE}/audit").json()) == before                 # nothing stored
+
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={"by": "tester"}).json()
+    assert sorted(f["id"] for f in out["features"]) == sorted(ids[1:3])
+    stored = {f["id"]: f for f in client.get(f"{BASE}/access-points?facade=B01/N1").json()}
+    for i in (1, 2):
+        vs = [p[1] for p in stored[ids[i]]["geometry"]["polygon_uv"]]
+        assert (min(vs), max(vs)) == pytest.approx((3.0, 4.5))
+        assert "прив'язка до сітки" in stored[ids[i]]["provenance"]["edits"][-1]["what"]
+    assert [p[1] for p in stored[ids[4]]["geometry"]["polygon_uv"]][0] == pytest.approx(3.4)
+    tail = client.get(f"{BASE}/audit").json()[before:]
+    assert [e["op"] for e in tail] == ["regularize", "regularize"]
+    assert all("низ" in e["what"] and "верх" in e["what"] for e in tail)
+    assert all(e["before"]["geometry"] != e["after"]["geometry"] for e in tail)
+    again = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()
+    assert again["moves"] == [] and again["features"] == []
+
+
+def test_regularize_leaves_rejected_and_other_runs_openings_alone(client):
+    a = draw(client, -9.0, 3.0, -7.6, 4.5).json()
+    b = draw(client, -6.0, 3.1, -4.6, 4.5).json()
+    client.patch(f"{BASE}/access-points/{b['id']}", json={"lifecycle": "rejected"})
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()
+    assert out["moves"] == []                                     # a row of one is no line
+    _rerun_with_renamed_walls()
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()   # r2's B01/N1
+    assert out["run_id"] == "r2" and out["features"] == [] and out["skipped"] == {}
+    still = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["geometry"] for f in still if f["id"] == a["id"]] == [a["geometry"]]
+
+
 # ── facades across runs (§5.9) ───────────────────────────────────────────
 def _rerun_with_renamed_walls():
     """r2: r1's north wall refitted 0.3 m out and renamed `B07/N3`; `B01/N1` is now another

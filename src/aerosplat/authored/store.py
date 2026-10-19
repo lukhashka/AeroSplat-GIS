@@ -191,9 +191,17 @@ class AuthoredStore:
         return self.replace_many([feature], by=by, what=what, op=op)[0]
 
     def replace_many(self, features: list[AccessPoint], *, by: Optional[str] = None,
-                     what: str = "edited", op: str = "update") -> list[AccessPoint]:
-        """Overwrite several features in one state write, one audit entry each."""
+                     what: str = "edited", op: str = "update",
+                     whats: Optional[list[str]] = None) -> list[AccessPoint]:
+        """Overwrite several features in one state write, one audit entry each.
+
+        `whats`, when given, is a per-feature summary (same order as `features`) for the
+        audit line and the edit history; otherwise every feature gets `what`.
+        """
         who = actor(by)
+        if whats is not None and len(whats) != len(features):
+            raise ValueError("whats must have one entry per feature")
+        lines = whats if whats is not None else [what] * len(features)
         with self._lock:
             state = self.load()
             index = {f.id: i for i, f in enumerate(state.features)}
@@ -201,13 +209,13 @@ class AuthoredStore:
             if missing:
                 raise NotFound(f"no access point '{missing[0]}' on site {self.site_key}")
             olds = [state.features[index[f.id]] for f in features]
-            for new, old in zip(features, olds):
-                self._carry_over(new, old, who, what)
+            for new, old, line in zip(features, olds, lines):
+                self._carry_over(new, old, who, line)
                 state.features[index[new.id]] = new
             self._save(state)
-            for new, old in zip(features, olds):
+            for new, old, line in zip(features, olds, lines):
                 self._append_audit(AuditEntry(
-                    by=who, op=op, feature_id=new.id, site_key=self.site_key, what=what,
+                    by=who, op=op, feature_id=new.id, site_key=self.site_key, what=line,
                     before=old.model_dump(mode="json", by_alias=True),
                     after=new.model_dump(mode="json", by_alias=True)))
             return features
