@@ -18,6 +18,7 @@ because somebody said so, and every change is appended to `authored/audit.jsonl`
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 from typing import Any, Optional
@@ -30,11 +31,15 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
 from aerosplat.authored.candidates import Proposal, make_candidates, screen
+from aerosplat.authored.carry import (PlacementStatus, foreign_on, is_native, native_features,
+                                     reanchor)
 from aerosplat.authored.geometry import geometry_from_uv, make_access_point
 from aerosplat.authored.models import AccessPoint, Address, AuditEntry, Lifecycle, Origin, actor
 from aerosplat.authored.store import AuthoredError, AuthoredStore, NotFound as ApNotFound
 from aerosplat.semantics.addressing import Opening, address_facade, canonical_address, floor_label
 from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitResult, gridfit
+from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
+                                          match_facades)
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
 from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
                                        facade_ortho)
@@ -302,6 +307,83 @@ class GridfitOut(BaseModel):
     skipped: dict[str, int] = Field(default_factory=dict)
 
 
+class PairScoreOut(BaseModel):
+    b_id: str
+    angle_deg: float
+    offset_m: float
+    offset_tol_m: float
+    overlap_m: float
+    overlap_a: float
+    overlap_b: float
+    overlap_v: float
+    span_a: tuple[float, float]
+    score: float
+
+
+class FacadeMatchOut(BaseModel):
+    """Where one facade of `from_run` is in `to_run` (ACCESS_POINTS §5.9)."""
+
+    a_id: str
+    status: MatchStatus
+    b_ids: list[str] = Field(default_factory=list)
+    relation: Optional[Relation] = None
+    confidence: float = 0.0
+    reason: str = ""
+    shared_with: list[str] = Field(default_factory=list)
+    candidates: list[PairScoreOut] = Field(default_factory=list)
+
+
+class FacadeMatchesOut(BaseModel):
+    from_run: str
+    to_run: str
+    model: str
+    counts: dict[str, int]
+    matches: list[FacadeMatchOut]
+
+
+class FacadeFitOut(BaseModel):
+    facade_id: str
+    angle_deg: float
+    offset_m: float
+    offset_tol_m: float
+    inside: float
+    polygon_uv: list[tuple[float, float]]
+
+
+class PlacementOut(BaseModel):
+    feature_id: str
+    status: PlacementStatus
+    facade_id: Optional[str] = None
+    fit: Optional[FacadeFitOut] = None
+    candidates: list[FacadeFitOut] = Field(default_factory=list)
+    reason: str = ""
+
+
+class CarriedOut(BaseModel):
+    """A feature drawn in another run that lands on this facade: shown, never moved by itself."""
+
+    feature: AccessPoint
+    placement: PlacementOut
+    # This facade's fit, even when the placement is ambiguous (so the editor can draw it).
+    here: FacadeFitOut
+
+
+class ReanchorRequest(_In):
+    run_id: Optional[str] = None                # the run of `facade_id`; default: the newest
+    facade_id: str
+    by: Optional[str] = None
+
+
+class ReanchorOut(BaseModel):
+    feature: AccessPoint
+    placement: PlacementOut
+    from_facade: str
+
+
+def _plain(obj: Any) -> dict[str, Any]:
+    return dataclasses.asdict(obj)
+
+
 # ── taxonomy ─────────────────────────────────────────────────────────────
 def _class_out(tax: Taxonomy, cls: TaxonomyClass) -> TaxonomyClassOut:
     handover = tax.handover_of(cls.id)
@@ -327,11 +409,19 @@ def site_taxonomy(project_id: str, site_id: str,
 
 
 # ── facades ──────────────────────────────────────────────────────────────
-def _counts(store: AuthoredStore) -> dict[str, int]:
+def _counts(store: AuthoredStore, facades: list[Facade]) -> dict[str, int]:
+    """Non-rejected features native to each of these facades (drawn in exactly its frame).
+
+    By frame, not by id: facade ids are per run, and `B04/SW1` of one run may be another
+    building in the next (ACCESS_POINTS §5.9). Features of other runs on the same wall are
+    `…/carried`, not counted here.
+    """
+    by_id = {f.id: f for f in facades}
     out: dict[str, int] = {}
     for f in store.load().features:
-        if f.lifecycle is not Lifecycle.rejected and f.facade_id is not None:
-            out[f.facade_id] = out.get(f.facade_id, 0) + 1
+        fc = by_id.get(f.facade_id) if f.facade_id is not None else None
+        if f.lifecycle is not Lifecycle.rejected and fc is not None and is_native(f, fc):
+            out[fc.id] = out.get(fc.id, 0) + 1
     return out
 
 
@@ -355,7 +445,7 @@ def site_semantics(project_id: str, site_id: str, run_id: Optional[str] = None,
         run_id=product.run.id, epoch_id=product.run.epoch_id,
         finished_at=product.run.finished_at, frame=r.frame, terrain=r.terrain,
         buildings=r.buildings, facades=r.facades, warnings=r.warnings, params=r.params,
-        features_by_facade=_counts(_store(cat, site)),
+        features_by_facade=_counts(_store(cat, site), r.facades),
         scene=site.key if _run_has_scene(cat, site, product) else None, runs=runs)
 
 
@@ -444,7 +534,8 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
     store = _store(cat, site)
-    features = [f for f in store.features(facade_id=facade_id)
+    # Native only: an opening with this facade id from another run is another wall.
+    features = [f for f in native_features(store.features(facade_id=facade_id), facade)
                 if f.kind == ApKind.opening.value and f.lifecycle is not Lifecycle.rejected]
     shapes = [(f.id, f.geometry) for f in features if f.geometry is not None]
     result = address_facade(
@@ -473,7 +564,8 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
             for r in result.rows]
     return AddressOut(facade_id=facade_id, rows=rows, column_centres=result.column_centres,
                       floor_height_m=result.floor_height_m, ambiguous=result.ambiguous,
-                      reasons=result.reasons, features=store.features(facade_id=facade_id))
+                      reasons=result.reasons,
+                      features=native_features(store.features(facade_id=facade_id), facade))
 
 
 def _decode(png: bytes, what: str, shape: tuple[int, int]) -> np.ndarray:
@@ -575,6 +667,57 @@ async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
                                    (request.height, request.width), layers, tax, body)
 
 
+@router.get("/sites/{project_id}/{site_id}/facade-matches", response_model=FacadeMatchesOut)
+def facade_matches(project_id: str, site_id: str, from_run: str, to_run: Optional[str] = None,
+                   facade: Optional[str] = None, status: Optional[list[MatchStatus]] = Query(None),
+                   cat: Catalog = Depends(get_catalog)) -> FacadeMatchesOut:
+    """Which facade of `to_run` (default: the newest) each facade of `from_run` is (§5.9).
+
+    Geometry only, in Site ENU: normals, plane offset within the planes' scatter, shared
+    stretch and height. `ambiguous` and `none` are answers, not errors: nothing is guessed.
+    Read-only; carrying a feature over is `POST …/access-points/{id}/reanchor`.
+    """
+    site = _site(cat, project_id, site_id)
+    a = _semantics(cat, site, from_run)
+    b = _semantics(cat, site, to_run)
+    facades = a.result.facades if facade is None else [_facade(a, facade)]
+    matches = match_facades(facades, b.result.facades)
+    counts: dict[str, int] = {}
+    for m in matches:
+        counts[m.status] = counts.get(m.status, 0) + 1
+    if status:
+        matches = [m for m in matches if m.status in status]
+    return FacadeMatchesOut(from_run=a.run.id, to_run=b.run.id, model=f"facade-match@{MATCH_VERSION}",
+                            counts=counts,
+                            matches=[FacadeMatchOut.model_validate(_plain(m)) for m in matches])
+
+
+@router.get("/sites/{project_id}/{site_id}/facades/{facade_id:path}/carried",
+            response_model=list[CarriedOut])
+def facade_carried(project_id: str, site_id: str, facade_id: str, run_id: Optional[str] = None,
+                   cat: Catalog = Depends(get_catalog)) -> list[CarriedOut]:
+    """Features drawn in other runs that land on this facade of this run (§5.9).
+
+    For the editor to show (dashed) and offer to carry over. `placement.status` says
+    whether a feature can be carried here: `placed` on this facade, or `ambiguous` between
+    this one and another (then it cannot, and the reason says between which).
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, run_id)
+    facade = _facade(product, facade_id)
+    features = _store(cat, site).features()
+    out: list[CarriedOut] = []
+    for p in foreign_on(facade, product.result.facades, features):
+        f = next(x for x in features if x.id == p.feature_id)
+        here = next(c for c in p.candidates if c.facade_id == facade.id) \
+            if p.candidates else None
+        if here is None:                         # placed elsewhere: not this facade's business
+            continue
+        out.append(CarriedOut(feature=f, placement=PlacementOut.model_validate(_plain(p)),
+                              here=FacadeFitOut.model_validate(_plain(here))))
+    return out
+
+
 @router.get("/sites/{project_id}/{site_id}/facades/{facade_id:path}", response_model=FacadeOut)
 def facade_detail(project_id: str, site_id: str, facade_id: str, run_id: Optional[str] = None,
                   cat: Catalog = Depends(get_catalog)) -> FacadeOut:
@@ -586,17 +729,27 @@ def facade_detail(project_id: str, site_id: str, facade_id: str, run_id: Optiona
     return FacadeOut(facade=facade, building=building,
                      coverage_grid=_coverage_out(product, facade), run_id=product.run.id,
                      epoch_id=product.run.epoch_id,
-                     features=_counts(_store(cat, site)).get(facade_id, 0))
+                     features=_counts(_store(cat, site), [facade]).get(facade_id, 0))
 
 
 # ── authored access points ───────────────────────────────────────────────
 @router.get("/sites/{project_id}/{site_id}/access-points", response_model=list[AccessPoint])
 def list_access_points(project_id: str, site_id: str, facade: Optional[str] = None,
                        lifecycle: Optional[list[Lifecycle]] = Query(None),
+                       run_id: Optional[str] = None,
                        cat: Catalog = Depends(get_catalog)) -> list[AccessPoint]:
-    """Authored features, optionally one facade's. Keyed to the facade, not to a run."""
+    """Authored features, optionally one facade's.
+
+    With `facade` alone, every feature whose host carries that id, whatever run it was drawn
+    in. With `facade` and `run_id`, only the ones native to that run's facade (same frame):
+    facade ids are per run, so the id alone can name a different wall in another run.
+    """
     site = _site(cat, project_id, site_id)
-    return _store(cat, site).features(facade_id=facade, lifecycle=lifecycle)
+    features = _store(cat, site).features(facade_id=facade, lifecycle=lifecycle)
+    if facade is not None and run_id is not None:
+        fc = _facade(_semantics(cat, site, run_id), facade)
+        features = native_features(features, fc)
+    return features
 
 
 def _check_class(tax: Taxonomy, class_id: str, attributes: dict[str, str]) -> None:
@@ -675,6 +828,43 @@ def update_access_point(project_id: str, site_id: str, feature_id: str, body: Ac
         return store.replace(new, by=body.by, what=", ".join(touched) or "touched")
     except (AuthoredError, ValueError) as e:
         raise HTTPException(422, str(e)) from None
+
+
+@router.post("/sites/{project_id}/{site_id}/access-points/{feature_id}/reanchor",
+             response_model=ReanchorOut)
+def reanchor_access_point(project_id: str, site_id: str, feature_id: str, body: ReanchorRequest,
+                          cat: Catalog = Depends(get_catalog)) -> ReanchorOut:
+    """Carry a feature of another run onto a facade of this run — only when a person asks.
+
+    Allowed only when the feature lands on exactly that facade (`placed`, §5.9); an
+    `ambiguous` or `none` placement is a 409 with the reason. The shape keeps its height and
+    is projected onto the new plane (it moves by the plane offset, reported); lifecycle and
+    history stay, the address is dropped (it named the old facade), and the change goes to
+    the audit log with the facade it came from. A target confirmed on this feature sees
+    `target_changed` at planning until it is confirmed again.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    facade = _facade(product, body.facade_id)
+    store = _store(cat, site)
+    with store.lock:
+        try:
+            old = store.get(feature_id)
+        except ApNotFound as e:
+            raise HTTPException(404, str(e)) from None
+        if is_native(old, facade):
+            raise HTTPException(409, f"{feature_id} is already on {facade.id} of run {product.run.id}")
+        try:
+            new, placement = reanchor(old, facade, product.result.facades)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        assert old.host is not None and placement.fit is not None
+        what = (f"перенесено з {old.host.facade_id} на {facade.id} (run {product.run.id}): "
+                f"зсув площини {placement.fit.offset_m:.2f} м, кут {placement.fit.angle_deg:.1f}°"
+                + ("; адресу скинуто" if old.address is not None else ""))
+        stored = store.replace(new, by=body.by, what=what, op="reanchor")
+    return ReanchorOut(feature=stored, placement=PlacementOut.model_validate(_plain(placement)),
+                       from_facade=old.host.facade_id)
 
 
 def _host_facade(cat: Catalog, site: Site, feature: AccessPoint) -> Facade:

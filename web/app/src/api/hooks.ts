@@ -7,6 +7,8 @@ import type {
   AccessPointPatch,
   AddressOut,
   AuditEntry,
+  CarriedOut,
+  ReanchorOut,
   GridfitOut,
   GridfitRequest,
   CaptureOut,
@@ -232,14 +234,34 @@ export const useTaxonomy = (project: string, site: string) =>
     staleTime: 5 * 60_000,
   });
 
-export const useAccessPoints = (project: string, site: string, facadeId: string | null) =>
+// With a facade and its run: only the features native to that run's facade (same frame).
+// Facade ids are per run, so the id alone can name another wall in another run (§5.9).
+export const useAccessPoints = (project: string, site: string, facadeId: string | null,
+                                runId: string | null = null, enabled = true) =>
   useQuery({
-    queryKey: semanticKeys.features(project, site, facadeId),
+    queryKey: [...semanticKeys.features(project, site, facadeId), runId ?? ""],
     queryFn: () => {
-      const q = facadeId ? `?facade=${encodeURIComponent(facadeId)}` : "";
-      return api.get<AccessPoint[]>(`/sites/${project}/${site}/access-points${q}`);
+      const q = new URLSearchParams();
+      if (facadeId) q.set("facade", facadeId);
+      if (facadeId && runId) q.set("run_id", runId);
+      const qs = q.toString();
+      return api.get<AccessPoint[]>(`/sites/${project}/${site}/access-points${qs ? `?${qs}` : ""}`);
     },
+    enabled,
     staleTime: 2000,
+  });
+
+/** Features drawn in other runs that land on this facade of `runId` (shown, carried on request). */
+export const useCarried = (project: string, site: string, facadeId: string | null, runId: string | null) =>
+  useQuery({
+    queryKey: ["carried", project, site, facadeId ?? "", runId ?? ""],
+    queryFn: () =>
+      api.get<CarriedOut[]>(
+        `/sites/${project}/${site}/facades/${facadeId}/carried` +
+          (runId ? `?run_id=${encodeURIComponent(runId)}` : ""),
+      ),
+    enabled: !!facadeId && !!runId,
+    staleTime: 5000,
   });
 
 export const useAudit = (project: string, site: string, limit = 50) =>
@@ -257,6 +279,7 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
     qc.invalidateQueries({ queryKey: ["access-points", project, site] });
     qc.invalidateQueries({ queryKey: ["facade", project, site] });
     qc.invalidateQueries({ queryKey: ["semantics", project, site] });
+    qc.invalidateQueries({ queryKey: ["carried", project, site] });
     qc.invalidateQueries({ queryKey: semanticKeys.audit(project, site) });
   };
   return {
@@ -279,6 +302,13 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
           `/sites/${project}/${site}/facades/${facadeId}/address`,
           body,
         ),
+      onSuccess: refresh,
+    }),
+    // Carry a feature of another run onto this facade -- only when the operator asks, and
+    // only when it lands on exactly this facade (§5.9). The address is recomputed after.
+    reanchor: useMutation({
+      mutationFn: ({ id, ...body }: { id: string; facade_id: string; run_id: string | null; by?: string }) =>
+        api.post<ReanchorOut>(`${base}/${id}/reanchor`, body),
       onSuccess: refresh,
     }),
     // Window candidates from the facade's periodic grid: stored as `candidate`,

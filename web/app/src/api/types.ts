@@ -549,6 +549,40 @@ export interface AddressOut {
   features: AccessPoint[];
 }
 
+// ── facades across runs (ACCESS_POINTS §5.9; aerosplat.authored.carry) ──
+export interface FacadeFit {
+  facade_id: string;
+  angle_deg: number;
+  offset_m: number;
+  offset_tol_m: number;
+  inside: number;
+  polygon_uv: [number, number][];
+}
+
+export type PlacementStatus = "placed" | "ambiguous" | "none" | "not_on_facade";
+
+export interface Placement {
+  feature_id: string;
+  status: PlacementStatus;
+  facade_id: string | null;
+  fit: FacadeFit | null;
+  candidates: FacadeFit[];
+  reason: string;
+}
+
+/** A feature drawn in another run that lands on this facade: shown, never moved by itself. */
+export interface CarriedOut {
+  feature: AccessPoint;
+  placement: Placement;
+  here: FacadeFit;
+}
+
+export interface ReanchorOut {
+  feature: AccessPoint;
+  placement: Placement;
+  from_facade: string;
+}
+
 // ── window candidates from the facade grid (aerosplat.semantics.gridfit) ──
 export interface GridfitRefusal {
   code: string;

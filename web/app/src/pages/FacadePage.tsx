@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, renderFacadeOrtho } from "../api/client";
-import { useAccessPointEdits, useAccessPoints, useFacade, useTaxonomy } from "../api/hooks";
+import { useAccessPointEdits, useAccessPoints, useCarried, useFacade, useTaxonomy } from "../api/hooks";
 import type {
   AccessPoint,
+  CarriedOut,
   CoverageGrid,
   FacadeGrid,
   FacadeOrthoMeta,
@@ -186,7 +187,11 @@ export function FacadePage() {
 
   const facade = useFacade(project, site, facadeKey || null, runId);
   const taxonomy = useTaxonomy(project, site);
-  const features = useAccessPoints(project, site, facadeKey || null);
+  // The run this facade belongs to, once known: features are listed by frame, not by id,
+  // because the same id names another wall in another run (§5.9).
+  const facadeRun = facade.data?.run_id ?? null;
+  const features = useAccessPoints(project, site, facadeKey || null, facadeRun, !!facadeRun);
+  const carried = useCarried(project, site, facadeKey || null, facadeRun);
   const edits = useAccessPointEdits(project, site, facadeKey || null);
 
   const [gsd, setGsd] = useState(5);
@@ -249,6 +254,9 @@ export function FacadePage() {
   const coverage = facade.data?.coverage_grid ?? null;
   const list = features.data ?? [];
   const current = list.find((f) => f.id === selected) ?? null;
+  // Features of other runs projected onto this wall: shown dashed, carried only on request.
+  const foreign = carried.data ?? [];
+  const currentForeign = foreign.find((c) => c.feature.id === selected) ?? null;
   const pickedClass = classes.find((c) => c.id === classId) ?? null;
 
   // Where the coverage grid sits on the image, as a percentage box, so CSS scales it.
@@ -490,7 +498,8 @@ export function FacadePage() {
       <ErrorBox error={renderError instanceof ApiError && renderError.status === 503 ? null : renderError} />
       <ErrorBox
         error={
-          edits.create.error ?? edits.update.error ?? edits.remove.error ?? edits.address.error ?? edits.gridfit.error
+          edits.create.error ?? edits.update.error ?? edits.remove.error ?? edits.address.error ??
+          edits.gridfit.error ?? edits.reanchor.error
         }
       />
 
@@ -584,6 +593,63 @@ export function FacadePage() {
                 {!list.length && <div className="faint">Ще нічого не намальовано. Протягни рамку по ортофото.</div>}
               </div>
             </div>
+
+            {foreign.length > 0 && (
+              <div>
+                <div className="panel-sub" title="Точки, намальовані на цій самій стіні в іншому run-і (там у фасаду інший id). Пунктир — їхнє місце тут. Самі вони не переносяться.">
+                  З інших run-ів ({foreign.length})
+                </div>
+                <div className="ap-list">
+                  {foreign.map((c) => (
+                    <CarriedRow
+                      key={c.feature.id}
+                      c={c}
+                      classes={classes}
+                      on={c.feature.id === selected}
+                      onSelect={() => setSelected(c.feature.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {currentForeign && (
+              <div className="draft-box">
+                <div className="row">
+                  <b className="grow">
+                    {classes.find((x) => x.id === currentForeign.feature.class)?.labels.uk ?? currentForeign.feature.class}
+                  </b>
+                  <span className="faint">{LIFECYCLE_LABEL[currentForeign.feature.lifecycle]}</span>
+                </div>
+                <small className="faint">
+                  Намальовано на {currentForeign.feature.host?.facade_id}
+                  {currentForeign.feature.provenance.run_id && ` (run ${currentForeign.feature.provenance.run_id})`}; тут —
+                  зсув площини {currentForeign.here.offset_m.toFixed(2)} м, кут {currentForeign.here.angle_deg.toFixed(1)}°
+                </small>
+                {currentForeign.placement.status === "placed" ? (
+                  <>
+                    <button
+                      className="btn sm"
+                      disabled={edits.reanchor.isPending || !facadeRun}
+                      onClick={() =>
+                        edits.reanchor.mutate(
+                          { id: currentForeign.feature.id, facade_id: facadeKey, run_id: facadeRun },
+                          { onSuccess: () => setSelected(currentForeign.feature.id) },
+                        )
+                      }
+                    >
+                      Перенести на цей фасад
+                    </button>
+                    <small className="faint">
+                      Висота зберігається, форма лягає на площину цього run-а; стан і історія лишаються, адресу
+                      треба порахувати знову (<kbd>A</kbd>). Ціль на цій точці доведеться підтвердити ще раз.
+                    </small>
+                  </>
+                ) : (
+                  <small style={{ color: "var(--amber)" }}>Не переноситься: {currentForeign.placement.reason}</small>
+                )}
+              </div>
+            )}
 
             {current && (
               <div className="draft-box">
@@ -697,6 +763,25 @@ export function FacadePage() {
                     />
                   );
                 })}
+                {foreign.map((c) => {
+                  const r = svgRect(rectOf(c.here.polygon_uv));
+                  if (!r) return null;
+                  return (
+                    <rect
+                      key={`carried-${c.feature.id}`}
+                      {...r}
+                      className={`ap carried${c.feature.id === selected ? " on" : ""}`}
+                      stroke={LIFECYCLE_TONE[c.feature.lifecycle]}
+                      strokeWidth={c.feature.id === selected ? 2.5 : 1.2}
+                      vectorEffect="non-scaling-stroke"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setSelected(c.feature.id);
+                        setDraft(null);
+                      }}
+                    />
+                  );
+                })}
                 {(() => {
                   const live = dragging ?? draft;
                   const r = live && svgRect(live);
@@ -759,6 +844,31 @@ export function FacadePage() {
         </div>
       )}
     </div>
+  );
+}
+
+function CarriedRow({
+  c,
+  classes,
+  on,
+  onSelect,
+}: {
+  c: CarriedOut;
+  classes: TaxonomyClass[];
+  on: boolean;
+  onSelect: () => void;
+}) {
+  const label = classes.find((x) => x.id === c.feature.class)?.labels.uk ?? c.feature.class;
+  const ok = c.placement.status === "placed";
+  return (
+    <button className={`ap-row${on ? " on" : ""}`} onClick={onSelect} title={c.placement.reason}>
+      <span className="dot" style={{ background: "transparent", border: `1.5px dashed ${LIFECYCLE_TONE[c.feature.lifecycle]}` }} />
+      <span className="grow">{label}</span>
+      <small className="num faint">{c.feature.host?.facade_id}</small>
+      <small style={ok ? undefined : { color: "var(--amber)" }} className={ok ? "faint" : ""}>
+        {ok ? "можна" : "неоднозн."}
+      </small>
+    </button>
   );
 }
 

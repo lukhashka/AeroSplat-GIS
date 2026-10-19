@@ -483,3 +483,79 @@ def test_addressing_an_empty_facade_changes_nothing(client):
     body = client.post(f"{BASE}/facades/B01/N1/address", json={}).json()
     assert body["rows"] == [] and body["features"] == [] and not body["ambiguous"]
     assert client.get(f"{BASE}/audit").json() == []
+
+
+# ── facades across runs (§5.9) ───────────────────────────────────────────
+def _rerun_with_renamed_walls():
+    """r2: r1's north wall refitted 0.3 m out and renamed `B07/N3`; `B01/N1` is now another
+    building's wall 100 m away (ids are per run)."""
+    same_wall = _facade("B07/N3", (0.0, 1.0), (0.5, 0.3, 0.0))
+    stranger = _facade("B01/N1", (0.0, 1.0), (100.0, 50.0, 0.0))
+    add_run("r2", facades=[same_wall, stranger])
+
+
+def test_facade_matches_pair_walls_by_geometry_not_by_name(client):
+    _rerun_with_renamed_walls()
+    body = client.get(f"{BASE}/facade-matches?from_run=r1").json()
+    assert body["from_run"] == "r1" and body["to_run"] == "r2"
+    got = {m["a_id"]: m for m in body["matches"]}
+    assert got["B01/N1"]["status"] == "match" and got["B01/N1"]["b_ids"] == ["B07/N3"]
+    assert got["B01/N1"]["relation"] == "same" and got["B01/N1"]["confidence"] > 0.5
+    assert got["B01/E1"]["status"] == "none" and got["B01/E1"]["reason"]
+    assert body["counts"] == {"match": 1, "none": 1}
+    only = client.get(f"{BASE}/facade-matches?from_run=r1&status=none").json()["matches"]
+    assert [m["a_id"] for m in only] == ["B01/E1"]
+    assert client.get(f"{BASE}/facade-matches?from_run=nope").status_code == 404
+
+
+def test_a_same_named_facade_of_another_run_does_not_show_or_address_its_features(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()            # on r1's B01/N1
+    _rerun_with_renamed_walls()
+    listed = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r2").json()
+    assert listed == []                                           # r2's B01/N1 is another wall
+    mine = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["id"] for f in mine] == [ap["id"]]
+    assert client.get(f"{BASE}/semantics").json()["features_by_facade"] == {}
+    assert client.get(f"{BASE}/semantics?run_id=r1").json()["features_by_facade"] == {"B01/N1": 1}
+    assert client.get(f"{BASE}/facades/B01/N1").json()["features"] == 0
+    body = client.post(f"{BASE}/facades/B01/N1/address", json={}).json()
+    assert body["rows"] == [] and body["features"] == []
+
+
+def test_features_of_another_run_are_shown_on_the_matching_wall_and_carried_on_request(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()
+    _rerun_with_renamed_walls()
+    carried = client.get(f"{BASE}/facades/B07/N3/carried").json()
+    assert [c["feature"]["id"] for c in carried] == [ap["id"]]
+    c = carried[0]
+    assert c["placement"]["status"] == "placed" and c["placement"]["facade_id"] == "B07/N3"
+    assert c["here"]["offset_m"] == pytest.approx(0.3, abs=1e-6)
+    # u runs west on a north wall, so moving the origin 0.5 m east moves u by +0.5.
+    us = sorted({p[0] for p in c["here"]["polygon_uv"]})
+    assert us == pytest.approx([-7.15, -5.85])
+    assert client.get(f"{BASE}/facades/B01/N1/carried").json() == []   # the stranger
+    # Nothing moved by itself: the feature is still on r1's frame.
+    still = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["id"] for f in still] == [ap["id"]]
+
+    r = client.post(f"{BASE}/access-points/{ap['id']}/reanchor",
+                    json={"facade_id": "B07/N3", "by": "tester"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["from_facade"] == "B01/N1" and out["feature"]["host"]["facade_id"] == "B07/N3"
+    assert out["feature"]["lifecycle"] == "verified"
+    moved = client.get(f"{BASE}/access-points?facade=B07/N3&run_id=r2").json()
+    assert [f["id"] for f in moved] == [ap["id"]]
+    last = client.get(f"{BASE}/audit").json()[-1]
+    assert last["op"] == "reanchor" and "B01/N1" in last["what"] and "0.30 м" in last["what"]
+    assert last["before"]["host"]["facade_id"] == "B01/N1"
+    again = client.post(f"{BASE}/access-points/{ap['id']}/reanchor", json={"facade_id": "B07/N3"})
+    assert again.status_code == 409
+
+
+def test_a_feature_is_not_carried_onto_a_wall_it_does_not_land_on(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()
+    _rerun_with_renamed_walls()
+    r = client.post(f"{BASE}/access-points/{ap['id']}/reanchor", json={"facade_id": "B01/N1"})
+    assert r.status_code == 409 and "не можна перенести" in r.json()["detail"]
+    assert client.get(f"{BASE}/audit").json()[-1]["op"] == "create"   # nothing written
