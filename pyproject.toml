@@ -31,6 +31,8 @@ dev = ["pytest", "ruff", "mypy", "httpx"]
 sim = ["pymavlink==2.4.50"]
 # GIS export (aerosplat.export, `aerosplat export`): GeoTIFF/COG and LAS/LAZ.
 gis = ["rasterio>=1.3", "laspy>=2.4", "lazrs>=0.5"]
+# Visual positioning (aerosplat.vps): ORB / AKAZE / PnP. OpenCV 5 moved AKAZE to contrib.
+vps = ["opencv-python-headless>=4.8,<5"]
 
 [project.scripts]
 aerosplat = "aerosplat.starter:cli"
@@ -42,7 +44,7 @@ packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
             "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
             "aerosplat.ingest", "aerosplat.jobs", "aerosplat.render", "aerosplat.semantics",
             "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface", "aerosplat.mission",
-            "aerosplat.sim", "aerosplat.export", "aerosplat.auth"]
+            "aerosplat.sim", "aerosplat.export", "aerosplat.auth", "aerosplat.vps"]
 
 [tool.setuptools.package-data]
 "aerosplat.store.migrations" = ["script.py.mako"]
