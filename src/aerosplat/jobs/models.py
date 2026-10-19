@@ -18,6 +18,7 @@ from aerosplat.config import RunConfig
 class JobKind(str, Enum):
     pipeline = "pipeline"        # `aerosplat run --site ...` for one Site x Epoch
     diagnostic = "diagnostic"    # fake stages with sleeps: checks a worker end to end
+    export = "export"            # `aerosplat export`: GIS files of one finished run
 
 
 class Resource(str, Enum):
@@ -158,6 +159,54 @@ class PipelineSpec(_Model):
             a.append("--resume")
         for k, v in self.overrides.items():
             a += ["--set", f"{k}={'none' if v is None else v}"]
+        return a
+
+
+EXPORT_KINDS = ("ortho", "dsm", "dtm", "ndsm", "las", "ply")   # = aerosplat.export.run.KINDS
+
+
+class ExportSpec(_Model):
+    """What `POST /sites/{p}/{s}/runs/{e}/{r}/exports` accepts; becomes `aerosplat export` argv.
+
+    Only `ortho` needs the GPU (it renders the splat), so the job's resource follows the kinds.
+    """
+
+    site: str = Field(description="project/site")
+    epoch: str
+    run_id: str
+    kinds: list[str] = Field(default_factory=lambda: list(EXPORT_KINDS))
+    crs: str = Field("utm", max_length=64, pattern=r"^(utm|[A-Za-z]+:[0-9]+)$",
+                     description="'utm' (the Site origin's WGS84 UTM zone) or e.g. EPSG:32618")
+    gsd_m: float = Field(0.25, ge=0.01, le=10.0, description="orthophoto pixel, metres")
+    dem_px_m: Optional[float] = Field(None, ge=0.1, le=50.0)
+    las_source: Literal["cloud", "splat"] = "cloud"
+    laz: bool = True
+    cog: bool = True
+
+    @field_validator("kinds")
+    @classmethod
+    def _known_kinds(cls, v: list[str]) -> list[str]:
+        bad = [k for k in v if k not in EXPORT_KINDS]
+        if bad or not v:
+            raise ValueError(f"unknown export kinds {bad}; known: {list(EXPORT_KINDS)}")
+        return list(dict.fromkeys(v))
+
+    @property
+    def resource(self) -> "Resource":
+        return Resource.gpu if "ortho" in self.kinds else Resource.cpu
+
+    def argv(self, projects_root: Optional[str] = None) -> list[str]:
+        a = ["--site", self.site, "--epoch", self.epoch, "--run", self.run_id,
+             "--kinds", ",".join(self.kinds), "--crs", self.crs, "--gsd", str(self.gsd_m),
+             "--las-source", self.las_source]
+        if self.dem_px_m is not None:
+            a += ["--dem-px", str(self.dem_px_m)]
+        if not self.laz:
+            a.append("--las")
+        if not self.cog:
+            a.append("--no-cog")
+        if projects_root:
+            a += ["--projects-root", projects_root]
         return a
 
 

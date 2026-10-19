@@ -13,6 +13,8 @@ import { between, dateTime, duration } from "../lib/format";
 import { useNow } from "../lib/useNow";
 
 const ALL_STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval", "georef"];
+// aerosplat.export.run.KINDS: the order an export job reports its kinds in.
+const EXPORT_ORDER = ["ortho", "dsm", "dtm", "ndsm", "las", "ply"];
 
 /** Stages the job will go through, from its payload (pipeline) or spec (diagnostic). */
 function plannedStages(job: Job | null, pipeline: PipelineInfo | undefined): PlannedStage[] {
@@ -21,6 +23,10 @@ function plannedStages(job: Job | null, pipeline: PipelineInfo | undefined): Pla
   if (job.kind === "diagnostic") {
     const n = Number(job.payload["stages"] ?? 0);
     return Array.from({ length: n }, (_, i) => ({ name: `step${i + 1}`, label: `Diagnostic step ${i + 1}/${n}` }));
+  }
+  if (job.kind === "export") {
+    const kinds = (job.payload["kinds"] as string[] | undefined) ?? [];
+    return EXPORT_ORDER.filter((k) => kinds.includes(k)).map((k) => ({ name: k, label: `Експорт: ${k}` }));
   }
   const p = job.payload as { stages?: string[] | null; from_stage?: string | null; to_stage?: string | null };
   let names = ALL_STAGES;

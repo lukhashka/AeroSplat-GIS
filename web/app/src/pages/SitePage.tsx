@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { thumbUrl } from "../api/client";
-import { useCaptureImages, useRunDetail, useSite } from "../api/hooks";
-import type { Run } from "../api/types";
+import { useCaptureImages, useRunDetail, useRunExports, useSite, useStartExport } from "../api/hooks";
+import type { ExportKind, Run } from "../api/types";
 import { Icon } from "../components/Icon";
 import { JobsTable } from "../components/JobsTable";
 import { ErrorBox } from "../components/Modal";
@@ -307,6 +307,78 @@ function RunDetailPanel({ project, site, run }: { project: string; site: string;
               )}
             </div>
           </div>
+        </div>
+      )}
+      {data && run.status === "ok" && <ExportPanel project={project} site={site} run={run} />}
+    </div>
+  );
+}
+
+const EXPORT_KINDS: { kind: ExportKind; label: string; title: string }[] = [
+  { kind: "ortho", label: "Ортофото", title: "GeoTIFF/COG, рендер 3DGS згори (GPU)" },
+  { kind: "dsm", label: "DSM", title: "GeoTIFF, найвища точка клітини (зі стадії semantics)" },
+  { kind: "dtm", label: "DTM", title: "GeoTIFF, оцінка голої землі" },
+  { kind: "ndsm", label: "nDSM", title: "GeoTIFF, висота над DTM" },
+  { kind: "las", label: "LAZ", title: "Хмара точок run-а, LAS 1.4 з CRS" },
+  { kind: "ply", label: "3DGS .ply", title: "INRIA-формат (SuperSplat, gsplat, Postshot), Site ENU" },
+];
+
+/** GIS exports of a finished run: what exists (with downloads) and a form to make more. */
+function ExportPanel({ project, site, run }: { project: string; site: string; run: Run }) {
+  const navigate = useNavigate();
+  const { data } = useRunExports(project, site, run.epoch_id, run.id);
+  const start = useStartExport(project, site, run.epoch_id, run.id);
+  const [kinds, setKinds] = useState<ExportKind[]>(["dsm", "dtm", "ndsm", "las", "ply"]);
+  const [gsd, setGsd] = useState(0.25);
+  if (!data) return null;
+  const geo = data.georeference;
+  const toggle = (k: ExportKind) => setKinds((ks) => (ks.includes(k) ? ks.filter((x) => x !== k) : [...ks, k]));
+  return (
+    <div style={{ marginTop: 16 }}>
+      <h3 style={{ marginBottom: 8 }}>Експорт GIS</h3>
+      {!data.exportable ? (
+        <div className="faint">{data.refusal}</div>
+      ) : (
+        <>
+          <div className="row" style={{ flexWrap: "wrap", gap: 12 }}>
+            {EXPORT_KINDS.map((k) => (
+              <label key={k.kind} title={k.title} className="row" style={{ gap: 4 }}>
+                <input type="checkbox" checked={kinds.includes(k.kind)} onChange={() => toggle(k.kind)} />
+                {k.label}
+              </label>
+            ))}
+            {kinds.includes("ortho") && (
+              <label className="row" style={{ gap: 4 }} title="Розмір пікселя ортофото, м (UTM)">
+                GSD, м
+                <input type="number" min={0.01} max={10} step={0.05} value={gsd} style={{ width: 70 }}
+                  onChange={(e) => setGsd(Number(e.target.value))} />
+              </label>
+            )}
+            <button className="btn primary sm" disabled={!kinds.length || start.isPending}
+              onClick={() => start.mutate({ kinds, gsd_m: gsd }, { onSuccess: (job) => navigate(`/jobs/${job.id}`) })}>
+              <Icon name="download" size={14} /> Експортувати
+            </button>
+          </div>
+          <ErrorBox error={start.error} />
+        </>
+      )}
+      {data.files.length > 0 && (
+        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          {data.files.map((f) => (
+            <a key={f.kind} className="btn sm" href={f.url} title={`${f.crs?.name ?? ""} · ${dateTime(f.created ?? "")}`}>
+              <Icon name="download" size={14} /> {f.file} <span className="muted">{bytes(f.bytes)}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {geo && data.files.length > 0 && (
+        <div className="faint" style={{ marginTop: 8 }}>
+          CRS — {data.files[0]?.crs?.name ?? "?"}; висоти еліпсоїдні WGS84 ({geo.altitude_reference}). Похибка кадру:{" "}
+          {geo.frame_error_m == null ? "невідома" : `${(geo.frame_error_m * 1000).toFixed(2)} мм`} ({geo.earth_model}); абсолютна
+          точність джерела в бюджет не входить.
+          {geo.warnings.map((w) => (
+            <div key={w}>⚠️ {w}</div>
+          ))}
         </div>
       )}
     </div>

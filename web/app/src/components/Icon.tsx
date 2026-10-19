@@ -16,6 +16,7 @@ const PATHS = {
   refresh: "M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7",
   pulse: "M3 12h4l3-7 4 14 3-7h4",
   report: "M7 3h7l5 5v13H7V3Zm7 0v5h5M10 13h6m-6 4h6",
+  download: "M12 4v12m0 0-4-4m4 4 4-4M5 19h14",
 } as const;
 
 export type IconName = keyof typeof PATHS;

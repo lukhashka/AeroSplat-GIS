@@ -97,6 +97,7 @@ class RenderEngine:
         self._scenes: dict[str, LoadedScene] = {}
         self._lock = threading.RLock()
         self._listing: tuple[float, dict[str, SceneSource]] = (-1e9, {})
+        self._pinned: dict[str, SceneSource] = {}
 
     # ── scenes ───────────────────────────────────────────────────────────
     def scenes(self, fresh: bool = False) -> dict[str, SceneSource]:
@@ -104,7 +105,13 @@ class RenderEngine:
             now = time.monotonic()
             if fresh or now - self._listing[0] > SCENE_LIST_TTL_S:
                 self._listing = (now, discover_scenes(self.projects_root, self.data_dir))
-            return self._listing[1]
+            return {**self._listing[1], **self._pinned}
+
+    def pin_scene(self, source: SceneSource) -> None:
+        """Serve `source` under its name regardless of discovery: an exact run, not a
+        Site's latest one (GIS export of a named run, aerosplat.export.run)."""
+        with self._lock:
+            self._pinned[source.name] = source
 
     def _resolve(self, name: str) -> SceneSource:
         src = self.scenes().get(name) or self.scenes(fresh=True).get(name)
