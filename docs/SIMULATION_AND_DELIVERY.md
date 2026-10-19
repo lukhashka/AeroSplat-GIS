@@ -614,7 +614,7 @@ python -m aerosplat.sim.params snapshot                       # раз на пі
 python -m aerosplat.sim.runner scenario.yaml                  # піднімає SITL на instance 1, звіт
 python -m aerosplat.sim.runner scenario.yaml --preflight      # лише перевірки, без SITL
 python -m aerosplat.sim.runner scenario.yaml --endpoint udpout:<ip>:14560   # чужий SITL як є
-pytest -m sitl                                                # смоук SIM-0 + 9 сценаріїв L2, ~7 хв
+pytest -m sitl                                                # смоук SIM-0 + 9 сценаріїв L2 + 7 SIM-2n (§4.11), ~15 хв
 ```
 
 | Модуль `aerosplat.sim` | Що робить |
@@ -741,10 +741,72 @@ legs, інший фенс у `.plan` → `mission_mismatch`; немає origin �
 
 **Рішення для власника.** (1) Що робити при втраті GNSS біля фасаду (H-011): `LAND` дрейфує в
 стіну; `FS_EKF_ACTION 2` (AltHold) не сідає, але теж дрейфує; справжній захід — позиціонування
-без GNSS (оптичний потік, далекоміри, локалізація відносно фасаду; L3, 8.2b). (2) `FS_OPTIONS 8`
+без GNSS (оптичний потік, далекоміри, локалізація відносно фасаду; L3, 8.2b). *Оновлення: SIM-2n
+(§4.11) — у конфігурації без GNSS (ExternalNav + потік + відхід від стіни) сценарій проходить у
+SITL; варіант лише з GNSS лишається xfail.* (2) `FS_OPTIONS 8`
 і `FS_DR_ENABLE 1` у пакеті. (3) Зупинка в E 2 с. (4) Допуск на виявлення втрати GPS 10 с
 (`GPS_LOSS_DETECT_S`) — це виміряні 8 с із запасом, а не вимога безпеки. (5) Пороги батареї
 профілю `sitl-quad` (3S: 10.5 / 10.0 В) — заглушка до вибору апарата.
+
+### 4.11 Без GNSS (SIM-2n): стан, команди, результати
+
+**Стан (SIM-2n, ADR-0015 етап 1, перевірено 2026-10-19).** Та сама місія до вікна летить у SITL
+**без жодного GNSS від увімкнення до посадки**: EKF3 на ExternalNav від companion-емулятора
+(`aerosplat.sim.extnav`), оптичний потік — деградований режим. Рішення й поправки —
+[ADR-0015 §7](decisions/0015-gnss-denied-navigation.md); журнал —
+2026-10-19-sim-2n (внутрішній журнал).
+
+```bash
+python -m aerosplat.sim.params snapshot --variant extnav    # раз на пін: Copter-4.7.2.extnav.params.json
+python -m aerosplat.sim.runner scenario.yaml                # як §4.10; сценарій з `nav:`
+pytest -m sitl tests/sitl/test_gnss_denied.py               # 7 сценаріїв, ~7 хв
+```
+
+**Що з чого складається.**
+
+| Частина | Де | Що |
+|---|---|---|
+| Профіль навігації | `PlanningProfile.nav` (`mission.json`, `.plan` `aerosplat.nav`, `.parm`) | `gnss: primary\|monitor\|none`; `extnav` — заявлені σ 0.5 м, σ_z 1 м, курс 2°, швидкість 0.1 м/с, 10 Гц, 50 мс, камера `imx290:4mm`; `flow`. Коридор бере σ_nav замість σ_GNSS (`sigma.nav_source`) |
+| Пакет `gnss: none` | `export.nav_parameters` | `GPS1_TYPE 0`, `VISO_TYPE 1`, `VISO_DELAY_MS 50`, `VISO_POS_M_NSE 0.5`, `VISO_YAW_M_NSE 0.05`, `VISO_VEL_M_NSE 0.1`; набір 1: `EK3_SRC1_POSXY 6`, `VELXY 6`, `POSZ 1`, `VELZ 0`, `YAW 6`; набір 2: `EK3_SRC2_POSXY 0`, `VELXY 5`, `POSZ 1`, `VELZ 0`, `YAW 1`; `EK3_SRC_OPTIONS 0`; `ARMING_NEED_LOC 1`. `monitor` — те саме з `GPS1_TYPE 1`. `primary` — пакет SIM-1 без змін |
+| Ворота | `export.nav_problems`; раннер | пакет, що не реалізує профіль або бере щось від GPS (`EK3_SRCn_*` = 3, курс 2/3/8), — відмова експорту й `mission_mismatch` у раннері; сценарій з іншим `gnss`, ніж пакет, — `mission_mismatch` |
+| Апарат | `configs/sim/vehicles/sitl-quad-extnav.yaml` | `boot_params`: `FLOW_TYPE 10`, `RNGFND1_TYPE 100`, `SIM_FLOW_ENABLE 1`; `RNGFND1_MAX 30`, `RNGFND1_ORIENT 25` |
+| Завантаження SITL | `Runner.boot_params` → `Sitl.start(boot_defaults=)` | драйвери апарата + **уся навігаційна частина пакета** + світ: `SIM_TERRAIN 0`, `SIM_GPS1_ENABLE 0` (`none`) або `SIM_GPS1_LCKTIME 30` (`monitor`); кожне значення читається назад (`nav_config`) |
+| Companion | `aerosplat.sim.extnav` | origin = Site origin (`SET_GPS_GLOBAL_ORIGIN` до підтвердження `GPS_GLOBAL_ORIGIN`); `ODOMETRY` (`LOCAL_FRD`/`BODY_FRD`) з `SIM_STATE` + шум, зсув Гаусса–Маркова, затримка, пропуски (`vps_loss`), зони без фіксації; реакції ADR §2.5; монітор GNSS |
+| Оракули | `oracles.py` | нові `wall_descent` (усі прогони) і `navigation` (без GNSS); решта — §4.10 |
+| Камера | `configs/sim/cameras/imx290.yaml`, `aerosplat.sim.camera` | 1920×1080, 2.9 мкм; f 2.8/4/6 мм → fx 966/1379/2069 px, HFOV 89.7°/69.7°/49.8°; rolling shutter 16.0 мс (60 к/с), 32.0 мс (30 к/с); дисторсія не відкалібрована |
+
+**Реакції companion на втрату VPS** (немає фіксації 0.5 с + затримка): одразу
+`MAV_CMD_SET_EKF_SOURCE_SET 2` (потік). Стіна ближче 6 м за передніми далекомірами → GUIDED,
+відхід по нормалі стіни 0.5 м/с (кадр тіла, курс утримується) до 6 м, гальмування 1 с, LAND.
+Інакше місія триває на потоці бюджет дрейфу (5 с типово), далі GUIDED-зупинка (і відхід, якщо стіна
+близько) та LAND. Фіксація знову 1 с → набір 1; місія продовжується, лише якщо її ще не зупинено.
+**Далекоміри — заміна:** промені (курс, ±30°, до 20 м, σ 5 см) у зайнятість двійника з істинної
+пози, доки фізика SIM-2 не дасть `rng_*`.
+
+**Набір `tests/sitl/test_gnss_denied.py`** — та сама вулиця й місія, що в §4.10, план з
+`gnss: none` (`gnss: monitor` для спуфінгу), апарат `sitl-quad-extnav`, прискорення 3×.
+
+| Сценарій | Що змінено | Очікувано | Результат |
+|---|---|---|---|
+| `street-window-gnss-none` | VPS σ 0.5 м + зсув 0.2 м / 30 с | `complete` | ✅ H утримано 12.3 с, у середньому 0.64 м від H (похибка VPS 0.78 м СКВ); оцінка EKF ↔ істина p95 0.69 м, max 0.90 м; жодного фіксу GNSS; origin прочитано назад точно; кліренс ≥ 4 м, до фасаду ≥ 2.64 м; сів 0.57 м від дому |
+| `street-window-vps-loss-transit` | `vps_loss` назавжди через 4 с після H, бюджет 3 с | `abort` → GUIDED → LAND | ✅ набір 2 через 0.5 с; місія 3 с на потоці (5.4 м, похибка ≤ 0.98 м), GUIDED через 3.5 с, LAND; сів 0.5 м від дому, стін ближче 4.5 м при зниженні немає |
+| `street-window-vps-gap` | `vps_loss` 2 с там само, бюджет 6 с | `complete` | ✅ набір 2, через 2.8 с назад набір 1; похибка на потоці ≤ 0.62 м; місію завершено, сів 0.10 м від дому |
+| `street-window-vps-loss-at-h` | `vps_loss` під час утримання за 3 м від фасаду (H-011) | `abort` → відхід → LAND | ✅ набір 2 і відхід через 0.5 с: стіна 3.1 м → 6.0 м за 6.5 с (курс утримано), LAND; сів 6.7 м від стіни, при зниженні стін ближче 4.5 м немає; похибка на потоці ≤ 0.70 м. **H-011 закрито для цієї конфігурації** |
+| `street-window-no-extnav` | companion не шле `ODOMETRY` | `refused: arming_refused` | ✅ «Arm: Need Position Estimate», «VisOdom: not healthy», «Fence requires position» |
+| `street-window-no-origin` | companion не шле origin | `refused: arming_refused` | ✅ лише «Fence requires position»: `ARMING_NEED_LOC` відносну позицію ExtNav пропускає (ADR-0015 §7 п. 4) |
+| `street-window-gnss-spoof` | `gnss: monitor`, GNSS +20 м на північ під час підходу | `complete` + спуфінг виявлено | ✅ розбіжність GNSS ↔ VPS 21 м, позначено через 0.77 с; оцінка EKF p95 0.39 м (за GNSS не пішла); місію завершено |
+
+Старий сценарій SIM-1 `street-window-gps-loss-at-h` (лише GNSS, без companion) лишається
+**xfail** — документ незахищеного випадку H-011.
+
+**Межі (чесно).** VPS — модель над істиною, а не зір (SIM-3). Потік, далекомір і компас SITL
+ідеальні, ґрунт плаский, вітру немає. Далекоміри — заміна, лише вперед: у транзиті стіна позаду не
+видна. Аварійних майданчиків немає — посадка на місці. Числа реакцій і σ — заглушки.
+
+**Рішення для власника.** (1) Бічні/задні далекоміри або інший спосіб бачити стіну позаду.
+(2) GNSS як монітор — так чи ні (виявлення спуфінгу працює). (3) Числа реакцій: 0.5 с, 6 м, 6 м,
+бюджет 5 с; допуск оцінки EKF з VPS 1.5 м (p95). (4) Процедура на апараті: пакет навігації
+завантажується **до перезавантаження** (ADR-0015 §7 п. 2).
 
 ---
 

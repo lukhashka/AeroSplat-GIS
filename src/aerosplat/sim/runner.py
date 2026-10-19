@@ -23,6 +23,15 @@ physics) and judged on the simulator's TRUE state against the twin (`aerosplat.s
    `report.html` + `report.json` (+ `trajectory.json`) next to the export: `<mission>/sim/<scenario>/`.
 
 A run that ends in the expected refusal or abort is a pass (§4.6).
+
+**GNSS-free packages (SIM-2n, ADR-0015).** The package's navigation profile must be implemented
+by its `.parm` (else `mission_mismatch`), and the scenario must fly the same profile. SITL boots
+with the vehicle's sensor drivers, the package's navigation section and a world without GNSS
+(an extra defaults file; every value read back, else `nav_config`). The companion emulator
+(`aerosplat.sim.extnav`) attaches at once — EKF3 keeps the first origin it gets — and the run
+waits for the origin to read back as the Site origin. Arming is then tried even if pre-arm
+never passed: an autopilot that refuses is the expected outcome `arming_refused` of negative
+scenarios. Parameters are checked against the extnav snapshot of the pinned build.
 """
 
 from __future__ import annotations
@@ -32,7 +41,9 @@ import json
 import math
 import random
 import re
+import shutil
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,21 +54,24 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from aerosplat.geo.crs import EnuFrame, GeoPoint
-from aerosplat.mission.export import (POSITIONAL, WireItem, enu_from_geodetic, read_parm, read_plan,
+from aerosplat.mission.export import (BOOT_PARAMS, POSITIONAL, WireItem, enu_from_geodetic,
+                                      nav_parameters, nav_problems, read_parm, read_plan,
                                       read_waypoints, wire_to_enu)
-from aerosplat.mission.models import AltitudeFrameError, MissionPlan, Verdict as PlanVerdict
+from aerosplat.mission.models import (AltitudeFrameError, ExtNavSpec, GnssUse, MissionPlan,
+                                      Verdict as PlanVerdict)
 from aerosplat.paths import PROJECT_DIR
 from aerosplat.sim import mavmission
-from aerosplat.sim.faults import (RUNNER_PARAMS, RUNNER_SYSID, FaultUnavailable, Injection,
-                                  Response, failsafe_trigger_problems, injection, response,
-                                  environment_params)
-from aerosplat.sim.oracles import (FAIL, PASS, ClearanceSeries, Context, Verdict, actual_outcome,
-                                   clearance_series, expected_status, judge)
+from aerosplat.sim.extnav import Companion
+from aerosplat.sim.faults import (FLAT_GROUND, RUNNER_PARAMS, RUNNER_SYSID, FaultUnavailable,
+                                  Injection, Response, failsafe_trigger_problems, injection,
+                                  response, environment_params)
+from aerosplat.sim.oracles import (FAIL, PASS, ClearanceSeries, Context, NavContext, Verdict,
+                                   actual_outcome, clearance_series, expected_status, judge)
 from aerosplat.sim.params import FirmwareParams, ParameterError, load_snapshot
 from aerosplat.sim.record import Recording
-from aerosplat.sim.scenario import Fault, Outcome, Scenario, load_scenario, resolve
+from aerosplat.sim.scenario import Fault, NavSim, Outcome, Scenario, load_scenario, resolve
 from aerosplat.sim.sitl import Home, Sitl, SitlConfig, SitlError, load_config
-from aerosplat.sim.vehicle import (Vehicle, VehicleError, horizontal_distance_m,
+from aerosplat.sim.vehicle import (Vehicle, VehicleError, VehicleTimeout, horizontal_distance_m,
                                    mode_name, truth_from_sim_state)
 from aerosplat.surface.occupancy import OccupancyGrid, read_occupancy
 
@@ -68,6 +82,12 @@ HOME_TOL_M = 1.0             # the vehicle stands this close to the mission's ho
 TAIL_S = 2.0                 # simulation seconds recorded after the disarm
 MSG_SYSTEM_TIME, MSG_MISSION_CURRENT, MSG_FENCE_STATUS = 2, 42, 162
 MSG_EKF_STATUS_REPORT, MSG_HOME_POSITION = 193, 242
+MSG_GPS_RAW_INT, MSG_GPS_GLOBAL_ORIGIN = 24, 49
+# GNSS-free runs (SIM-2n), wall-clock seconds unless named otherwise.
+ORIGIN_WAIT_S = 60.0         # for the EKF origin to read back after the companion sends it
+NAV_PREARM_S = 45.0          # for pre-arm; then arming is tried anyway (negative scenarios)
+NAV_ARM_S = 20.0             # arming attempts before "the autopilot refused"
+GNSS_LOCK_S = 30.0           # gnss monitor: SITL receiver's first fix, simulation seconds
 REACHED_TEXT = re.compile(r"^Reached command #(\d+)")
 
 
@@ -95,6 +115,9 @@ class VehicleProfile(_Model):
     vehicle: str
     description: str = ""
     params: dict[str, float] = {}
+    # Must hold from power-on (sensor drivers): SITL boots with them, the runner reads them back.
+    boot_params: dict[str, float] = {}
+    camera: Optional[str] = None            # configs/sim/cameras: "<camera>:<lens>" (data)
 
 
 def load_vehicle(name: str, folder: Path = VEHICLES_DIR) -> VehicleProfile:
@@ -244,7 +267,9 @@ class SitlProvider:
         self.started = False
         self.home: Optional[Home] = None
 
-    def prepare(self, home: Home, speedup: float) -> str:
+    def prepare(self, home: Home, speedup: float, boot_defaults: tuple[Path, ...] = ()) -> str:
+        """`boot_defaults`: parameter files SITL boots with (GNSS-free runs). A given endpoint
+        cannot be rebooted: the runner then checks what the vehicle holds instead."""
         if self.endpoint:
             return self.endpoint
         if self.started:
@@ -254,7 +279,7 @@ class SitlProvider:
             raise SitlError(f"SITL instance {self.sitl.instance} is running and was not started by "
                             f"this runner: stop it (python -m aerosplat.sim.sitl -I "
                             f"{self.sitl.instance} stop) or use another instance")
-        self.sitl.start(home, speedup)
+        self.sitl.start(home, speedup, boot_defaults=boot_defaults)
         self.started, self.home = True, home
         return self.sitl.endpoint()
 
@@ -356,11 +381,22 @@ class Runner:
         self.grid = grid
         self.provider = provider
         self.cfg = provider.cfg if provider is not None else load_config()
-        self.fw = fw or load_snapshot(self.cfg.ardupilot.tag, self.cfg.ardupilot.commit)
+        self.profile = load_vehicle(scenario.vehicle)
+        # Navigation (SIM-2n): the package's profile; the run's VPS model (scenario `nav`, or the
+        # package's declared numbers).
+        self.navp = package.plan.profile.nav
+        self.navsim: Optional[NavSim] = scenario.nav
+        if self.navsim is None and self.navp.gnss_free:
+            self.navsim = NavSim(gnss=self.navp.gnss)
+        # GNSS-free packages and sensor-carrying vehicles name parameters that exist only with
+        # their subsystem enabled: checked against the extnav snapshot of the same build.
+        self.nav_run = self.navp.gnss_free or self.navsim is not None or bool(self.profile.boot_params)
+        self.fw = fw or load_snapshot(self.cfg.ardupilot.tag, self.cfg.ardupilot.commit,
+                                      variant="extnav" if self.nav_run else None)
         self.speedup = float(speedup or scenario.speedup or self.cfg.vehicle.speedup)
         self.out_dir = out_dir
         self.log = log
-        self.profile = load_vehicle(scenario.vehicle)
+        self.companion: Optional[Companion] = None
 
     # -- step 1 -----------------------------------------------------------
     def preflight(self, seed: int = 0) -> dict[str, Any]:
@@ -384,8 +420,10 @@ class Runner:
             raise Refusal("parameter_value", "; ".join(bad))
         try:
             fw.require(self.profile.params, f"vehicle profile {self.profile.vehicle}")
+            fw.require(self.profile.boot_params, f"vehicle profile {self.profile.vehicle} (boot)")
         except ParameterError as e:
             raise ScenarioError(str(e)) from None
+        self._nav_preflight()
         nav_roles = {it.role for it in plan.items if it.command in POSITIONAL}
         for f in sc.faults:
             if f.after != "start" and f.after.partition(":")[0] not in nav_roles:
@@ -394,14 +432,59 @@ class Runner:
         values = self.vehicle_values({n: i.default for n, i in fw.params.items()})
         injections = self.injections(values, seed)
         resp = self.expected_response(values)
-        return {"firmware": fw.tag, "parm": len(pkg.parm), "faults": [i.note for i in injections],
-                "response": None if resp is None else {"trigger": resp.trigger, "modes": list(resp.modes),
-                                                        "by": list(resp.by), "delay_s": resp.delay_s},
-                "warnings": failsafe_trigger_problems(pkg.parm, values)}
+        out = {"firmware": fw.tag, "parm": len(pkg.parm), "faults": [i.note for i in injections],
+               "response": None if resp is None else {"trigger": resp.trigger, "modes": list(resp.modes),
+                                                       "by": list(resp.by), "delay_s": resp.delay_s,
+                                                       "note": resp.note},
+               "warnings": failsafe_trigger_problems(pkg.parm, values)}
+        if self.nav_run:
+            out["nav"] = {"gnss": self.navp.gnss.value, "flow": self.navp.flow,
+                          "boot": self.boot_params(), "snapshot": "extnav"}
+        return out
+
+    def _nav_preflight(self) -> None:
+        """A GNSS-free run needs a package that implements its navigation profile, a scenario
+        that flies the same profile, and a vehicle that carries the sensors (SIM-2n)."""
+        navp, sim = self.navp, self.navsim
+        bad = nav_problems(navp, self.pkg.parm)
+        if bad:
+            raise Refusal("mission_mismatch", "the package does not implement its navigation "
+                                              "profile: " + "; ".join(bad))
+        if sim is not None and sim.gnss is not navp.gnss:
+            raise Refusal("mission_mismatch", f"the scenario flies gnss {sim.gnss.value}; the "
+                                              f"package was planned and exported for gnss "
+                                              f"{navp.gnss.value}")
+        if navp.gnss_free:
+            veh = {**self.profile.boot_params, **self.profile.params}
+            if navp.flow and not (veh.get("FLOW_TYPE", 0) and veh.get("RNGFND1_TYPE", 0)):
+                raise Refusal("nav_config", f"the package falls back to optical flow; vehicle "
+                                            f"{self.profile.vehicle} has no flow sensor and "
+                                            f"downward rangefinder (FLOW_TYPE, RNGFND1_TYPE)")
+
+    def boot_params(self) -> dict[str, float]:
+        """What SITL must boot with: the vehicle's sensor drivers, the package's reboot-only
+        parameters, and the simulated world (no sky for GNSS; flat ground for flow / range)."""
+        if not self.nav_run:
+            return {}
+        out = dict(self.profile.boot_params)
+        # The package's whole navigation section, not only what needs a reboot: EKF3 must start
+        # on its sources (switched after boot, the cores had initialised on GPS / compass and
+        # SITL refused to arm: "EKF3 Yaw inconsistent 99 deg", "Need Position Estimate").
+        nav_names = {n for n, _, _ in nav_parameters(self.navp)} | BOOT_PARAMS
+        out.update({n: float(v) for n, v in self.pkg.parm.items() if n in nav_names})
+        out.update(FLAT_GROUND)
+        if self.navp.gnss is GnssUse.none:
+            out["SIM_GPS1_ENABLE"] = 0.0          # the world has no GNSS signal at all
+        elif self.navp.gnss is GnssUse.monitor:
+            # SITL's receiver has a fix ~1 s after boot; a real cold start takes tens of
+            # seconds, which is what lets the companion set the EKF origin before GNSS can.
+            out["SIM_GPS1_LCKTIME"] = GNSS_LOCK_S
+        return out
 
     def vehicle_values(self, base: dict[str, float]) -> dict[str, float]:
         """What the vehicle will hold once everything is applied, in that order."""
         out = dict(base)
+        out.update(self.boot_params())
         out.update(self.profile.params)
         out.update(RUNNER_PARAMS)
         out.update(environment_params(self.sc.environment, self.fw))
@@ -412,7 +495,8 @@ class Runner:
         out = []
         for f in self.jittered_faults(seed):
             try:
-                out.append(injection(f, self.fw, values, self.sc.environment.wind))
+                out.append(injection(f, self.fw, values, self.sc.environment.wind,
+                                     lat_deg=self.pkg.origin.lat))
             except FaultUnavailable as e:
                 raise Refusal("fault_unavailable", str(e)) from None
         return out
@@ -430,7 +514,8 @@ class Runner:
         if e.outcome is not Outcome.abort:
             return None
         try:
-            resp = response(e.reason, self.pkg.parm, values)
+            resp = response(e.reason, self.pkg.parm, values,
+                            reaction=None if self.navsim is None else self.navsim.reaction)
         except FaultUnavailable as err:
             raise Refusal("fault_unavailable", str(err)) from None
         if resp.continues:
@@ -466,16 +551,53 @@ class Runner:
 
     def _fly(self, result: RunResult, seed: int) -> None:
         assert self.provider is not None
-        pkg, sc = self.pkg, self.sc
+        pkg = self.pkg
         home = Home(lat=pkg.home.lat, lon=pkg.home.lon, alt=pkg.home.alt, heading=0.0,
                     source=f"mission {pkg.plan.id} home row")
+        boot = self.boot_params()
+        files: tuple[Path, ...] = ()
+        if boot:
+            folder = Path(tempfile.mkdtemp(prefix="aerosplat-boot-"))
+            path = folder / "boot.parm"
+            path.write_text("".join(f"{n} {v:g}\n" for n, v in sorted(boot.items())),
+                            encoding="utf-8")
+            files = (path,)
+        try:
+            self._fly_booted(result, seed, home, files, boot)
+        finally:
+            # Kept until the flight is over: SITL may read it after "up" (its values are in
+            # the preflight record and were read back from the vehicle).
+            for f in files:
+                shutil.rmtree(f.parent, ignore_errors=True)
+
+    def _fly_booted(self, result: RunResult, seed: int, home: Home, files: tuple[Path, ...],
+                    boot: dict[str, float]) -> None:
+        assert self.provider is not None
+        pkg, sc = self.pkg, self.sc
         t_start = time.monotonic()
-        endpoint = self.provider.prepare(home, self.speedup)
+        endpoint = self.provider.prepare(home, self.speedup, boot_defaults=files)
         result.timing["sitl_start_s"] = time.monotonic() - t_start
-        self.log(f"[{sc.scenario}] SITL at {home.arg()} ({endpoint}), speedup {self.speedup:g}")
+        self.log(f"[{sc.scenario}] SITL at {home.arg()} ({endpoint}), speedup {self.speedup:g}"
+                 + (f", boot {', '.join(f'{n} {v:g}' for n, v in sorted(boot.items()))}" if boot else ""))
         with Vehicle.connect(endpoint, timeout=60, source_system=RUNNER_SYSID) as v:
             v.heartbeat_period = min(1.0, 0.25 / self.speedup)
-            self._fly_vehicle(v, result, seed)
+            rec = Recording()
+            if self.navsim is not None:
+                # At once: EKF3 keeps the first origin it gets, and must get the Site's.
+                self.companion = Companion(
+                    v, origin=pkg.origin, sim=self.navsim, spec=self._extnav_spec(),
+                    flow=self.navp.flow, grid=self.grid, speedup=self.speedup,
+                    event=rec.event, log=lambda s: self.log(f"[{sc.scenario}] {s}"))
+                self.companion.attach()
+            try:
+                self._fly_vehicle(v, result, seed, rec)
+            finally:
+                if self.companion is not None:
+                    self.companion.detach()
+                    result.preflight.setdefault("nav", {})["companion"] = self.companion.summary()
+
+    def _extnav_spec(self) -> ExtNavSpec:
+        return self.navp.extnav if self.navp.extnav is not None else ExtNavSpec()
 
     def _streams(self, v: Vehicle) -> None:
         v.stream_defaults(hz=10.0)
@@ -483,8 +605,11 @@ class Runner:
                            (MSG_EKF_STATUS_REPORT, 2.0), (MSG_HOME_POSITION, 1.0),
                            (MSG_SYSTEM_TIME, 4.0)):
             v.set_message_interval(msg_id, hz)
+        if self.nav_run:
+            for msg_id, hz in ((MSG_GPS_GLOBAL_ORIGIN, 1.0), (MSG_GPS_RAW_INT, 5.0)):
+                v.set_message_interval(msg_id, hz)
 
-    def _fly_vehicle(self, v: Vehicle, result: RunResult, seed: int) -> None:
+    def _fly_vehicle(self, v: Vehicle, result: RunResult, seed: int, rec: Recording) -> None:
         pkg, sc, fw, cfg = self.pkg, self.sc, self.fw, self.cfg
         self._streams(v)
         firmware = v.firmware()
@@ -497,6 +622,13 @@ class Runner:
         live = v.fetch_params()
         result.timing["param_fetch_s"] = time.monotonic() - t
         drift = sorted(set(live) ^ set(fw.params))
+        if self.nav_run and (live.get("GPS1_TYPE") == 0 or live.get("SIM_GPS1_ENABLE") == 0):
+            # GPS1_TYPE 0 hides the receiver's other GPS1_* parameters, SIM_GPS1_ENABLE 0 the
+            # simulated receiver's SIM_GPS1_* (the extnav snapshot was booted with both on):
+            # absent for that reason, not a different build.
+            hidden = [n for n in drift if n.startswith(("GPS1_", "SIM_GPS1_")) and n not in live]
+            drift = [n for n in drift if n not in hidden]
+            result.preflight.setdefault("nav", {})["hidden_with_gps_off"] = len(hidden)
         if drift:
             result.warnings.append(f"live parameter table differs from the {fw.tag} snapshot in "
                                    f"{len(drift)} names: {', '.join(drift[:8])}")
@@ -518,6 +650,8 @@ class Runner:
                 result.applied.append({"name": name, "before": before, "value": got, "source": source})
         values = dict(live)
         values.update({a["name"]: a["value"] for a in result.applied})
+        if self.nav_run:
+            self._check_nav_vehicle(live, values, result)
         result.warnings += [w for w in failsafe_trigger_problems(pkg.parm, values)
                             if w not in result.warnings]
         injections = self.injections(values, seed)
@@ -536,15 +670,76 @@ class Runner:
         result.preflight["upload_verified"] = True
         result.preflight["frames"] = sorted({i.frame for i in held[1:]})
         t = time.monotonic()
-        v.wait_prearm_ok(timeout=180)
+        if self.companion is None:
+            v.wait_prearm_ok(timeout=180)
+        else:
+            self._wait_nav_ready(v, result)
         result.timing["prearm_s"] = time.monotonic() - t
-        self._mission(v, result, injections, resp, values)
+        self._mission(v, result, injections, resp, values, rec)
+
+    # -- GNSS-free runs (SIM-2n) ------------------------------------------
+    def _check_nav_vehicle(self, live: dict[str, float], values: dict[str, float],
+                           result: RunResult) -> None:
+        """Every boot-time parameter is what SITL was booted with (a PARAM_SET would not act
+        before a reboot), and the vehicle as configured takes nothing from GNSS."""
+        boot = self.boot_params()
+        wrong = [f"{n} = {live.get(n)} (needs {v:g})" for n, v in boot.items()
+                 if n not in live or not math.isclose(float(live[n]), v, abs_tol=1e-6)]
+        if wrong:
+            raise Refusal("nav_config", "the vehicle was not booted as the run needs (a reused "
+                                        "endpoint?): " + ", ".join(wrong))
+        bad = nav_problems(self.navp, values)
+        if bad:
+            raise Refusal("nav_config", "; ".join(bad))
+        result.preflight.setdefault("nav", {})["boot_verified"] = sorted(boot)
+
+    def _wait_nav_ready(self, v: Vehicle, result: RunResult) -> None:
+        """The EKF origin must read back as the Site origin before anything else (unless the
+        scenario withholds it on purpose); then pre-arm. A vehicle that will not get ready is
+        tried anyway: whether the AUTOPILOT refuses to arm is what negative scenarios test."""
+        comp = self.companion
+        assert comp is not None and self.navsim is not None
+        nav = result.preflight.setdefault("nav", {})
+        if self.navsim.origin:
+            try:
+                v.wait("EKF origin to read back", lambda: comp.origin_ok
+                       or comp.origin_mismatch() is not None, ORIGIN_WAIT_S)
+            except VehicleTimeout:
+                raise Refusal("nav_config", f"the EKF did not report an origin within "
+                                            f"{ORIGIN_WAIT_S:g} s of the companion sending it "
+                                            f"({comp.nav.origin_sent} times)") from None
+            bad = comp.origin_mismatch()
+            if bad:
+                raise Refusal("nav_config", bad + " (GNSS set it first?)")
+            nav["origin_verified"] = comp.nav.origin_readback
+        try:
+            v.wait_prearm_ok(timeout=NAV_PREARM_S)
+            nav["prearm"] = "ok"
+        except VehicleTimeout:
+            nav["prearm"] = f"not ok after {NAV_PREARM_S:g} s: {v.statustext[-4:]}"
+
+    def _arm(self, v: Vehicle, result: RunResult) -> None:
+        if self.companion is None:
+            v.set_mode("GUIDED")
+            v.arm(timeout=60)
+            return
+        try:
+            v.set_mode("GUIDED")
+        except VehicleError as e:
+            # GUIDED needs a position estimate; arming is then tried in the mode it is in
+            # (ARMING_NEED_LOC 1: a position estimate is required in every mode).
+            result.preflight.setdefault("nav", {})["guided_refused"] = str(e)
+        try:
+            v.arm(timeout=NAV_ARM_S)
+        except VehicleTimeout:
+            texts = [s for s in v.statustext[-12:] if "Arm" in s or "PreArm" in s]
+            raise Refusal("arming_refused", "the autopilot refused to arm: "
+                          + "; ".join(dict.fromkeys(texts or v.statustext[-4:]))) from None
 
     def _mission(self, v: Vehicle, result: RunResult, injections: list[Injection],
-                 resp: Optional[Response], values: dict[str, float]) -> None:
+                 resp: Optional[Response], values: dict[str, float], rec: Recording) -> None:
         pkg, sc = self.pkg, self.sc
         sp = self.speedup
-        rec = Recording()
         raw = _Raw()
         roles = {k: it.role for k, it in enumerate(pkg.plan.items, start=1)}
         state: dict[str, Any] = {"mode": v.mode, "armed": v.armed, "seq": 0, "fence": None,
@@ -635,8 +830,7 @@ class Runner:
         v.listeners.append(on)
         try:
             v.pump(0.2)
-            v.set_mode("GUIDED")
-            v.arm(timeout=60)
+            self._arm(v, result)
             v.start_mission()
             t_start = now()
             rec.event(t_start, "mission_start")
@@ -672,10 +866,23 @@ class Runner:
         result.recording = rec
         trigger_t = next((e["on"] for e in result.injected if resp is not None
                           and e["reason"] == resp.trigger and e["on"] is not None), None)
+        nav_ctx = None
+        if self.companion is not None:
+            comp = self.companion
+            if trigger_t is None and resp is not None and resp.trigger == "vps_loss":
+                # No injected fault: a no-fix zone took VPS away (capture time of the first miss).
+                trigger_t = next((t for t, fix in comp.nav.fix if not fix and t >= t_start), None)
+            nav_ctx = NavContext(gnss=self.navp.gnss, flow=self.navp.flow, fix=list(comp.nav.fix),
+                                 gnss_fixes=comp.nav.gnss_fixes, spoof_t=comp.nav.spoof_t,
+                                 origin_ok=comp.origin_ok, origin_required=self.navsim.origin,
+                                 # From the first PARAM_SET: the glitch may act before the echo.
+                                 spoof_injected_t=next((e.get("sent", e["on"]) for e in result.injected
+                                                        if e["fault"] == "gps_spoof"), None),
+                                 summary=comp.summary())
         ctx = Context(plan=pkg.plan, items=pkg.items, planned_enu=pkg.planned_enu,
                       fence_enu=pkg.fence_enu,
                       params=values, grid=self.grid, expect=sc.expect, response=resp, trigger_t=trigger_t,
-                      mission_start_t=t_start)
+                      mission_start_t=t_start, nav=nav_ctx)
         result.verdicts = judge(rec, ctx, result.preflight)
         result.clearance = clearance_series(rec, ctx)
         result.outcome = actual_outcome(rec, ctx)
@@ -699,6 +906,8 @@ class Runner:
         was_armed = v.armed
         while True:
             v.pump(0.02)
+            if self.companion is not None:
+                self.companion.tick()
             t = v.sim_now(sp)
             for e in rec.events_of("current", "reached"):
                 role = seq_role.get(int(e.data.get("seq", -1)))
@@ -733,10 +942,15 @@ class Runner:
 
     def _inject(self, v: Vehicle, inj: Injection, rec: Recording, t: float, result: RunResult,
                 k: int) -> None:
+        # The first PARAM_SET leaves now; "on" is when the vehicle confirmed the last one (a
+        # lost echo costs a resend: up to seconds of simulation between the two).
+        result.injected[k]["sent"] = v.sim_now(self.speedup)
         for c in inj.inject:
             v.set_param(c.name, c.value)
         if inj.heartbeats is False:
             v.send_heartbeats = False
+        if inj.vps is False and self.companion is not None:
+            self.companion.vps_on = False
         t_on = v.sim_now(self.speedup)
         result.injected[k]["on"] = t_on
         rec.event(t_on, "fault_on", inj.fault.fault.value, note=inj.note)
@@ -746,6 +960,8 @@ class Runner:
                final: bool = False) -> None:
         if inj.heartbeats is False:
             v.send_heartbeats = True
+        if inj.vps is False and self.companion is not None:
+            self.companion.vps_on = True
         for c in inj.clear:
             v.set_param(c.name, c.value)
         entry = next(e for e in result.injected if e["fault"] == inj.fault.fault.value

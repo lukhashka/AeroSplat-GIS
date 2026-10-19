@@ -21,6 +21,12 @@ sentence, and numbers. None of them reads the EKF estimate.
     completion       complete: every waypoint reached, landed and disarmed at home. abort: the
                      mission did not complete, the vehicle came down and disarmed (at home after
                      an RTL). A run still airborne at its timeout fails.
+    wall_descent     never descending with a wall (occupied / unknown) closer than X
+                     horizontally (H-011); X = r_drone + the transit margin unless given.
+    navigation       GNSS-free runs (SIM-2n) only: no GNSS fix where there is none, the EKF
+                     origin is the Site origin, the EKF estimate stays on the truth while VPS has
+                     a fix (on optical flow: reported), a GNSS spoof is flagged in time. This one
+                     reads the estimate — to compare it with the truth.
 """
 
 from __future__ import annotations
@@ -34,11 +40,11 @@ from numpy.typing import NDArray
 
 from aerosplat.mission.corridor import Plane, masked_clearance, surface_z
 from aerosplat.mission.export import POSITIONAL, WireItem, distance_to_boundary, point_in_polygon
-from aerosplat.mission.models import MissionPlan
+from aerosplat.mission.models import GnssUse, MissionPlan
 from aerosplat.sim.faults import Response
 from aerosplat.sim.record import Recording
 from aerosplat.sim.scenario import Expect, Invariant, Outcome, Tolerances
-from aerosplat.surface.models import state_name
+from aerosplat.surface.models import OCCUPIED, UNKNOWN, state_name
 from aerosplat.surface.occupancy import OccupancyGrid
 
 F64 = NDArray[np.float64]
@@ -65,6 +71,29 @@ class Verdict:
 
 
 @dataclass
+class NavContext:
+    """What the companion saw and did in a GNSS-free run (SIM-2n), for `navigation`."""
+
+    gnss: GnssUse
+    flow: bool
+    fix: list[tuple[float, bool]]           # (capture time, VPS has a fix) on every change
+    gnss_fixes: int                         # GPS_RAW_INT with a 2D fix or better
+    spoof_t: Optional[float] = None         # when the companion flagged GNSS as spoofed
+    spoof_injected_t: Optional[float] = None
+    origin_ok: bool = False
+    origin_required: bool = True
+    summary: dict[str, Any] = field(default_factory=dict)
+
+    def has_fix(self, t: F64) -> NDArray[np.bool_]:
+        out = np.zeros(len(t), bool)
+        for k, (t0, fix) in enumerate(self.fix):
+            t1 = self.fix[k + 1][0] if k + 1 < len(self.fix) else math.inf
+            if fix:
+                out |= (t >= t0) & (t < t1)
+        return out
+
+
+@dataclass
 class Context:
     """What a run is judged against."""
 
@@ -78,6 +107,7 @@ class Context:
     response: Optional[Response] = None     # what the .parm makes of the expected trigger
     trigger_t: Optional[float] = None       # when that trigger was injected (sim s)
     mission_start_t: Optional[float] = None
+    nav: Optional[NavContext] = None        # GNSS-free runs only
 
     @property
     def tol(self) -> Tolerances:
@@ -613,6 +643,134 @@ def check_completion(rec: Recording, ctx: Context) -> Verdict:
                    f"all {len(nav)} waypoints, landed {m['final_from_home_m']:.2f} m from home, disarmed", m)
 
 
+# ── walls while descending (H-011) ───────────────────────────────────────
+WALL_RAYS = 16               # horizontal directions searched for a wall around a sample
+WALL_MIN_HEIGHT_M = 1.0      # below this above the surface, horizontal rays meet ground relief
+
+
+def wall_distance(grid: OccupancyGrid, p: F64, reach_m: float) -> F64:
+    """Horizontal distance from each point to the nearest occupied or unknown voxel within
+    `reach_m` (inf: none). The grid's edge is not a wall."""
+    p = np.asarray(p, float).reshape(-1, 3)
+    if len(p) == 0:
+        return np.zeros(0)
+    a = np.linspace(0.0, 2.0 * math.pi, WALL_RAYS, endpoint=False)
+    dirs = np.column_stack([np.cos(a), np.sin(a), np.zeros(WALL_RAYS)])
+    hits = grid.raycast(np.repeat(p, WALL_RAYS, axis=0), np.tile(dirs, (len(p), 1)), reach_m)
+    d = np.where(np.isin(hits.state, (OCCUPIED, UNKNOWN)), hits.distance, np.inf)
+    return d.reshape(len(p), WALL_RAYS).min(axis=1)
+
+
+def check_wall_descent(rec: Recording, ctx: Context) -> Verdict:
+    """Never descend with a wall closer than X horizontally (H-011: a landing that drifts into
+    the facade). X: the scenario's, else r_drone + the profile's transit margin."""
+    prof = ctx.plan.profile
+    x_req = ctx.tol.wall_descent_m or prof.r_drone_m + prof.transit_margin_m
+    sl = airborne_slice(rec)
+    p, t = rec.positions[sl], rec.times[sl]
+    m: dict[str, Any] = {"required_m": x_req, "descent_mps": ctx.tol.descent_mps}
+    if len(p) == 0:
+        return Verdict(Invariant.wall_descent.value, NA, "never airborne", m)
+    # Descent rate from the true positions themselves (not the reported velocity).
+    vd = np.zeros(len(p))
+    if len(p) > 1:
+        dt = np.diff(t)
+        rate = np.where(dt > 1e-3, -np.diff(p[:, 2]) / np.maximum(dt, 1e-3), 0.0)
+        vd = np.r_[rate, rate[-1]]
+    ground = np.array([surface_z(ctx.grid, float(q[0]), float(q[1])) or float(ctx.home[2])
+                       for q in p])
+    sel = np.flatnonzero((vd > ctx.tol.descent_mps) & (p[:, 2] - ground >= WALL_MIN_HEIGHT_M))
+    m["descending_samples"] = int(len(sel))
+    if len(sel) == 0:
+        return Verdict(Invariant.wall_descent.value, PASS, "no descent above "
+                       f"{WALL_MIN_HEIGHT_M:g} m", m)
+    d = wall_distance(ctx.grid, p[sel], x_req + 2.0)
+    k = int(np.argmin(d))
+    m["min_wall_m"] = None if not np.isfinite(d[k]) else float(d[k])
+    m["at_t"], m["at"] = float(t[sel[k]]), [round(float(v), 2) for v in p[sel[k]]]
+    close = sel[d < x_req]
+    if len(close):
+        m["seconds_close"] = float(len(close) * np.median(np.diff(t)) if len(t) > 1 else 0.0)
+        return Verdict(Invariant.wall_descent.value, FAIL,
+                       f"descending at {vd[sel[k]]:.1f} m/s {d[k]:.2f} m from a wall (< {x_req:g} m) "
+                       f"at t={t[sel[k]]:.1f} s ({p[sel[k]][0]:.1f}, {p[sel[k]][1]:.1f}, "
+                       f"{p[sel[k]][2]:.1f})", m)
+    near = (f"no wall within {x_req + 2.0:g} m" if m["min_wall_m"] is None
+            else f"walls ≥ {m['min_wall_m']:.2f} m away")
+    return Verdict(Invariant.wall_descent.value, PASS,
+                   f"{near} whenever descending (≥ {x_req:g} m required)", m)
+
+
+# ── navigation (SIM-2n) ──────────────────────────────────────────────────
+NAV_SETTLE_S = 2.0           # after a fix comes back, the EKF converges before it is judged
+
+
+def check_navigation(rec: Recording, ctx: Context) -> Verdict:
+    """GNSS-free runs: no GNSS where there is none, the EKF origin is the Site's, the EKF
+    estimate stays on the truth while VPS has a fix, and a spoofed GNSS is flagged in time.
+    The estimate's error on optical flow alone is reported, not judged (drift budget)."""
+    n = ctx.nav
+    if n is None:
+        return Verdict(Invariant.navigation.value, NA, "a GNSS run")
+    m: dict[str, Any] = {"gnss": n.gnss.value, "gnss_fixes": n.gnss_fixes, "origin_ok": n.origin_ok,
+                         **{k: n.summary.get(k) for k in ("vps_error_h_rms_m", "vps_error_h_max_m",
+                                                          "measurements", "source_sets")}}
+    problems: list[str] = []
+    if n.gnss is GnssUse.none and n.gnss_fixes:
+        problems.append(f"{n.gnss_fixes} GNSS fixes reported on a vehicle without GNSS")
+    if n.origin_required and not n.origin_ok:
+        problems.append("the EKF origin was never confirmed as the Site origin")
+    sl = airborne_slice(rec)
+    t, p, e = rec.times[sl], rec.positions[sl], rec.estimates[sl]
+    paired = np.isfinite(e[:, 0])
+    err = np.full(len(t), np.nan)
+    err[paired] = np.linalg.norm(e[paired, :2] - p[paired, :2], axis=1)
+    fixed = n.has_fix(t)            # fix changes are on the capture clock = the truth's
+    # Settled: with a fix for NAV_SETTLE_S already (after take-off or a regained fix).
+    settled = fixed.copy()
+    for t0, fix in n.fix:
+        if fix:
+            settled &= ~((t >= t0) & (t < t0 + NAV_SETTLE_S))
+    on_vps = paired & settled
+    on_flow = paired & ~fixed
+    if on_vps.any():
+        ev = err[on_vps]
+        m.update(est_error_vps_p95_m=float(np.percentile(ev, 95)), est_error_vps_max_m=float(ev.max()),
+                 est_error_vps_rms_m=float(np.sqrt((ev ** 2).mean())), samples_vps=int(on_vps.sum()))
+        if m["est_error_vps_p95_m"] > ctx.tol.nav_error_m:
+            problems.append(f"EKF estimate {m['est_error_vps_p95_m']:.2f} m (p95) from the truth "
+                            f"with a VPS fix (allowed {ctx.tol.nav_error_m:g} m)")
+    elif paired.any():
+        problems.append("no airborne sample with a VPS fix")
+    if on_flow.any():
+        m.update(est_error_flow_max_m=float(err[on_flow].max()), samples_flow=int(on_flow.sum()))
+    if n.spoof_injected_t is not None:
+        m["spoof_injected_t"], m["spoof_flagged_t"] = n.spoof_injected_t, n.spoof_t
+        if n.spoof_t is None:
+            problems.append("GNSS was spoofed and never flagged")
+        else:
+            m["spoof_detect_s"] = n.spoof_t - n.spoof_injected_t
+            if m["spoof_detect_s"] < 0:
+                problems.append(f"GNSS flagged as spoofed {-m['spoof_detect_s']:.1f} s before "
+                                f"the spoof (a false alarm)")
+            elif m["spoof_detect_s"] > ctx.tol.spoof_detect_s:
+                problems.append(f"spoofed GNSS flagged after {m['spoof_detect_s']:.1f} s "
+                                f"(allowed {ctx.tol.spoof_detect_s:g} s)")
+    elif n.spoof_t is not None:
+        problems.append(f"GNSS flagged as spoofed at t={n.spoof_t:.1f} s without a spoof")
+    if problems:
+        return Verdict(Invariant.navigation.value, FAIL, "; ".join(problems), m)
+    parts = [f"gnss {n.gnss.value}" + (", no GNSS fix at all" if n.gnss is GnssUse.none else "")]
+    if "est_error_vps_p95_m" in m:
+        parts.append(f"EKF vs truth with VPS: p95 {m['est_error_vps_p95_m']:.2f} m, "
+                     f"max {m['est_error_vps_max_m']:.2f} m")
+    if "est_error_flow_max_m" in m:
+        parts.append(f"on optical flow up to {m['est_error_flow_max_m']:.2f} m")
+    if "spoof_detect_s" in m:
+        parts.append(f"spoof flagged after {m['spoof_detect_s']:.1f} s")
+    return Verdict(Invariant.navigation.value, PASS, "; ".join(parts), m)
+
+
 # ── all of them ──────────────────────────────────────────────────────────
 def actual_outcome(rec: Recording, ctx: Context) -> str:
     start = ctx.mission_start_t
@@ -632,7 +790,10 @@ def judge(rec: Recording, ctx: Context, preflight: Optional[dict] = None) -> lis
         trigger_t = fence_breach_time(rec, ctx)
     out: list[Verdict] = []
     series = None
-    for inv in ctx.expect.checked:
+    checked = list(ctx.expect.checked)
+    if ctx.nav is not None and ctx.expect.invariants is None and Invariant.navigation not in checked:
+        checked.append(Invariant.navigation)
+    for inv in checked:
         if inv is Invariant.clearance:
             series = clearance_series(rec, ctx)
             out.append(check_clearance(rec, ctx, series))
@@ -648,6 +809,10 @@ def judge(rec: Recording, ctx: Context, preflight: Optional[dict] = None) -> lis
             out.append(check_failsafe(rec, ctx, trigger_t))
         elif inv is Invariant.completion:
             out.append(check_completion(rec, ctx))
+        elif inv is Invariant.wall_descent:
+            out.append(check_wall_descent(rec, ctx))
+        elif inv is Invariant.navigation:
+            out.append(check_navigation(rec, ctx))
     return out
 
 

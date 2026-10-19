@@ -1,0 +1,25 @@
+# Vehicle profile for GNSS-free L2 scenarios (SIM-2n, ADR-0015): the `sitl-quad` airframe with
+# the sensors a GNSS-free mission needs. The mission package says HOW to navigate (EKF3 source
+# sets, GNSS off or monitor-only); the vehicle says WHAT it carries.
+#
+# `boot_params` must hold from power-on (drivers are chosen at boot): the runner boots SITL with
+# them (an extra defaults file) and reads every one back from the vehicle before flying. Names
+# and values are checked against the pinned build's extnav parameter snapshot
+# (configs/ardupilot/Copter-4.7.2.extnav.params.json).
+
+vehicle: sitl-quad-extnav
+description: ArduCopter SITL quad (+), downward optical flow + rangefinder (SITL), companion ExtNav
+camera: "imx290:4mm"            # VPS camera (configs/sim/cameras/imx290.yaml); data for SIM-3
+params:
+  # Same 3S thresholds as sitl-quad.
+  BATT_LOW_VOLT: 10.5
+  BATT_CRT_VOLT: 10.0
+  BATT_LOW_TIMER: 10
+  # Downward rangefinder (flow needs the height above ground): the SITL driver's 7 m default
+  # range is below the 9-15 m transit heights of the street missions.
+  RNGFND1_MAX: 30
+  RNGFND1_ORIENT: 25            # down
+boot_params:
+  FLOW_TYPE: 10                 # SITL optical flow sensor driver
+  RNGFND1_TYPE: 100             # SITL rangefinder driver
+  SIM_FLOW_ENABLE: 1            # the simulator produces flow

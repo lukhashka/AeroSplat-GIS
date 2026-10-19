@@ -1,0 +1,31 @@
+# Camera profile (ADR-0015 §2.6): Sony IMX290 (STARVIS), the candidate for VPS and window
+# detection. Data only; read by aerosplat.sim.camera. One description of the camera for the
+# simulation (SIM-3: render service frames), the localizability map and, later, the vehicle.
+#
+# Sensor numbers: Sony IMX290LQR product brief (1/2.8", 2.9 µm square pixels, 1945 x 1097
+# effective, 1920 x 1080 recommended recording window, up to 60 fps at 1080p, rolling shutter).
+# Readout time is DERIVED, not measured: in the 1080p modes a frame is VMAX = 1125 line times
+# (1H), so 1H = frame period / 1125 and the 1080 exposed rows are read in 1080 * 1H.
+# Lenses are nominal focal lengths of common M12 lenses; distortion is not known until the
+# lens is chosen and calibrated (`calibrated: false`), and VPS is not allowed to fly on an
+# uncalibrated camera (ADR-0015 §2.6).
+#
+# Intrinsics follow the render service (aerosplat.render.camera): pixel (0, 0) covers [0, 1) x
+# [0, 1), so the principal point of an ideal lens is (width / 2, height / 2).
+
+camera: imx290
+description: Sony IMX290 1/2.8" STARVIS, 1920x1080 window, rolling shutter
+sensor:
+  width_px: 1920
+  height_px: 1080
+  pixel_um: 2.9
+  effective_px: [1945, 1097]
+  shutter: rolling
+  # frame rate -> time to read the 1080 rows (ms): 1080 * (1 / fps) / 1125
+  readout_ms: {60: 16.0, 30: 32.0, 25: 38.4}
+  max_fps_1080p: 60
+lenses:
+  2.8mm: {focal_mm: 2.8, use: "VPS: widest view; matches the twin's 10-13 cm/px at height"}
+  4mm: {focal_mm: 4.0, use: "VPS / detection compromise"}
+  6mm: {focal_mm: 6.0, use: "window detection (layer C)"}
+distortion: {model: none, calibrated: false}

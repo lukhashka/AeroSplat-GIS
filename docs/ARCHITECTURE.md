@@ -1318,9 +1318,36 @@ numpy, детерміновано. Регулярний фасад повтор�
   виправлено, 19 пропущено як самоперетинні), вежа `B04` з LoD3-стіною `SW1` і 170 отворами,
   намальованими в run-і 1; EPSG:32618; перевірка чиста; 1.4 МБ.
 
+### 3.24 SIL-раннер і навігація без GNSS — `aerosplat/sim/` (SIM-0, SIM-1, SIM-2n)
+
+Місії з `aerosplat.mission` літають у зафіксованому ArduCopter SITL (WSL2, `configs/sitl.yaml`)
+і судяться за **істиною** `SIM_STATE` проти двійника. Модулі й прогони —
+[SIMULATION_AND_DELIVERY §4.8–§4.11](SIMULATION_AND_DELIVERY.md); тут — лише будова.
+
+* `sitl` — запуск зафіксованої збірки (`tools/sitl/*.sh` через `wsl.exe --exec`); `start(...,
+  boot_defaults=)` додає файл параметрів, з яким SITL **завантажується** (SIM-2n).
+* `params` — таблиця параметрів самої збірки: знімок `Copter-4.7.2.params.json` і варіант
+  `Copter-4.7.2.extnav.params.json` (знято з увімкненими ExtNav, потоком і далекоміром:
+  ArduPilot показує `VISO_*`, `RNGFND1_*`, `FLOW_*` лише тоді).
+* `scenario`, `faults`, `mavmission`, `runner`, `record`, `oracles`, `report` — SIM-1 (§4.10).
+  Оракули: `clearance`, `fence`, `hover`, `heading`, `altitude_frame`, `failsafe`, `completion`,
+  **`wall_descent`** (жодного зниження ближче X м від стіни, H-011; для всіх прогонів) і для
+  прогонів без GNSS **`navigation`** (жодного фіксу GNSS, origin = Site origin, оцінка EKF ↔
+  істина з фіксацією VPS, час виявлення спуфінгу).
+* `extnav` — **companion-емулятор** (ADR-0015 етап 1): `SET_GPS_GLOBAL_ORIGIN` = Site origin із
+  читанням назад, `ODOMETRY` з істини + модель похибки VPS (шум, зсув Гаусса–Маркова, затримка,
+  пропуски, зони без фіксації), реакції на втрату VPS (`MAV_CMD_SET_EKF_SOURCE_SET`, відхід від
+  стіни за «далекомірами» — променями в зайнятість двійника, посадка), монітор GNSS.
+* `camera` — профілі камер (`configs/sim/cameras/imx290.yaml`: інтринсики для 2.8/4/6 мм,
+  rolling shutter); дані для SIM-3 і карти локалізовності.
+* Профілі апаратів — `configs/sim/vehicles/` (`sitl-quad`; `sitl-quad-extnav` з потоком і
+  далекоміром SITL, `boot_params` — драйвери, що діють лише з увімкнення).
+* Профіль навігації місії — `mission.models.NavProfile` у `PlanningProfile.nav`; експорт
+  (`export.nav_parameters`, `nav_problems`) пише й перевіряє навігаційну частину `.parm`.
+
 ---
 
-### 3.21 GIS-експорт — `aerosplat/export/` (Фаза 3.2)
+### 3.25 GIS-експорт — `aerosplat/export/` (Фаза 3.2)
 
 Стандартні GIS-файли одного завершеного run-а: ортофото, DSM/DTM/nDSM, хмара точок, 3DGS
 `.ply`. Тут продукти вперше залишають WGS84 Site ENU (§4) для стандартної проєкційної СК.
@@ -1537,7 +1564,7 @@ train-кадр 30 (орбіта замкнута; середня різниця 
 | `reports/metrics.json`, `report.html` (`<ds>/run/`) | eval | людина | JSON / HTML |
 | `occupancy/occupancy.{npz,json}` | occupancy | mission (8.1b), SIL | npz (`state`, `esdf_cm`, колонки) + JSON `occupancy-v1` (§3.17) |
 | рядок `runs` + `products` у `catalog.db` | `run --site`, migrate | server | SQLite (шляхи відносно run-а) |
-| `exports/{ortho,dsm,dtm,ndsm}.tif`, `cloud.laz`, `splat.ply`, `exports.json` | `aerosplat export` | GIS, людина, API (завантаження) | COG у UTM-зоні ділянки (або `--crs`), LAS 1.4 + WKT, INRIA PLY у Site ENU; бюджет геоприв'язки в кожному (§3.21) |
+| `exports/{ortho,dsm,dtm,ndsm}.tif`, `cloud.laz`, `splat.ply`, `exports.json` | `aerosplat export` | GIS, людина, API (завантаження) | COG у UTM-зоні ділянки (або `--crs`), LAS 1.4 + WKT, INRIA PLY у Site ENU; бюджет геоприв'язки в кожному (§3.25) |
 | HTTP `spatial-chunk` | server | viewer | raw Float32 LE |
 
 ---
@@ -1574,6 +1601,9 @@ AeroSplat-GIS/
 │   ├── surface/                   # occupancy, esdf, stage, products (зайнятість + ESDF, 8.1a)
 │   ├── mission/                   # targets, planner, corridor, export, store (місії v0, 8.1b)
 │   └── server/                    # main.py (FastAPI, сцени v1), auth.py, api_v2.py, api_semantics.py, api_mission.py, up.py
+
+│   ├── sim/                       # sitl, params, runner, oracles, extnav, camera… (SIL, SIM-0/1/2n)
+│   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, api_semantics.py, api_mission.py, up.py
 ├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
 │   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored); e2e/ — Playwright
 ├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)

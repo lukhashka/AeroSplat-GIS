@@ -18,7 +18,7 @@ import math
 from enum import Enum
 from typing import Optional
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from aerosplat.authored.models import AccessPoint, Address, utcnow
 from aerosplat.taxonomy.models import HandoverMode
@@ -215,6 +215,52 @@ class TargetsFile(_Model):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+# ── navigation (ADR-0015) ────────────────────────────────────────────────
+class GnssUse(str, Enum):
+    """What the mission lets GNSS do (ADR-0015 §2.2)."""
+
+    primary = "primary"     # EKF3 on GNSS: the SIM-1 package, unchanged
+    monitor = "monitor"     # receiver on, never an EKF3 source; compared with VPS (spoofing)
+    none = "none"           # no GNSS at all, from power-on: GPS1_TYPE 0
+
+
+class ExtNavSpec(_Model):
+    """The external navigation source the plan relies on: VPS against the twin (ADR-0015 layer A),
+    fed to EKF3 as ExternalNav (MAVLink ODOMETRY). What is DECLARED for planning and for the
+    package; what the source really does in a simulation is the scenario's error model."""
+
+    sigma_m: float = Field(0.5, gt=0, le=10)            # 1σ horizontal position, per axis
+    sigma_z_m: float = Field(1.0, gt=0, le=20)          # 1σ vertical (EKF3 height stays on baro)
+    yaw_sigma_deg: float = Field(2.0, gt=0, le=45)
+    vel_sigma_mps: float = Field(0.1, ge=0.05, le=5)    # VISO_VEL_M_NSE's documented range
+    rate_hz: float = Field(10.0, ge=1, le=50)
+    latency_ms: float = Field(50.0, ge=0, le=250)       # VISO_DELAY_MS's documented range
+    camera: str = "imx290:4mm"                          # configs/sim/cameras/<name>.yaml : lens
+
+
+class NavProfile(_Model):
+    """How the vehicle knows where it is. `primary` keeps the SIM-1 package byte for byte;
+    `none` and `monitor` need `extnav` and make EKF3 run on it (set 1) with optical flow as the
+    degraded source (set 2, when `flow`)."""
+
+    gnss: GnssUse = GnssUse.primary
+    extnav: Optional[ExtNavSpec] = None
+    flow: bool = False
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "NavProfile":
+        if self.gnss is GnssUse.primary and (self.extnav is not None or self.flow):
+            raise ValueError("nav: gnss primary takes no extnav / flow (SIM-2n stage 1)")
+        if self.gnss is not GnssUse.primary and self.extnav is None:
+            raise ValueError(f"nav: gnss {self.gnss.value} needs an extnav source")
+        return self
+
+    @property
+    def gnss_free(self) -> bool:
+        """EKF3 never takes position, velocity or yaw from GNSS."""
+        return self.gnss is not GnssUse.primary
+
+
 # ── planning ─────────────────────────────────────────────────────────────
 class PlanningProfile(_Model):
     """The vehicle and the planning margins. Placeholders until the vehicle is chosen
@@ -248,12 +294,30 @@ class PlanningProfile(_Model):
     surface_relief_m: float = Field(0.3, ge=0, le=2)
     cone_tilt_steps: int = Field(3, ge=0, le=12)        # tilts tried inside the cone
     cone_azimuths: int = Field(8, ge=1, le=36)          # directions per tilt
+    # Navigation (ADR-0015). Default: GNSS, as before; the package is then unchanged.
+    nav: NavProfile = NavProfile()
+
+    @property
+    def sigma_nav_m(self) -> float:
+        """1σ horizontal of the vehicle's position source: GNSS, or the declared ExternalNav
+        when GNSS is not used (the corridor radius takes it where it took σ_GNSS)."""
+        if self.nav.gnss_free:
+            assert self.nav.extnav is not None
+            return self.nav.extnav.sigma_m
+        return self.sigma_gnss_m
+
+    @property
+    def nav_source(self) -> str:
+        return "extnav" if self.nav.gnss_free else "gnss"
 
 
 class SigmaUsed(_Model):
     ap_m: float
     georef_m: float
+    # σ of the vehicle's position source. Named for GNSS (SIM-1 plans); with a GNSS-free
+    # navigation profile it is the declared ExternalNav σ, and `nav_source` says so.
     gnss_m: float
+    nav_source: str = "gnss"
     target_m: float                         # hypot(ap, georef)
     approach_m: float                       # hypot(ap, georef, gnss): σ_total of §7.2
     transit_m: float                        # hypot(georef, gnss): the map against the vehicle

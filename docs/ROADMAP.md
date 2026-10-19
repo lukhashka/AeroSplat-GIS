@@ -17,6 +17,9 @@
 > GNSS — [ADR-0015](decisions/0015-gnss-denied-navigation.md). Далі — §9: 8.1c, SIM-2 (H-011),
 > 8.2a (EKF цілі). Звіт — sessions/2026-10-18_19 (внутрішній журнал);
 > журнал рішень — journal/ (внутрішній журнал).
+> **SIM-2n** ✅ (ADR-0015 етап 1, окрема гілка): місія без GNSS у SITL на ExternalNav (модель VPS) +
+> оптичний потік, відхід від фасаду при втраті VPS (H-011 у цій конфігурації — PASS), спуфінг GNSS
+> виявляється — [SIMULATION §4.11](SIMULATION_AND_DELIVERY.md).
 
 ---
 
@@ -331,7 +334,7 @@ dataset_v6 (2 seed-и, 7000 іт.) PSNR/SSIM/LPIPS без змін, похибк
 
 **Статус 3.2 (2026-10-19):** ✅ ортофото, DSM/DTM/nDSM, LAS/LAZ, 3DGS `.ply` — пакет
 `aerosplat.export`, `aerosplat export`, задача `export`, `POST/GET /api/v2/…/runs/{e}/{r}/exports`,
-розділ «Експорт GIS» на сторінці ділянки; [ARCHITECTURE §3.21](ARCHITECTURE.md). СК за
+розділ «Експорт GIS» на сторінці ділянки; [ARCHITECTURE §3.25](ARCHITECTURE.md). СК за
 замовчуванням — UTM-зона origin (WGS84), висоти еліпсоїдні; ортофото рендериться одразу в сітку UTM
 плитками (мозаїка без ресемплінгу, кожна плитка звіряється з планом і з тим, що повернув рендерер);
 DSM/DTM/nDSM — растри стадії `semantics`; кожен файл несе бюджет похибки геоприв'язки run-а, а run

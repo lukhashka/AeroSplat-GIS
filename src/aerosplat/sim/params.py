@@ -16,6 +16,14 @@ written from memory. The snapshot is produced from the pinned build itself:
 The live table is authoritative at run time (the SITL runner refuses a `.parm` with a name the
 vehicle does not have); the snapshot lets plain `pytest` check the exporter and the fault
 mapping without SITL, and the SITL suite checks the snapshot against the live table.
+
+ArduPilot shows a subsystem's parameters only once the subsystem is enabled (VISO_DELAY_MS
+appears with VISO_TYPE, RNGFND1_MAX with RNGFND1_TYPE). A second snapshot, the **extnav
+variant** (`<tag>.extnav.params.json`), is taken from the same build booted with ExternalNav,
+SITL optical flow and rangefinder on (EXTNAV_BOOT below): the table that GNSS-free packages and
+the `sitl-quad-extnav` vehicle are checked against (SIM-2n, ADR-0015):
+
+    python -m aerosplat.sim.params snapshot --variant extnav    # starts its own SITL, instance 4
 """
 
 from __future__ import annotations
@@ -38,6 +46,13 @@ SNAPSHOT_DIR = PROJECT_DIR / "configs" / "ardupilot"
 META_PREFIXES = ("FENCE_", "RTL_", "WP_", "FS_", "BATT_", "AVOID_", "RALLY_", "LAND_", "SRTL_",
                  "MAV_GCS_", "SIM_GPS1_", "SIM_RC_", "SIM_BATT_", "SIM_WIND_", "SIM_ENGINE_",
                  "SIM_SPEEDUP", "RC_FS_", "DISARM_", "AUTO_OPTIONS", "ARMING_", "EK3_SRC1_")
+# The extnav variant also keeps the metadata of the navigation families (SIM-2n).
+META_PREFIXES_EXTNAV = META_PREFIXES + ("EK3_SRC", "VISO_", "FLOW_", "RNGFND1_", "GPS1_",
+                                        "SIM_FLOW_", "SIM_SONAR_", "COMPASS_", "AHRS_",
+                                        "SIM_TERRAIN")
+VARIANTS = ("extnav",)
+# Booted for the extnav variant: every navigation subsystem on, GPS too (a superset of names).
+EXTNAV_BOOT = {"VISO_TYPE": 1.0, "FLOW_TYPE": 10.0, "SIM_FLOW_ENABLE": 1.0, "RNGFND1_TYPE": 100.0}
 
 
 class ParameterError(ValueError):
@@ -147,22 +162,26 @@ def unknown_message(names, known, tag: str) -> str:
 
 
 # ── snapshot file ────────────────────────────────────────────────────────
-def snapshot_path(tag: str, folder: Path = SNAPSHOT_DIR) -> Path:
-    return folder / f"{tag}.params.json"
+def snapshot_path(tag: str, folder: Path = SNAPSHOT_DIR, variant: Optional[str] = None) -> Path:
+    if variant is not None and variant not in VARIANTS:
+        raise ParameterError(f"unknown snapshot variant '{variant}' ({', '.join(VARIANTS)})")
+    return folder / (f"{tag}.params.json" if variant is None else f"{tag}.{variant}.params.json")
 
 
 def load_snapshot(tag: Optional[str] = None, commit: Optional[str] = None,
-                  folder: Path = SNAPSHOT_DIR) -> FirmwareParams:
+                  folder: Path = SNAPSHOT_DIR, variant: Optional[str] = None) -> FirmwareParams:
     """The snapshot of the pinned firmware (configs/sitl.yaml unless tag/commit are given).
-    Refuses a snapshot taken from another commit than the pin."""
+    Refuses a snapshot taken from another commit than the pin. `variant`: None for the default
+    boot, "extnav" for the navigation subsystems enabled (module docstring)."""
     if tag is None or commit is None:
         from aerosplat.sim.sitl import load_config
 
         pin = load_config().ardupilot
         tag, commit = tag or pin.tag, commit or pin.commit
-    path = snapshot_path(tag, folder)
+    path = snapshot_path(tag, folder, variant)
     if not path.is_file():
-        raise ParameterError(f"no parameter snapshot {path}: python -m aerosplat.sim.params snapshot")
+        raise ParameterError(f"no parameter snapshot {path}: python -m aerosplat.sim.params snapshot"
+                             + (f" --variant {variant}" if variant else ""))
     doc = json.loads(path.read_text(encoding="utf-8"))
     if doc.get("commit") != commit:
         raise ParameterError(f"{path} was taken from {doc.get('commit')}, the pin is {commit}: "
@@ -205,13 +224,13 @@ def _int_keys(d: dict) -> Optional[dict[str, str]]:
 
 
 def build_document(live: Mapping[str, float], pdef: dict, *, tag: str, commit: str,
-                   source: str) -> dict:
+                   source: str, prefixes: tuple[str, ...] = META_PREFIXES) -> dict:
     meta = _flatten_metadata(pdef)
     params: dict[str, dict[str, Any]] = {}
     for name in sorted(live):
         entry: dict[str, Any] = {"default": float(live[name])}
         m = meta.get(name)
-        if m is not None and name.startswith(META_PREFIXES):
+        if m is not None and name.startswith(prefixes):
             if m.get("Units"):
                 entry["units"] = m["Units"]
             if m.get("DisplayName"):
@@ -230,7 +249,7 @@ def build_document(live: Mapping[str, float], pdef: dict, *, tag: str, commit: s
         params[name] = entry
     return {"tag": tag, "commit": commit, "source": source,
             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "count": len(params), "metadata_prefixes": list(META_PREFIXES), "params": params}
+            "count": len(params), "metadata_prefixes": list(prefixes), "params": params}
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -246,10 +265,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     sn.add_argument("--endpoint", help="pymavlink endpoint (default: the running instance 0)")
     sn.add_argument("--metadata", type=Path, help="apm.pdef.json (default: generate in WSL)")
     sn.add_argument("--out", type=Path, default=None)
+    sn.add_argument("--variant", choices=VARIANTS, default=None,
+                    help="boot a fresh SITL (--instance) with the variant's subsystems on")
+    sn.add_argument("--instance", type=int, default=4, help="SITL instance for --variant (4)")
     args = ap.parse_args(argv)
 
     cfg = load_config()
-    sitl = Sitl(cfg)
+    sitl = Sitl(cfg, args.instance if args.variant else 0)
     if args.metadata:
         pdef = json.loads(args.metadata.read_text(encoding="utf-8"))
     else:
@@ -260,18 +282,46 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"помилка: param_metadata.sh: {r.stderr.strip()}", file=sys.stderr)
             return 1
         pdef = json.loads(r.stdout)
-    endpoint = args.endpoint or sitl.endpoint()
-    with Vehicle.connect(endpoint) as v:
-        fw = v.firmware()
-        if fw.git_hash != cfg.ardupilot.commit[:8]:
-            print(f"помилка: the vehicle runs {fw.git_hash}, the pin is {cfg.ardupilot.commit[:8]}",
+    started = False
+    if args.variant:
+        import tempfile
+
+        from aerosplat.sim.sitl import resolve_home
+
+        if sitl.status() is not None:
+            print(f"помилка: SITL instance {sitl.instance} is running; stop it or pick --instance",
                   file=sys.stderr)
             return 1
-        live = v.fetch_params()
+        boot = Path(tempfile.mkdtemp(prefix="aerosplat-snapshot-")) / "boot.parm"
+        boot.write_text("".join(f"{k} {v:g}\n" for k, v in EXTNAV_BOOT.items()), encoding="utf-8")
+        sitl.start(resolve_home(cfg), boot_defaults=(boot,))
+        started = True
+    try:
+        endpoint = args.endpoint or sitl.endpoint()
+        with Vehicle.connect(endpoint) as v:
+            fw = v.firmware()
+            if fw.git_hash != cfg.ardupilot.commit[:8]:
+                print(f"помилка: the vehicle runs {fw.git_hash}, the pin is "
+                      f"{cfg.ardupilot.commit[:8]}", file=sys.stderr)
+                return 1
+            live = v.fetch_params()
+    finally:
+        if started:
+            sitl.stop()
+    boot_note = ""
+    if args.variant:
+        wrong = {k: live.get(k) for k, val in EXTNAV_BOOT.items() if live.get(k) != val}
+        if wrong:
+            print(f"помилка: the boot parameters did not hold: {wrong}", file=sys.stderr)
+            return 1
+        boot_note = " + boot " + ", ".join(f"{k} {v:g}" for k, v in EXTNAV_BOOT.items())
     doc = build_document(live, pdef, tag=cfg.ardupilot.tag, commit=cfg.ardupilot.commit,
-                         source="PARAM_REQUEST_LIST on SITL (-w, copter.parm defaults) + "
-                                "Tools/autotest/param_metadata/param_parse.py")
-    out = args.out or snapshot_path(cfg.ardupilot.tag)
+                         source=f"PARAM_REQUEST_LIST on SITL (-w, copter.parm defaults{boot_note}) "
+                                f"+ Tools/autotest/param_metadata/param_parse.py",
+                         prefixes=META_PREFIXES_EXTNAV if args.variant else META_PREFIXES)
+    if args.variant:
+        doc["variant"], doc["boot"] = args.variant, dict(EXTNAV_BOOT)
+    out = args.out or snapshot_path(cfg.ardupilot.tag, variant=args.variant)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"{doc['count']} parameters of {cfg.ardupilot.tag} -> {out}")

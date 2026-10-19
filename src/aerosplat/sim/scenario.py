@@ -19,6 +19,20 @@ wrong on the way, and what must come out.
       modes: [LAND]                     # optional: must agree with what the .parm makes of it
     seeds: 1
 
+A GNSS-free run (SIM-2n, ADR-0015) adds the companion's VPS model; the package must have been
+planned with the same navigation profile (mission.json `profile.nav`):
+
+    vehicle: sitl-quad-extnav
+    nav:
+      gnss: none                        # none / monitor (the package's)
+      sigma_m: 0.5                      # white noise per axis; default: the package's declared σ
+      bias_sigma_m: 0.2                 # Gauss-Markov bias, correlation bias_tau_s
+      latency_ms: 50
+      zones: [{center: [0, 30], radius_m: 10}]       # no VPS fix inside
+      reaction: {drift_budget_s: 5, wall_guard_m: 6, retreat_m: 6}
+    faults:
+      - {fault: vps_loss, after: hover, at_s: 12}    # duration_s: a gap; none: for good
+
 Faults are abstract; `aerosplat.sim.faults` turns them into SIM_* parameters of the pinned
 build. Times are simulation seconds (the autopilot's clock), counted from mission start or
 from the moment the vehicle starts flying to the mission item named in `after`.
@@ -37,6 +51,7 @@ from typing import Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aerosplat.mission.models import GnssUse
 from aerosplat.sim.vehicle import COPTER_MODES
 
 
@@ -51,6 +66,9 @@ class FaultKind(str, Enum):
     battery_sag = "battery_sag"
     wind_gust = "wind_gust"
     motor_degraded = "motor_degraded"
+    # SIM-2n (ADR-0015): the companion's VPS stops giving fixes; the GNSS receiver is spoofed.
+    vps_loss = "vps_loss"
+    gps_spoof = "gps_spoof"
 
 
 class Outcome(str, Enum):
@@ -68,24 +86,30 @@ class Invariant(str, Enum):
     altitude_frame = "altitude_frame"   # flown heights are the planned heights above home
     failsafe = "failsafe"               # the mode sequence the .parm prescribes, in time
     completion = "completion"           # mission completed, or aborted as expected; came down
+    wall_descent = "wall_descent"       # never descending with a wall closer than X (H-011)
+    navigation = "navigation"           # GNSS-free runs: no GNSS, origin, estimate vs truth
 
 
 # Why a run ends the way it does: the reasons each outcome may name.
 ABORT_REASONS = {"fence_breach", "gps_loss", "rc_loss", "gcs_loss", "battery_low",
-                 "battery_critical"}
+                 "battery_critical", "vps_loss"}
 REFUSAL_REASONS = {"unknown_parameter", "parameter_value", "altitude_frame", "mission_mismatch",
                    "mission_infeasible", "firmware_mismatch", "package_incomplete",
-                   "upload_mismatch", "fault_unavailable", "home_mismatch"}
+                   "upload_mismatch", "fault_unavailable", "home_mismatch",
+                   # SIM-2n: the vehicle's navigation is not what the package needs (boot
+                   # parameters, EKF origin); the AUTOPILOT refused to arm (its own checks).
+                   "nav_config", "arming_refused"}
 FAULT_REASONS = {FaultKind.gps_loss: "gps_loss", FaultKind.rc_loss: "rc_loss",
-                 FaultKind.gcs_loss: "gcs_loss"}
+                 FaultKind.gcs_loss: "gcs_loss", FaultKind.vps_loss: "vps_loss"}
 TURBULENCE_MPS = {"none": 0.0, "light": 1.0, "moderate": 2.0, "severe": 4.0}
 DEFAULT_INVARIANTS = {
     Outcome.complete: (Invariant.clearance, Invariant.fence, Invariant.hover, Invariant.heading,
-                       Invariant.altitude_frame, Invariant.failsafe, Invariant.completion),
+                       Invariant.altitude_frame, Invariant.failsafe, Invariant.completion,
+                       Invariant.wall_descent),
     Outcome.abort: (Invariant.clearance, Invariant.fence, Invariant.altitude_frame,
-                    Invariant.failsafe, Invariant.completion),
+                    Invariant.failsafe, Invariant.completion, Invariant.wall_descent),
     Outcome.violation: (Invariant.clearance, Invariant.fence, Invariant.altitude_frame,
-                        Invariant.failsafe, Invariant.completion),
+                        Invariant.failsafe, Invariant.completion, Invariant.wall_descent),
     Outcome.refused: (),
 }
 
@@ -107,14 +131,17 @@ class Fault(_Model):
     turbulence_mps: Optional[float] = Field(None, ge=0, le=20)  # wind_gust
     motor: Optional[int] = Field(None, ge=1, le=8)             # motor_degraded: 1-based output
     thrust: Optional[float] = Field(None, ge=0, le=1)          # motor_degraded: multiplier
+    # gps_spoof: where the receiver is pushed, metres (north, east) from the truth
+    offset_m: Optional[tuple[float, float]] = None
 
     @model_validator(mode="after")
     def _fields_of_kind(self) -> "Fault":
         allowed = {FaultKind.battery_sag: {"level", "voltage_v"},
                    FaultKind.wind_gust: {"speed_mps", "dir_deg", "turbulence_mps"},
-                   FaultKind.motor_degraded: {"motor", "thrust"}}.get(self.fault, set())
+                   FaultKind.motor_degraded: {"motor", "thrust"},
+                   FaultKind.gps_spoof: {"offset_m"}}.get(self.fault, set())
         given = {k for k in ("level", "voltage_v", "speed_mps", "dir_deg", "turbulence_mps",
-                             "motor", "thrust") if getattr(self, k) is not None}
+                             "motor", "thrust", "offset_m") if getattr(self, k) is not None}
         extra = given - allowed
         if extra:
             raise ValueError(f"{self.fault.value} does not take {', '.join(sorted(extra))}")
@@ -127,6 +154,10 @@ class Fault(_Model):
             raise ValueError("wind_gust needs speed_mps")
         if self.fault is FaultKind.motor_degraded and (self.motor is None or self.thrust is None):
             raise ValueError("motor_degraded needs motor and thrust")
+        if self.fault is FaultKind.gps_spoof:
+            if self.offset_m is None or not 0 < (self.offset_m[0] ** 2 + self.offset_m[1] ** 2) \
+                    ** 0.5 <= 5000:
+                raise ValueError("gps_spoof needs offset_m: [north, east], 0 < |offset| <= 5 km")
         role, _, when = self.after.partition(":")
         if not role or any(c.isspace() for c in self.after) or when not in ("", "reached")                 or (role == "start" and when):
             raise ValueError(f"after '{self.after}' must be 'start', a waypoint role, or "
@@ -173,6 +204,57 @@ class Environment(_Model):
         return v
 
 
+class Zone(_Model):
+    """Where VPS gets no fix (a stand-in for the localizability map, ADR-0015 §2.4): a disk in
+    Site ENU, horizontally."""
+
+    center: tuple[float, float]
+    radius_m: float = Field(gt=0, le=10000)
+
+
+class Reaction(_Model):
+    """The companion's reactions to losing VPS (ADR-0015 §2.5)."""
+
+    # On optical flow after the loss, away from walls, before stopping (the drift budget).
+    drift_budget_s: float = Field(5.0, ge=0, le=600)
+    # A wall closer than this (forward rangefinders): back away from it at once.
+    wall_guard_m: float = Field(6.0, gt=0, le=50)
+    retreat_m: float = Field(6.0, gt=0, le=50)          # ... until it is this far
+    backoff_speed_mps: float = Field(0.5, gt=0, le=3)
+    backoff_timeout_s: float = Field(30.0, gt=0, le=300)   # then land wherever it is
+    regain_s: float = Field(1.0, ge=0, le=60)           # fixes this long: back to source set 1
+
+
+class NavSim(_Model):
+    """How the companion's VPS really behaves in this run (the package only declares σ).
+    Unset numbers default to the package's declared ExtNavSpec."""
+
+    gnss: GnssUse                                       # must be the package's
+    sigma_m: Optional[float] = Field(None, gt=0, le=10)         # white noise, per horizontal axis
+    sigma_z_m: Optional[float] = Field(None, gt=0, le=20)
+    yaw_sigma_deg: Optional[float] = Field(None, gt=0, le=45)
+    vel_sigma_mps: Optional[float] = Field(None, ge=0, le=5)
+    bias_sigma_m: float = Field(0.0, ge=0, le=10)       # slowly varying bias (Gauss-Markov), per axis
+    bias_tau_s: float = Field(60.0, gt=0, le=3600)
+    latency_ms: Optional[float] = Field(None, ge=0, le=1000)    # true latency (default: declared)
+    rate_hz: Optional[float] = Field(None, ge=1, le=50)
+    zones: list[Zone] = Field(default_factory=list)
+    origin: bool = True             # false: the companion never sends SET_GPS_GLOBAL_ORIGIN
+    extnav: bool = True             # false: the companion never streams (no VPS fix at all)
+    rangefinder_sigma_m: float = Field(0.05, ge=0, le=2)        # forward rangefinder stand-in
+    spoof_threshold_m: float = Field(8.0, gt=0, le=1000)        # monitor: GNSS vs VPS
+    reaction: Reaction = Reaction()
+    seed: int = Field(0, ge=0)
+
+    @field_validator("gnss")
+    @classmethod
+    def _gnss_free(cls, v: GnssUse) -> GnssUse:
+        if v is GnssUse.primary:
+            raise ValueError("nav describes a GNSS-free run (gnss none / monitor); a GNSS run "
+                             "has no nav block")
+        return v
+
+
 class ArduPilotSpec(_Model):
     tag: str
     params: list[str] = Field(default_factory=list)   # extra .parm files, relative to the YAML
@@ -188,6 +270,13 @@ class Tolerances(_Model):
     react_s: float = Field(5.0, gt=0, le=120)         # failsafe mode after its trigger delay
     land_m: float = Field(1.5, gt=0, le=50)           # final position vs home (RTL / complete)
     fence_overshoot_m: float = Field(10.0, ge=0, le=100)   # a breach scenario: how far out
+    # Descending (vd > descent_mps) with a wall closer than this horizontally is a failure
+    # (H-011). Default: r_drone + the profile's transit margin, from mission.json.
+    wall_descent_m: Optional[float] = Field(None, gt=0, le=50)
+    descent_mps: float = Field(0.3, gt=0, le=5)
+    # GNSS-free runs: EKF estimate vs truth, horizontally, while VPS has a fix.
+    nav_error_m: float = Field(1.5, gt=0, le=50)
+    spoof_detect_s: float = Field(3.0, gt=0, le=60)    # GNSS spoof flagged within this
 
 
 class Expect(_Model):
@@ -243,6 +332,9 @@ class Scenario(_Model):
     vehicle: str = "sitl-quad"
     ardupilot: Optional[ArduPilotSpec] = None
     environment: Environment = Environment()
+    # GNSS-free navigation (SIM-2n): the companion's VPS error model and reactions. Default for
+    # a GNSS-free package: the package's declared numbers, no bias, no zones.
+    nav: Optional[NavSim] = None
     # People, animals and cars need the L3 renderer and dynamic occupancy (SIM-4).
     actors: list[dict] = Field(default_factory=list)
     faults: list[Fault] = Field(default_factory=list)
@@ -279,8 +371,21 @@ class Scenario(_Model):
         # Whether a fault leads to an abort at all is the .parm's business (FS_OPTIONS can make
         # a vehicle carry on); the runner checks that against the expectation before flying.
         if e.outcome is Outcome.abort and e.reason != "fence_breach":
-            if not any(f.reason == e.reason for f in self.faults):
+            zones = e.reason == "vps_loss" and self.nav is not None and bool(self.nav.zones)
+            if not zones and not any(f.reason == e.reason for f in self.faults):
                 raise ValueError(f"abort '{e.reason}' expected, but no fault causes it")
+        nav_faults = [f.fault.value for f in self.faults
+                      if f.fault in (FaultKind.vps_loss, FaultKind.gps_spoof)]
+        if nav_faults and self.nav is None:
+            raise ValueError(f"{', '.join(nav_faults)} need a GNSS-free run: give `nav`")
+        if self.nav is not None:
+            if any(f.fault is FaultKind.gps_spoof for f in self.faults) \
+                    and self.nav.gnss is not GnssUse.monitor:
+                raise ValueError("gps_spoof needs nav.gnss monitor (a receiver to spoof, and "
+                                 "VPS to compare it with)")
+            if any(f.fault is FaultKind.gps_loss for f in self.faults) \
+                    and self.nav.gnss is GnssUse.none:
+                raise ValueError("gps_loss on a vehicle without GNSS (nav.gnss none)")
         return self
 
 

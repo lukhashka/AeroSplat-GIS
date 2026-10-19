@@ -98,7 +98,8 @@ def load_ground(semantics_dir: Path) -> Ground:
 
 def corridor_radius(profile: PlanningProfile, sigma_georef_m: float) -> tuple[float, float]:
     """(r, σ_transit): the planner's radius for takeoff, transit and landing."""
-    sigma = math.hypot(sigma_georef_m, profile.sigma_gnss_m)
+    # σ of the position source: GNSS, or a GNSS-free profile's ExternalNav (ADR-0015)
+    sigma = math.hypot(sigma_georef_m, profile.sigma_nav_m)
     return profile.r_drone_m + profile.transit_margin_m + profile.k_sigma * sigma, sigma
 
 
@@ -367,7 +368,8 @@ def _terms(base, prof, sigma_georef_m) -> tuple[str, str]:
              + (" (cut by the grid's edge)" if base["grid_limited"] else ""))
     profile = (f"r = {base['radius_m']:.2f} m (r_drone {prof.r_drone_m:g} + m "
                f"{prof.transit_margin_m:g} + {prof.k_sigma:g}·σ {base['sigma_transit_m']:.2f}; "
-               f"σ_GNSS {prof.sigma_gnss_m:g}, σ_georef {sigma_georef_m:g})")
+               f"σ_{'nav' if prof.nav.gnss_free else 'GNSS'} {prof.sigma_nav_m:g}, "
+               f"σ_georef {sigma_georef_m:g})")
     return where, profile
 
 

@@ -57,7 +57,8 @@ def test_nominal_flight_passes_every_oracle(plan, grid, nominal):
     ctx = ss.context(plan, COMPLETE, grid)
     verdicts = judge(nominal, ctx, {"upload_verified": True, "frames": [0, 2, 3]})
     assert [v.invariant for v in verdicts] == ["clearance", "fence", "hover", "heading",
-                                               "altitude_frame", "failsafe", "completion"]
+                                               "altitude_frame", "failsafe", "completion",
+                                               "wall_descent"]
     assert all(v.status == PASS for v in verdicts), [(v.invariant, v.detail) for v in verdicts]
     assert actual_outcome(nominal, ctx) == "complete"
     c = verdicts[0].metrics
