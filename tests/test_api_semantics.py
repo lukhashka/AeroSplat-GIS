@@ -485,6 +485,35 @@ def test_addressing_an_empty_facade_changes_nothing(client):
     assert client.get(f"{BASE}/audit").json() == []
 
 
+# ── CityJSON export (§2.6) ───────────────────────────────────────────────
+def test_cityjson_export_over_the_api_and_the_cli(client, tmp_path):
+    from aerosplat.semantics import cli as semantics_cli
+    from aerosplat.semantics.cityjson import validate
+
+    ap = draw(client, -7.65, 3.0, -6.35, 4.5).json()
+    cand = draw(client, 2.0, 3.0, 3.3, 4.5, lifecycle="candidate").json()
+    r = client.get(f"{BASE}/export/cityjson")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/city+json")
+    assert 'filename="demo-pier-r1.city.json"' in r.headers["content-disposition"]
+    doc = r.json()
+    assert validate(doc)[0] == []
+    report = json.loads(r.headers["x-export-report"])
+    assert report["buildings"] == 1 and report["solids"] == 1 and report["openings"] == 1
+    sem = doc["CityObjects"]["B01"]["geometry"][1]["semantics"]["surfaces"]
+    assert [s.get("aerosplat_id") for s in sem if s["type"] == "Window"] == [ap["id"]]
+    both = client.get(f"{BASE}/export/cityjson?lifecycle=verified&lifecycle=candidate")
+    assert json.loads(both.headers["x-export-report"])["openings"] == 2
+    assert cand["id"] in both.text
+    assert client.get(f"{BASE}/export/cityjson?run_id=nope").status_code == 404
+
+    out = tmp_path / "out" / "pier.city.json"
+    code = semantics_cli.main(["--projects-root", str(tmp_path / "projects"), "cityjson",
+                               "--site", "demo/pier", "-o", str(out)])
+    assert code == 0 and validate(json.loads(out.read_text(encoding="utf-8")))[0] == []
+    assert semantics_cli.main(["--projects-root", str(tmp_path / "projects"), "match",
+                               "--site", "demo/pier", "--from-run", "r1"]) == 0
+
+
 # ── pad zones (§5.7) ─────────────────────────────────────────────────────
 def _write_terrain(run_id="r1"):
     """terrain.npz for the fixture's raster (80 × 80 m from (-40, -40)): B01's 20 × 12 m flat

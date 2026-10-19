@@ -39,6 +39,7 @@ from aerosplat.authored.models import AccessPoint, Address, AuditEntry, Lifecycl
 from aerosplat.authored.store import AuthoredError, AuthoredStore, NotFound as ApNotFound
 from aerosplat.semantics.addressing import (SNAP_TOL_M, Opening, SnapBox, address_facade,
                                            canonical_address, floor_label, snap_to_grid)
+from aerosplat.semantics.cityjson import export_site
 from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitResult, gridfit
 from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
                                           match_facades)
@@ -968,6 +969,40 @@ def pad_candidates(project_id: str, site_id: str, body: PadsRequest,
         zones=[PadZoneOut(**dataclasses.asdict(z), confidence=z.confidence) for z in result.zones],
         rejected=[PadRejectionOut(**dataclasses.asdict(x)) for x in result.rejected],
         candidates=candidates, skipped=skipped)
+
+
+# ── CityJSON export (§2.6) ───────────────────────────────────────────────
+CITYJSON_MEDIA = "application/city+json"
+
+
+@router.get("/sites/{project_id}/{site_id}/export/cityjson",
+            responses={200: {"content": {CITYJSON_MEDIA: {}}, "description":
+                             "CityJSON 2.0; what went in is in the `X-Export-Report` header (JSON)"}})
+def export_cityjson_route(project_id: str, site_id: str, run_id: Optional[str] = None,
+                          lifecycle: Optional[list[Lifecycle]] = Query(None),
+                          cat: Catalog = Depends(get_catalog)) -> Response:
+    """Buildings of a run (LoD1 solids; LoD3 walls with their openings) and the access points.
+
+    Default: the newest run with semantics and `verified` features only. Coordinates are the
+    Site's UTM zone, heights WGS84 ellipsoidal. The document is validated before it is sent;
+    a document that fails is a 500 with the reasons, never a broken file.
+    """
+    site = _site(cat, project_id, site_id)
+    try:
+        doc, report, errors, _ = export_site(cat, site, run_id=run_id,
+                                             lifecycles=lifecycle or [Lifecycle.verified])
+    except SemanticsMissing as e:
+        raise HTTPException(404, str(e)) from None
+    except TaxonomyError as e:
+        raise HTTPException(500, f"taxonomy packs {site.taxonomy_packs}: {e}") from None
+    if errors:
+        raise HTTPException(500, f"the CityJSON export failed its own validation: {errors[:5]}")
+    run = doc["metadata"]["identifier"].rsplit("/", 1)[-1]
+    return Response(
+        content=json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        media_type=CITYJSON_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{site.project_id}-{site.id}-{run}.city.json"',
+                 "X-Export-Report": json.dumps(report.as_dict())})
 
 
 # ── authored access points ───────────────────────────────────────────────

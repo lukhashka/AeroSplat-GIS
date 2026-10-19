@@ -95,6 +95,46 @@ def ecef_to_enu_rotation(lat_deg: float, lon_deg: float) -> F64:
     ])
 
 
+def utm_epsg(lat: float, lon: float) -> int:
+    """EPSG code of the WGS84 / UTM zone that contains (lat, lon): 326zz north, 327zz south.
+
+    The 6° zones, with the two standard exceptions (the EPSG areas of use do not encode
+    them): south-west Norway is zone 32V, and Svalbard uses only zones 31/33/35/37.
+    """
+    zone = min(60, int((lon + 180.0) // 6.0) + 1)
+    if 56.0 <= lat < 64.0 and 3.0 <= lon < 12.0:
+        zone = 32
+    elif 72.0 <= lat < 84.0 and 0.0 <= lon < 42.0:
+        zone = 31 if lon < 9.0 else 33 if lon < 21.0 else 35 if lon < 33.0 else 37
+    return (32600 if lat >= 0 else 32700) + zone
+
+
+class SiteProjection:
+    """Site ENU -> the Site's projected CRS (WGS84 / UTM of its origin), heights ellipsoidal.
+
+    For exchange formats that want a projected CRS (CityJSON, §2.6). ENU is not simply
+    shifted: the conversion goes through the ellipsoid, so grid convergence and the UTM
+    scale factor are applied exactly. The height stays WGS84 ellipsoidal — there is no
+    geoid model in the system, so nothing pretends to be AMSL.
+    """
+
+    def __init__(self, origin: GeoPoint):
+        self.origin = origin
+        self.epsg = utm_epsg(origin.lat, origin.lon)
+        self.frame = EnuFrame(origin)
+        self._tf = Transformer.from_crs(WGS84_GEODETIC, f"EPSG:{self.epsg}", always_xy=True)
+
+    @property
+    def crs_url(self) -> str:
+        return f"https://www.opengis.net/def/crs/EPSG/0/{self.epsg}"
+
+    def from_enu(self, enu: ArrayLike) -> F64:
+        """(..., 3) ENU metres -> (..., 3) easting, northing (m), ellipsoidal height (m)."""
+        lat, lon, h = self.frame.to_geodetic(_cols(enu))
+        e, n = self._tf.transform(np.asarray(lon), np.asarray(lat))
+        return np.stack([np.asarray(e), np.asarray(n), np.asarray(h)], axis=-1)
+
+
 class EnuFrame:
     """Local east-north-up frame (metres) tangent to WGS84 at a fixed origin."""
 
