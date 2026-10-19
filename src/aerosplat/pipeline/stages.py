@@ -208,9 +208,14 @@ def argv_occupancy(cfg: Cfg, L: RunLayout) -> list[str]:
                       ("occupancy_skyline_quantile", "--skyline-quantile"),
                       ("occupancy_max_voxels", "--max-voxels")):
         _flag(flag, cfg[key], a)
+    # One token each: argparse would read a value starting with "-" as an option.
+    a += [f"--extent={cfg['occupancy_extent']}", f"--radius={cfg['occupancy_radius']!r}"]
     if cfg["occupancy_bbox"]:
-        # One token: argparse would read a bbox starting with "-" as an option.
         a.append(f"--bbox={cfg['occupancy_bbox']}")
+    if L.site_bbox is not None and L.origin is not None:
+        b = L.site_bbox
+        a += [f"--site-bbox={b.west!r},{b.south!r},{b.east!r},{b.north!r}",
+              "--origin=" + ",".join(repr(v) for v in L.origin.as_tuple())]
     if not cfg["occupancy_carve"]:
         return a + ["--no-carve"]
     # The dense workspace: fused points, their visibility, and the model its indices count.
@@ -246,6 +251,9 @@ class Stage:
     # Keys that matter only for some configs; left out otherwise, so adding
     # options does not change the fingerprints of runs that do not use them.
     extra_keys: Callable[[Cfg], tuple[str, ...]] = lambda cfg: ()
+    # Inputs from the layout (not the config) that change the stage's output; empty for
+    # most, so their fingerprints stay as they were.
+    layout_values: Callable[[RunLayout], dict[str, Any]] = lambda L: {}
 
     def keys_for(self, cfg: Cfg) -> tuple[str, ...]:
         return self.keys + self.extra_keys(cfg)
@@ -289,7 +297,8 @@ _SEMANTICS = ("semantics_res", "min_building_height", "min_building_area", "faca
 _OCCUPANCY = ("occupancy_res", "occupancy_headroom", "occupancy_max_distance",
               "occupancy_fill_radius", "occupancy_close_radius", "occupancy_assumed_margin",
               "occupancy_unknown",
-              "occupancy_skyline_quantile", "occupancy_bbox", "occupancy_max_voxels",
+              "occupancy_skyline_quantile", "occupancy_bbox", "occupancy_extent",
+              "occupancy_radius", "occupancy_max_voxels",
               "occupancy_carve", "occupancy_carve_min_views", "occupancy_carve_margin",
               "occupancy_carve_under",
               "semantics_res", "camera_source", "known_poses", "cloud_source")
@@ -321,6 +330,11 @@ def _occupancy_skip(cfg: Cfg) -> str | None:
     if cfg["cloud_source"] != "dense":
         return "cloud_source='sparse' — semantics пропущено, рельєфу для зайнятості немає"
     return None
+
+
+def _occupancy_layout(L: RunLayout) -> dict[str, Any]:
+    """The Site bbox is the default extent of the grid: a new one must rebuild it."""
+    return {} if L.site_bbox is None else {"site_bbox": L.site_bbox.model_dump()}
 
 
 def _exif_skip(cfg: Cfg) -> str | None:
@@ -382,5 +396,6 @@ STAGES: dict[str, Stage] = {s.name: s for s in [
           lambda c: "aerosplat.surface.stage", argv_occupancy,
           _occupancy_inputs,
           lambda c, L: [L.occupancy_dir],
-          _OCCUPANCY, _occupancy_skip, version=OCCUPANCY_FORMAT),
+          _OCCUPANCY, _occupancy_skip, version=OCCUPANCY_FORMAT,
+          layout_values=_occupancy_layout),
 ]}

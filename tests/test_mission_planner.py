@@ -109,11 +109,53 @@ def test_transit_climbs_over_a_building_next_to_the_way(tmp_path, street):
     assert p.verdict is Verdict.feasible, p.findings
 
 
-def test_the_edge_of_the_map_counts_as_unknown(tmp_path, street):
-    # Home 4 m from the grid's edge: beyond it nothing is known, so it blocks like a wall.
-    p = plan(tmp_path, street, home_enu=(0.0, 36.0, 0.0))
-    assert p.verdict is Verdict.infeasible
-    assert Code.unknown_space in codes(p, Severity.blocking)
+def refused_codes(excinfo) -> list[Code]:
+    return [f.code for f in excinfo.value.findings]
+
+
+def test_a_home_near_the_edge_of_the_grid_is_refused_with_a_hint(tmp_path, street):
+    # Home 4 m from the grid's edge, takeoff corridor r = 5.56 m: part of the corridor is
+    # outside the grid, where nothing is known. That is no obstacle to route around: the
+    # mission was never checked, and the operator needs a bigger grid.
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, home_enu=(0.0, 36.0, 0.0))
+    assert refused_codes(e) == [Code.outside_grid]
+    detail = e.value.findings[0].detail
+    assert "home (0.0, 36.0)" in detail and "has 4.0" in detail
+    box = [float(v) for v in detail.split("occupancy_bbox=")[1].split(" ")[0].split(",")]
+    assert box[0] <= -40 and box[1] <= -40 and box[2] >= 40 and box[3] >= 36 + 6.56
+
+
+@pytest.mark.parametrize("home", [(100.0, 100.0, 0.0), (0.0, -40.5, 0.0), (39.9, 0.0, 0.0)],
+                         ids=["off-map", "just-outside", "on-the-edge"])
+def test_a_home_off_the_grid_is_refused(tmp_path, street, home):
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, home_enu=home)
+    assert refused_codes(e) == [Code.outside_grid]
+
+
+def test_a_target_off_the_grid_is_refused(tmp_path, street):
+    ap = ms.window_ap(geometry=ms.window_ap().geometry.model_copy(
+        update={"center": (0.0, 45.0, 9.0)}))
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, ap)
+    assert refused_codes(e) == [Code.outside_grid]
+    assert "target (0.0, 45.0)" in e.value.findings[0].detail
+
+
+def test_an_entry_point_pushed_off_the_grid_is_refused(tmp_path, street):
+    # The window is well inside (14 m from the edge), but E is D_entry = 12 m in front of it:
+    # 2 m from the edge, inside the corridor radius.
+    geom = ms.window_ap().geometry.model_copy(update={"center": (0.0, -26.0, 9.0)})
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, ms.window_ap(geometry=geom))
+    assert refused_codes(e) == [Code.outside_grid]
+    assert "entry E (0.0, -38.0)" in e.value.findings[0].detail
+
+
+def test_a_mission_well_inside_the_grid_is_not_refused(tmp_path, street):
+    p = plan(tmp_path, street, home_enu=(0.0, -30.0, 0.0))    # 10 m from the edge
+    assert Code.outside_grid not in codes(p)
 
 
 def test_wider_radius_is_what_catches_unknown_space_beside_the_corridor(tmp_path):
@@ -211,8 +253,7 @@ def test_a_standoff_inside_the_clearance_is_infeasible(tmp_path, street):
 @pytest.mark.parametrize("home, expected", [
     ((0.0, 0.0, 3.0), {Code.home_not_on_surface}),           # floating: altitudes off by 3 m
     ((0.0, 20.0, 10.0), {Code.home_not_on_surface, Code.home_blocked}),   # inside the building
-    ((100.0, 100.0, 0.0), {Code.home_unknown}),              # off the map
-], ids=["floating", "inside", "off-map"])
+], ids=["floating", "inside"])                               # off the map: refused, see above
 def test_home_must_be_on_the_measured_surface(tmp_path, street, home, expected):
     p = plan(tmp_path, street, home_enu=home)
     assert expected <= codes(p, Severity.blocking)

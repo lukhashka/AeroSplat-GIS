@@ -129,14 +129,55 @@ def _finding(code: Code, detail: str, *, leg: Optional[str] = None, at=None,
                    at=_v(at) if at is not None else None)
 
 
+# ── the grid's extent ────────────────────────────────────────────────────
+def grid_margin_m(grid: OccupancyGrid, xy) -> float:
+    """Horizontal distance from (x, y) to the nearest lateral edge of the grid; < 0 outside."""
+    s = grid.spec
+    x, y = float(xy[0]), float(xy[1])
+    return min(x - s.x0, s.x1 - x, y - s.y0, s.y1 - y)
+
+
+def require_inside_grid(grid: OccupancyGrid, points: list[tuple[str, F64, float]]) -> None:
+    """Refuse a mission whose points, with the corridor radius around each, leave the grid.
+
+    Beyond the grid everything is OUTSIDE and blocks, so such a mission is not "obstructed":
+    it was never checked, and the remedy is a bigger grid, not another route. The grid is a
+    rectangle and legs are straight, so checking each leg's ends checks the whole corridor.
+    Two voxels are added to each radius: the column search of the transit height looks that
+    much further.
+    """
+    s = grid.spec
+    short = []
+    for name, p, radius in points:
+        need = radius + 2.0 * s.res_m
+        have = grid_margin_m(grid, p)
+        if have < need:
+            short.append((name, np.asarray(p, float), need, have))
+    if not short:
+        return
+    pad = 10.0
+    xs = [s.x0, s.x1] + [v for _, p, need, _ in short for v in (p[0] - need - pad, p[0] + need + pad)]
+    ys = [s.y0, s.y1] + [v for _, p, need, _ in short for v in (p[1] - need - pad, p[1] + need + pad)]
+    box = (math.floor(min(xs) / 10) * 10, math.floor(min(ys) / 10) * 10,
+           math.ceil(max(xs) / 10) * 10, math.ceil(max(ys) / 10) * 10)
+    what = "; ".join(f"{name} ({p[0]:.1f}, {p[1]:.1f}) needs {need:.1f} m to the edge, has "
+                     f"{have:.1f}" for name, p, need, have in short)
+    raise MissionRefused([_finding(
+        Code.outside_grid,
+        f"the mission leaves the occupancy grid (x {s.x0:.1f}…{s.x1:.1f}, y {s.y0:.1f}…{s.y1:.1f} m): "
+        f"{what}. Outside the grid nothing is known, so the corridor cannot be checked. Rebuild "
+        f"occupancy with an extent that holds it, e.g. --set occupancy_bbox={box[0]:g},{box[1]:g},"
+        f"{box[2]:g},{box[3]:g} (or a larger occupancy_radius, or a Site bbox)",
+        at=short[0][1])])
+
+
 # ── home ─────────────────────────────────────────────────────────────────
-def resolve_home(grid: OccupancyGrid, frame: EnuFrame, home_enu: Optional[Vec3],
-                 relief_m: float) -> tuple[HomePoint, list[Finding]]:
-    """Where the vehicle arms. Relative altitudes are measured from here, so its height must be
-    the measured surface under it — a home floating 3 m above the ground shifts every altitude
-    of the mission by 3 m."""
+def check_home(grid: OccupancyGrid, x: float, y: float, z: Optional[float],
+               relief_m: float) -> tuple[float, list[Finding]]:
+    """(home height, findings) for a home at (x, y): the measured surface under it, and z if
+    given. Relative altitudes are measured from home, so its height must be that surface — a
+    home floating 3 m above the ground shifts every altitude of the mission by 3 m."""
     findings: list[Finding] = []
-    x, y = (0.0, 0.0) if home_enu is None else (float(home_enu[0]), float(home_enu[1]))
     s = grid.spec
     sz = surface_z(grid, x, y)
     i, j, _ = s.index_of([[x, y, s.z0]])
@@ -147,21 +188,31 @@ def resolve_home(grid: OccupancyGrid, frame: EnuFrame, home_enu: Optional[Vec3],
         findings.append(_finding(Code.home_unknown, f"the surface under home ({x:.1f}, {y:.1f}) is "
                                                     f"not measured, so its height is not known",
                                  at=(x, y, 0.0)))
-    if home_enu is None:
+    if z is None:
         z = sz if sz is not None else 0.0
-        how = "site origin (east 0, north 0), on the measured surface"
-    else:
-        z = float(home_enu[2])
-        how = "given by the operator"
-        if sz is not None and abs(z - sz) > max(1.0, s.res_m):
-            findings.append(_finding(
-                Code.home_not_on_surface,
-                f"home is at z={z:.2f} but the surface under it is at {sz:.2f}: relative "
-                f"altitudes would all be off by {z - sz:+.2f} m", at=(x, y, z)))
+    elif sz is not None and abs(z - sz) > max(1.0, s.res_m):
+        findings.append(_finding(
+            Code.home_not_on_surface,
+            f"home is at z={z:.2f} but the surface under it is at {sz:.2f}: relative "
+            f"altitudes would all be off by {z - sz:+.2f} m", at=(x, y, z)))
     probe = np.array([[x, y, z + relief_m + s.res_m]])
     if int(grid.state_at(probe)[0]) != FREE:
         findings.append(_finding(Code.home_blocked, "the space just above home is not free",
                                  at=probe[0]))
+    return z, findings
+
+
+def resolve_home(grid: OccupancyGrid, frame: EnuFrame, home_enu: Optional[Vec3],
+                 relief_m: float, source: Optional[str] = None) -> tuple[HomePoint, list[Finding]]:
+    """Where the vehicle arms (check_home), with its WGS84 position and how it was chosen."""
+    if home_enu is None:
+        z, findings = check_home(grid, 0.0, 0.0, None, relief_m)
+        x, y = 0.0, 0.0
+        how = "site origin (east 0, north 0), on the measured surface"
+    else:
+        x, y = float(home_enu[0]), float(home_enu[1])
+        z, findings = check_home(grid, x, y, float(home_enu[2]), relief_m)
+        how = source or "given by the operator"
     lat, lon, h = geodetic(frame, (x, y, z))
     return HomePoint(enu=(x, y, z), lat=float(lat[0]), lon=float(lon[0]), h_ellipsoid=float(h[0]),
                      source=how), findings
@@ -194,8 +245,11 @@ def _corridor_ok(check) -> bool:
 def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
                  occupancy: OccupancyRef, origin: GeoPoint, by: str,
                  profile: Optional[PlanningProfile] = None, home_enu: Optional[Vec3] = None,
-                 altitude_frame: AltitudeFrame = AltitudeFrame.relative_home) -> MissionPlan:
-    """Compute a mission for a confirmed target. Raises MissionRefused when it may not be planned."""
+                 altitude_frame: AltitudeFrame = AltitudeFrame.relative_home,
+                 home_source: Optional[str] = None) -> MissionPlan:
+    """Compute a mission for a confirmed target. Raises MissionRefused when it may not be planned.
+
+    `home_source` says how a given `home_enu` was chosen (default: by the operator)."""
     refused = planning_findings(target, ap)
     if refused:
         raise MissionRefused(refused)
@@ -215,7 +269,7 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
     r_tr = prof.r_drone_m + prof.transit_margin_m + prof.k_sigma * sigma.transit_m
 
     frame = EnuFrame(origin)
-    home, f_home = resolve_home(grid, frame, home_enu, relief)
+    home, f_home = resolve_home(grid, frame, home_enu, relief, home_source)
     findings += f_home
     hxyz = np.asarray(home.enu, float)
 
@@ -236,6 +290,7 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
         dh = np.zeros(3)
         d_entry = 0.0
     target_plane = Plane(point=_v(c), normal=_v(n), offset_m=relief, name="target")
+    require_inside_grid(grid, [("home", hxyz, r_tr), ("target", c, r_app)])
     if spec.standoff_m < prof.r_drone_m + spec.min_clearance_m:
         findings.append(_finding(Code.standoff_too_small,
                                  f"standoff {spec.standoff_m:.2f} m leaves less than r_drone + m = "
@@ -312,6 +367,8 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
         E = H + a * max(0.0, z_t - H[2]) / a[2]
         app_check = check_leg(grid, [E, H], r_app, target_plane)
 
+    # Where the chosen approach put E and H (an entry distance or a tilted cone reaches out).
+    require_inside_grid(grid, [("entry E", E, max(r_tr, r_app)), ("hover H", H, max(r_tr, r_app))])
     home_up = np.array([hxyz[0], hxyz[1], z_t])
     e_up = np.array([E[0], E[1], z_t])
     legs: list[Leg] = []

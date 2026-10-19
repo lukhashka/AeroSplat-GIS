@@ -29,6 +29,7 @@ def _fingerprint(stage: Stage, cfg: dict[str, Any], L: RunLayout) -> str:
         values["origin"] = L.origin.as_tuple()
     if stage.version:          # likewise absent for stages that never changed convention
         values["version"] = stage.version
+    values.update(stage.layout_values(L))
     return fingerprint(values)
 
 
@@ -96,7 +97,7 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
             manifest.record(name, status="failed", fingerprint=fp,
                             seconds=dt, inputs=inputs,
                             outputs=outputs, error=f"{type(e).__name__}: {e}")
-            log.error(f"\n❌ Стадія '{name}' впала після {dt:.1f}s")
+            log.error(f"\n❌ Стадія '{name}' впала після {dt:.1f}s: {type(e).__name__}: {e}")
             emit(stage, index, "failed", seconds=round(dt, 2), error=f"{type(e).__name__}: {e}")
             raise
         dt = time.perf_counter() - t0
@@ -106,7 +107,50 @@ def run_stages(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
         emit(stage, index, "done", seconds=round(dt, 2))
 
 
-def preflight(cfg: dict[str, Any], L: RunLayout, names: list[str]) -> None:
+# Stages that render with cfg["rasterizer"]: training, and evaluation of the test views.
+RASTER_STAGES = ("train", "eval")
+
+
+def stages_to_run(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
+                  resume: bool = False) -> list[str]:
+    """The stages `run_stages` will execute, decided by its rules (skip reasons, `--resume`
+    freshness: once one stage runs, everything after it runs too)."""
+    manifest = Manifest.load(L.manifest_path)
+    out: list[str] = []
+    for name in names:
+        stage = STAGES[name]
+        if stage.skip_reason(cfg):
+            continue
+        if (resume and not out
+                and manifest.is_fresh(name, _fingerprint(stage, cfg, L), stage.outputs(cfg, L))):
+            continue
+        out.append(name)
+    return out
+
+
+def check_rasterizer(cfg: dict[str, Any], L: RunLayout, names: list[str], *,
+                     resume: bool = False) -> Optional[str]:
+    """Why the run would fail on `rasterizer=gsplat` (None: it will not, or gsplat is unused).
+
+    gsplat builds its CUDA extension on first use, so without the toolchain the run would
+    stop only when training starts — after SfM and dense, which take most of a run.
+    """
+    if cfg["rasterizer"] != "gsplat":
+        return None
+    need = [n for n in stages_to_run(cfg, L, names, resume=resume) if n in RASTER_STAGES]
+    if not need:
+        return None
+    from aerosplat.gs.gsplat_backend import gsplat_problems   # torch: only for gsplat runs
+
+    problems = gsplat_problems()
+    if not problems:
+        return None
+    return (f"rasterizer=gsplat, але стадія '{need[0]}' не зможе ним рендерити: "
+            + "; ".join(problems))
+
+
+def preflight(cfg: dict[str, Any], L: RunLayout, names: list[str], *, resume: bool = False,
+              dry_run: bool = False) -> None:
     log = get_logger()
     log.info("── Preflight ─────────────────────────────────────────────────")
     log.info(f"  проєкт:      {L.project_dir}")
@@ -147,4 +191,11 @@ def preflight(cfg: dict[str, Any], L: RunLayout, names: list[str]) -> None:
         for need in first.inputs(cfg, L):
             if not need.exists():
                 log.warning(f"  ⚠️  вхід для стадії '{first.name}' не існує: {need}")
+    problem = check_rasterizer(cfg, L, names, resume=resume)
+    if problem is not None:
+        if dry_run:
+            log.warning(f"  ⚠️  {problem}")
+        else:
+            raise SystemExit(f"❌ {problem}\n   Зупинено до першої стадії, а не посеред конвеєра. "
+                             f"Без gsplat: --set rasterizer=auto")
     log.info("")

@@ -19,9 +19,11 @@ from numpy.typing import NDArray
 
 from aerosplat.geo.affine import AffineMap
 from aerosplat.io.colmap_model import CameraPose
-from aerosplat.semantics.models import UP, Coverage, Facade
+from aerosplat.semantics.models import UP, Building, Coverage, Facade
 
 F64 = NDArray[np.float64]
+# A facade counts as fully covered when this share of its cells is.
+FULL_COVERAGE = 0.95
 
 
 def transform_pose(pose: CameraPose, affine: AffineMap) -> CameraPose:
@@ -107,3 +109,75 @@ def add_coverage(facades: list[Facade], cameras: list[CameraPose], **kw) -> list
     """`facades` with their `coverage` filled in (the grids themselves are not kept)."""
     return [f.model_copy(update={"coverage": facade_coverage(f, cameras, **kw)[0]})
             for f in facades]
+
+
+# ── what the stage reports ───────────────────────────────────────────────
+def distance_to_footprint(footprint, xy=(0.0, 0.0)) -> float:
+    """Horizontal distance from `xy` to a footprint polygon; 0 inside it."""
+    poly = np.asarray(footprint, float)
+    p = np.asarray(xy, float)
+    if len(poly) == 0:
+        return math.inf
+    a, b = poly, np.roll(poly, -1, axis=0)
+    ab = b - a
+    t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    edge = float(np.min(np.linalg.norm(a + t[:, None] * ab - p, axis=1)))
+    # Even-odd rule: does a ray from p towards +x cross an odd number of edges?
+    crosses = ((a[:, 1] > p[1]) != (b[:, 1] > p[1])) & (
+        p[0] < a[:, 0] + (p[1] - a[:, 1]) * ab[:, 0] / np.where(ab[:, 1] == 0, 1e-12, ab[:, 1]))
+    return 0.0 if int(crosses.sum()) % 2 else edge
+
+
+def coverage_report(buildings: list[Building], facades: list[Facade], *, max_gsd_m: float,
+                    n_cameras: int, near: int = 5) -> tuple[list[str], list[str]]:
+    """(log lines, warnings) on how well the capture sees the facades.
+
+    Counts are per facade, never a site-wide median: an Earth Studio orbit sees the buildings
+    it circles sharply and the rest of a square kilometre from far away, so a median over
+    every facade says nothing about any of them. The buildings nearest the Site origin — the
+    centre of the capture — are listed one by one, with their own best GSD.
+    """
+    cov = [f.coverage for f in facades if f.coverage is not None]
+    if not cov:
+        return [], []
+    thr = 100 * max_gsd_m
+    any_cov = [c for c in cov if c.covered > 0]
+    full = [c for c in any_cov if c.fraction >= FULL_COVERAGE]
+    coarse = [c for c in cov if c.too_coarse]
+    unseen = [c for c in cov if c.visible == 0]
+    n = len(cov)
+    lines = [f"Покриття ({n_cameras} кадрів, поріг {thr:g} см/px): з потрібною деталізацією "
+             f"{len(any_cov)} із {n} фасадів ({100 * len(any_cov) / n:.0f}%), з них повністю "
+             f"(≥{100 * FULL_COVERAGE:.0f}% клітин) {len(full)}; видно лише грубіше за поріг "
+             f"{len(coarse)}; не видно {len(unseen)}"]
+
+    by_id = {f.id: f for f in facades}
+    ranked = sorted(buildings, key=lambda b: (distance_to_footprint(b.footprint), b.id))
+    shown = [b for b in ranked if b.facade_ids][:near]
+    if shown:
+        lines.append("Найближчі до початку Site будівлі (фасадів з покриттям / усього, медіана "
+                     "частки покритих клітин, найкраща GSD на будівлі):")
+    for b in shown:
+        mine = [c for c in (by_id[i].coverage for i in b.facade_ids if i in by_id)
+                if c is not None]
+        if not mine:
+            continue
+        best = [c.best_gsd_cm for c in mine if c.best_gsd_cm is not None]
+        sharp = f"найкраще {min(best):.0f} см/px" if best else "не видно"
+        lines.append(f"  {b.id} ({distance_to_footprint(b.footprint):.0f} м від початку, "
+                     f"h {b.height_m:.0f} м): {sum(c.covered > 0 for c in mine)}/{len(mine)} "
+                     f"фасадів, медіана {100 * float(np.median([c.fraction for c in mine])):.0f}%, "
+                     f"{sharp}")
+
+    warnings: list[str] = []
+    if coarse and len(coarse) > 0.5 * n:
+        # The GSD quoted is that of the coarse facades themselves, not the site's best.
+        g = np.array([c.best_gsd_cm for c in coarse if c.best_gsd_cm is not None])
+        # Rounded up: these are coarser than the bar, and "12.0" next to a 12 bar would not say so.
+        finest = math.ceil(float(g.min()) * 10) / 10
+        warnings.append(
+            f"{len(coarse)} із {n} фасадів видно, але жодна їхня клітина не різкіша за "
+            f"{thr:g} см/px (на них найкраще {finest:.1f} см/px, медіана {np.median(g):.0f}): "
+            f"отвори на цих фасадах не читаються — для них потрібен ближчий обліт; фасадів з "
+            f"потрібною деталізацією {len(any_cov)}")
+    return lines, warnings

@@ -198,7 +198,7 @@ def main(argv=None, on_event: Optional[StageCallback] = None,
                      f" ({'знайдено' if js.is_file() else 'немає'} {js})")
         layout = RunLayout.from_config(cfg)
 
-    preflight(cfg, layout, stages)
+    preflight(cfg, layout, stages, resume=args.resume, dry_run=args.dry_run)
 
     t0 = time.perf_counter()
     if site_run is not None and not args.dry_run:

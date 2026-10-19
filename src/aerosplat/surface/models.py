@@ -191,6 +191,18 @@ class OccupancyStats(_Model):
     carving: Optional[CarvingStats] = None  # None: built without camera rays (2.5-D only)
 
 
+class GridExtent(_Model):
+    """Why the grid covers what it covers (aerosplat.surface.extent). Boxes are
+    (xmin, ymin, xmax, ymax) in Site ENU metres."""
+
+    source: str                             # "bbox" | "site_bbox" | "radius" | "raster"
+    requested: Optional[tuple[float, float, float, float]] = None    # None: the whole raster
+    raster: tuple[float, float, float, float]   # what the terrain raster (the cloud) covers
+    grid: tuple[float, float, float, float]     # what the grid covers
+    clipped: list[str] = Field(default_factory=list)    # sides where the cloud ends first
+    detail: str = ""
+
+
 class OccupancyReport(_Model):
     """`occupancy/occupancy.json`: grid header, parameters and findings, minus the arrays."""
 
@@ -198,6 +210,7 @@ class OccupancyReport(_Model):
     frame: str = "WGS84 Site ENU"
     grid: GridSpec
     bounds: tuple[tuple[float, float, float], tuple[float, float, float]]
+    extent: Optional[GridExtent] = None     # None: written before the extent was recorded
     esdf: EsdfInfo
     stats: OccupancyStats
     params: dict[str, Any] = Field(default_factory=dict)

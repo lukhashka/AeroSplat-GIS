@@ -54,6 +54,7 @@ def env(tmp_path, monkeypatch, street):
         grid=street.spec, bounds=street.spec.bounds(),
         esdf=EsdfInfo(max_distance_m=street.max_distance_m), stats=stats,
         params={"unknown": "skyline"}))
+    ms.write_street_semantics(occ.parent / "semantics")         # for the takeoff search
     cat.finish_run(site, "baseline", "r1", status=RunStatus.ok, products={"occupancy": occ})
     authored = AuthoredStore.for_site(cat.site_dirs(site), site.key)
     missions = cat.site_dirs(site).missions
@@ -222,3 +223,74 @@ def test_a_site_without_occupancy_cannot_plan(env, tmp_path):
                           "confirm": True}).json()
     r = client.post("/api/v2/sites/demo/empty/missions", json={"target_id": t["id"]})
     assert r.status_code == 404 and "occupancy" in r.text
+
+
+# ── takeoff spots, and the grid's edge ───────────────────────────────────
+WIDE = {"wire_height_m": 5.0, "sigma_gnss_m": 15.0}         # r = 32.5 m: nothing fits the street
+
+
+def test_takeoff_spots_for_a_target(env):
+    client, authored, _ = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id).json()
+    r = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": QUIET, "n": 3})
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert len(res["candidates"]) == 3 and res["target"] == pytest.approx([0.0, 3.0, 9.0])
+    assert res["radius_m"] == pytest.approx(5.559, abs=1e-3)
+    assert res["candidates"][0]["distance_m"] < 1.0
+    none = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": WIDE}).json()
+    assert none["candidates"] == [] and none["message"].startswith("no takeoff spot")
+    assert none["best_open"]["transit_z"] is None                 # JSON-safe, never NaN
+    assert client.post(f"{BASE}/targets/tgt_nope/takeoff", json={}).status_code == 404
+
+
+def test_a_mission_can_take_its_home_from_the_search(env):
+    client, authored, _ = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id).json()
+    best = client.post(f"{BASE}/targets/{t['id']}/takeoff",
+                       json={"profile": QUIET}).json()["candidates"][0]
+    m = mission(client, t["id"], home_search=True)
+    assert m.status_code == 201, m.text
+    plan = m.json()
+    assert plan["home"]["enu"] == pytest.approx(best["enu"])
+    assert plan["home"]["source"].startswith("takeoff search: nearest of 5 spots")
+    assert not [f for f in plan["findings"]
+                if f["leg"] == "takeoff" or f["code"].startswith("home_")]
+
+
+def test_home_search_refuses_when_there_is_no_spot(env):
+    client, authored, missions = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id).json()
+    r = client.post(f"{BASE}/missions", json={"target_id": t["id"], "profile": WIDE,
+                                              "home_search": True})
+    assert r.status_code == 409 and reasons(r) == {"no_takeoff_spot"}
+    assert "no takeoff spot" in r.json()["detail"]["reasons"][0]["detail"]
+    assert not missions.exists() or not any(missions.iterdir())    # nothing stored
+    both = mission(client, t["id"], home_search=True, home_enu=[0.0, 0.0, 0.0])
+    assert both.status_code == 422
+
+
+def test_takeoff_search_needs_the_semantics_of_the_same_run(env, tmp_path):
+    import shutil
+
+    client, authored, _ = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id).json()
+    sem = tmp_path / "projects" / "demo" / "sites" / "street" / "epochs" / "baseline" / "runs" \
+        / "r1" / "semantics"
+    assert (sem / "semantics.json").is_file()
+    shutil.rmtree(sem)
+    r = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={})
+    assert r.status_code == 404 and "semantics" in r.json()["detail"]
+
+
+def test_a_home_off_the_grid_is_refused_with_a_hint(env):
+    client, authored, missions = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id).json()
+    r = mission(client, t["id"], home_enu=[100.0, 100.0, 0.0])
+    assert r.status_code == 409 and reasons(r) == {"outside_grid"}
+    assert "occupancy_bbox=" in r.json()["detail"]["reasons"][0]["detail"]

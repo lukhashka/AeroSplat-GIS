@@ -32,17 +32,37 @@ POLL_S = 1.0
 RENDER = "render"           # the render service is supervised like a worker
 
 
-def render_service_command(port: int) -> list[str]:
-    """Command line of the render service. On Windows gsplat is JIT-built, which only works
-    inside tools/gsplat_env.bat (VS 2022 + the CUDA toolkit torch was built for)."""
-    cmd = [sys.executable, "-m", "aerosplat.render.service", "--port", str(port)]
+def with_gsplat_env(cmd: list[str]) -> list[str]:
+    """`cmd` run inside tools/gsplat_env.bat when gsplat would JIT-build its CUDA extension.
+
+    On Windows that build only works with VS 2022 and the CUDA toolkit torch was built for,
+    which a plain shell does not have. A prebuilt gsplat (`gsplat.csrc`) needs no toolchain,
+    and without gsplat there is nothing to build. Whatever the wrapper achieves, the pipeline
+    checks gsplat again before the first stage (runner.check_rasterizer)."""
     env_bat = PROJECT_DIR / "tools" / "gsplat_env.bat"
-    if os.name == "nt" and env_bat.is_file():
-        try:
-            from gsplat import csrc  # noqa: F401  (prebuilt: no toolchain needed)
-        except ImportError:
-            return ["cmd.exe", "/c", str(env_bat), *cmd]
+    if os.name != "nt" or not env_bat.is_file():
+        return cmd
+    try:
+        import gsplat  # noqa: F401
+    except ImportError:
+        return cmd
+    try:
+        from gsplat import csrc  # noqa: F401  (prebuilt: no toolchain needed)
+    except ImportError:
+        return ["cmd.exe", "/c", str(env_bat), *cmd]
     return cmd
+
+
+def render_service_command(port: int) -> list[str]:
+    """Command line of the render service (renders with gsplat)."""
+    return with_gsplat_env([sys.executable, "-m", "aerosplat.render.service", "--port", str(port)])
+
+
+def worker_command(resource: str) -> list[str]:
+    """Command line of a worker. The GPU worker trains (`rasterizer: gsplat` included), so it
+    gets the gsplat build environment like the render service; the CPU worker never needs it."""
+    cmd = [sys.executable, "-m", "aerosplat.jobs.worker", "--resource", resource]
+    return with_gsplat_env(cmd) if resource == "gpu" else cmd
 
 
 class WorkerSupervisor(threading.Thread):
@@ -60,8 +80,7 @@ class WorkerSupervisor(threading.Thread):
         self._lock = threading.Lock()
 
     def _spawn(self, resource: str) -> None:
-        cmd = self.commands.get(resource) or [
-            sys.executable, "-m", "aerosplat.jobs.worker", "--resource", resource]
+        cmd = self.commands.get(resource) or worker_command(resource)
         self.procs[resource] = subprocess.Popen(
             cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **group_kwargs())
         self.started[resource] = time.monotonic()
@@ -127,7 +146,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     resources = [r for r, off in (("gpu", args.no_gpu_worker), ("cpu", args.no_cpu_worker))
                  if not off]
-    commands: dict[str, list[str]] = {}
+    commands: dict[str, list[str]] = {r: worker_command(r) for r in resources}
+    if "gpu" in commands and commands["gpu"][0] == "cmd.exe":
+        print("ℹ️  GPU-воркер запускається через tools\\gsplat_env.bat (у gsplat немає зібраного "
+              "csrc, rasterizer=gsplat збирає його при першому виклику)", flush=True)
     if not args.no_render:
         resources.append(RENDER)
         commands[RENDER] = render_service_command(args.render_port)

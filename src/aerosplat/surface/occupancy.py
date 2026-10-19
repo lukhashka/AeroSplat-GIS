@@ -33,7 +33,7 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Union
 
 import numpy as np
 from numpy.typing import NDArray
@@ -50,6 +50,10 @@ from aerosplat.surface.models import (ASSUMED_FREE, FORMAT_VERSION, FREE, OCCUPA
 F64 = NDArray[np.float64]
 SQRT3 = math.sqrt(3.0)
 UNKNOWN_MODES = ("skyline", "sky")
+
+
+class GridExtentError(ValueError):
+    """The chosen extent cannot be built: over `max_voxels`, off the raster, or empty."""
 
 
 def as_points(xyz, what: str = "points") -> F64:
@@ -409,7 +413,8 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
                     bbox: Optional[tuple[float, float, float, float]] = None,
                     max_voxels: int = 400_000_000, signed: bool = False,
                     tile_voxels: int = DEFAULT_TILE_VOXELS,
-                    rays: Optional[CameraRays] = None, carve_min_views: int = 2,
+                    rays: Union[CameraRays, Callable[[], Optional[CameraRays]], None] = None,
+                    carve_min_views: int = 2,
                     carve_margin_m: float = 1.0, carve_under_surface: bool = True,
                     frame_tolerance_m: float = 0.01
                     ) -> tuple[OccupancyGrid, OccupancyStats, list[str]]:
@@ -428,7 +433,8 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
 
     With `rays` (carving.load_colmap_rays), camera rays then carve the 2.5-D model; the cloud
     must be the fused points the rays end at (or a filtered subset), in the same frame to
-    `frame_tolerance_m`, or the build fails.
+    `frame_tolerance_m`, or the build fails. `rays` may be a function that loads them (or
+    returns None): it is called only once the grid is known to fit `max_voxels`.
     """
     p = as_points(xyz, "cloud")
     dsm = np.asarray(dsm, np.float64)
@@ -480,7 +486,7 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
         i_lo, i_hi = (max(i_lo, int(math.floor((ymin - terrain.y0) / res_m))),
                       min(i_hi, int(math.ceil((ymax - terrain.y0) / res_m))))
         if i_lo >= i_hi or j_lo >= j_hi:
-            raise ValueError(f"bbox {bbox} does not overlap the terrain raster")
+            raise GridExtentError(f"bbox {bbox} does not overlap the terrain raster")
     rows, cols = i_hi - i_lo, j_hi - j_lo
     x0, y0 = terrain.x0 + j_lo * res_m, terrain.y0 + i_lo * res_m
 
@@ -530,7 +536,8 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     source[gap] = ColumnSource.FILLED
     empty = source == 0
     if not observed.any():
-        raise ValueError("no reconstructed surface inside the grid: nothing to build occupancy from")
+        raise GridExtentError("no reconstructed surface inside the grid: nothing to build "
+                              "occupancy from")
 
     skyline_z = float(np.quantile(top[observed], skyline_quantile, method="higher"))
     z_low = float(min(dtm_c.min(), pz.min() if len(pz) else np.inf))
@@ -540,9 +547,13 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     if layers >= np.iinfo(np.int16).max:
         raise ValueError(f"{layers} layers: more than free_from (int16) can index")
     if spec.voxels > max_voxels:
-        raise ValueError(f"grid {rows}×{cols}×{layers} = {spec.voxels:,} voxels exceeds "
-                         f"max_voxels={max_voxels:,}: give a bbox, a coarser res_m or a "
-                         f"larger max_voxels")
+        raise GridExtentError(f"grid {rows}×{cols}×{layers} = {spec.voxels:,} voxels exceeds "
+                              f"max_voxels={max_voxels:,}: give a bbox, a coarser res_m or a "
+                              f"larger max_voxels")
+    if callable(rays):
+        # Loaded only now: reading the visibility of a large site takes most of a minute,
+        # which a grid over budget should not have to wait for.
+        rays = rays()
     unknown_ceiling = skyline_z + assumed_margin_m if unknown == "skyline" else None
 
     surf = ~empty

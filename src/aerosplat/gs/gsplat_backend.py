@@ -85,6 +85,8 @@ def build_env_problems() -> List[str]:
     from torch.utils.cpp_extension import CUDA_HOME
 
     problems = []
+    if shutil.which("ninja") is None:
+        problems.append("ninja не знайдено в PATH (pip install ninja)")
     have, want = _toolkit_version(CUDA_HOME), torch.version.cuda or "?"
     if have != ".".join(want.split(".")[:2]):
         problems.append(f"CUDA toolkit {have} ({CUDA_HOME}), а torch зібрано з CUDA {want}")
@@ -100,26 +102,44 @@ def build_env_problems() -> List[str]:
     return problems
 
 
-def require_gsplat() -> None:
-    """Fail early with a usable message when gsplat or its build environment is missing."""
+GSPLAT_MISSING = ("gsplat не встановлено: pip install gsplat==1.5.3 "
+                  "(див. docs/BASELINE.md, «gsplat на Windows»)")
+GSPLAT_ENV_HINT = ("Запускай через tools\\gsplat_env.bat, напр.: tools\\gsplat_env.bat "
+                   "venv\\Scripts\\aerosplat run ... --set rasterizer=gsplat; `aerosplat up` сам "
+                   "запускає GPU-воркер через нього, якщо в gsplat немає зібраного csrc")
+
+
+def gsplat_problems() -> List[str]:
+    """Why `rasterizer=gsplat` cannot work in this process ([] = it can). Never raises.
+
+    Cheap enough for a preflight: gsplat's first call is what builds the extension, so a
+    pipeline can refuse before SfM and dense instead of failing at the start of training.
+    """
     try:
         import gsplat  # noqa: F401
-    except ImportError as e:
-        raise ImportError("gsplat не встановлено: pip install gsplat==1.5.3 "
-                          "(див. docs/BASELINE.md, «gsplat на Windows»)") from e
+    except ImportError:
+        return [GSPLAT_MISSING]
     if not torch.cuda.is_available():
-        raise RuntimeError("rasterizer=gsplat потребує CUDA")
+        return ["rasterizer=gsplat потребує CUDA, а torch.cuda.is_available() = False"]
     try:
         from gsplat import csrc  # noqa: F401  (prebuilt extension: no JIT, no toolchain)
-        return
+        return []
     except ImportError:
         pass
     problems = build_env_problems()
+    if not problems:
+        return []
+    return ["gsplat компілює CUDA-розширення при першому виклику, а середовище збірки не те: "
+            + "; ".join(problems) + ". " + GSPLAT_ENV_HINT]
+
+
+def require_gsplat() -> None:
+    """Fail early with a usable message when gsplat or its build environment is missing."""
+    problems = gsplat_problems()
+    if problems == [GSPLAT_MISSING]:
+        raise ImportError(GSPLAT_MISSING)
     if problems:
-        raise RuntimeError(
-            "gsplat компілює CUDA-розширення при першому виклику, а середовище збірки не те: "
-            + "; ".join(problems) + ". Запускай через tools\\gsplat_env.bat, напр.: "
-            "tools\\gsplat_env.bat venv\\Scripts\\aerosplat run ... --set rasterizer=gsplat")
+        raise RuntimeError("; ".join(problems))
 
 
 # ═══════════════════════════════════════════════════════════════════

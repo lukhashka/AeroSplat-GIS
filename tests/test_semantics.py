@@ -12,9 +12,11 @@ import pytest
 
 from aerosplat.io.colmap_model import CameraPose, Intrinsics, read_model
 from aerosplat.semantics.buildings import find_buildings, simplify, trace_region_outline
-from aerosplat.semantics.coverage import facade_coverage, facade_grid, transform_pose
+from aerosplat.semantics.coverage import (coverage_report, distance_to_footprint,
+                                          facade_coverage, facade_grid, transform_pose)
 from aerosplat.semantics.facades import facades_of_building, merge_coplanar, ransac_line
-from aerosplat.semantics.models import azimuth_of, octant_of, u_axis_for
+from aerosplat.semantics.models import (Building, Coverage, Facade, azimuth_of, octant_of,
+                                        u_axis_for)
 from aerosplat.semantics.terrain import build_terrain
 
 RNG = np.random.default_rng(7)
@@ -313,6 +315,93 @@ def test_facade_grid_covers_the_wall(wall):
     assert u.min() > f.u_min and u.max() < f.u_max
     assert v.min() > f.v_ground and v.max() < f.v_max
 
+
+
+# ── the coverage report of the stage ─────────────────────────────────────
+def _square(cx: float, cy: float, half: float) -> list[tuple[float, float]]:
+    return [(cx - half, cy - half), (cx + half, cy - half), (cx + half, cy + half),
+            (cx - half, cy + half)]
+
+
+def _covered_facade(fid: str, *, cells=100, visible=100, covered=100, best=None) -> Facade:
+    cov = Coverage(cell_m=0.5, cells=cells, visible=visible, covered=covered,
+                   mean_views=1.0 if covered else 0.0, max_gsd_cm=16.0, best_gsd_cm=best)
+    return Facade(id=fid, building_id=fid.split("/")[0], origin=(0, 0, 0), normal=(0, -1, 0),
+                  u_axis=(1, 0, 0), azimuth_deg=180.0, u_min=0.0, u_max=10.0, v_ground=0.0,
+                  v_max=10.0, plane_rms_m=0.1, n_points=100, coverage=cov)
+
+
+def _site_like_dataset_1910():
+    """A tower at the origin seen sharply on all 12 facades; 30 far buildings seen only from
+    far away (at 9 cm/px on the tower vs 20-40 cm/px elsewhere, a 16 cm/px bar)."""
+    buildings, facades = [], []
+    tower = [_covered_facade(f"B01/F{k}", best=13.0) for k in range(12)]
+    buildings.append(Building(id="B01", footprint=_square(5, 5, 20), area_m2=1600, ground_z=0,
+                              roof_z=44, height_m=44, facade_ids=[f.id for f in tower]))
+    facades += tower
+    for n in range(2, 32):
+        far = [_covered_facade(f"B{n:02d}/F{k}", covered=0, best=20.0 + n) for k in range(4)]
+        buildings.append(Building(id=f"B{n:02d}", footprint=_square(200 + 30 * n, 0, 8),
+                                  area_m2=256, ground_z=0, roof_z=15, height_m=15,
+                                  facade_ids=[f.id for f in far]))
+        facades += far
+    return buildings, facades
+
+
+def test_coverage_report_counts_facades_instead_of_a_site_wide_median():
+    buildings, facades = _site_like_dataset_1910()
+    # The old message: the median over every facade, which is 0 % here.
+    assert float(np.median([f.coverage.fraction for f in facades])) == 0.0
+    lines, warnings = coverage_report(buildings, facades, max_gsd_m=0.16, n_cameras=151)
+    assert "12 із 132 фасадів" in lines[0] and "повністю (≥95% клітин) 12" in lines[0]
+    assert "лише грубіше за поріг 120" in lines[0]
+    tower = next(line for line in lines if line.strip().startswith("B01"))
+    assert "12/12 фасадів" in tower and "медіана 100%" in tower and "13 см/px" in tower
+    assert "0 м від початку" in tower                       # the origin is inside its footprint
+
+
+def test_coverage_warning_quotes_the_gsd_of_the_coarse_facades_not_the_sites_best():
+    buildings, facades = _site_like_dataset_1910()
+    _, warnings = coverage_report(buildings, facades, max_gsd_m=0.16, n_cameras=151)
+    assert len(warnings) == 1
+    w = warnings[0]
+    assert w.startswith("120 із 132 фасадів")
+    assert "найкраще 22.0 см/px" in w                      # the coarse ones, not 13 (the tower)
+    assert "13" not in w.split("(")[1].split(")")[0]
+    assert "з потрібною деталізацією 12" in w
+
+
+def test_coverage_report_lists_the_buildings_nearest_the_origin_first():
+    buildings, facades = _site_like_dataset_1910()
+    lines, _ = coverage_report(list(reversed(buildings)), facades, max_gsd_m=0.16, n_cameras=1,
+                               near=3)
+    listed = [line.strip().split(" ")[0] for line in lines if line.startswith("  ")]
+    assert listed == ["B01", "B02", "B03"]
+
+
+def test_coverage_report_without_any_coverage_or_with_nothing_seen():
+    buildings, facades = _site_like_dataset_1910()
+    bare = [f.model_copy(update={"coverage": None}) for f in facades]
+    assert coverage_report(buildings, bare, max_gsd_m=0.16, n_cameras=0) == ([], [])
+    unseen = [_covered_facade("B01/F0", visible=0, covered=0, best=None)]
+    lines, warnings = coverage_report(buildings[:1], unseen, max_gsd_m=0.16, n_cameras=3)
+    assert "0 із 1 фасадів" in lines[0] and "не видно 1" in lines[0]
+    assert lines[-1].strip().endswith("не видно") and not warnings
+
+
+def test_coverage_report_does_not_warn_when_most_facades_are_sharp():
+    buildings, facades = _site_like_dataset_1910()
+    sharp = [f.model_copy(update={"coverage": f.coverage.model_copy(update={"covered": 50})})
+             for f in facades]
+    _, warnings = coverage_report(buildings, sharp, max_gsd_m=0.16, n_cameras=151)
+    assert warnings == []
+
+
+def test_distance_to_footprint_is_zero_inside_and_euclidean_outside():
+    sq = _square(0, 0, 10)
+    assert distance_to_footprint(sq, (0, 0)) == 0.0
+    assert distance_to_footprint(sq, (13, 0)) == pytest.approx(3.0)
+    assert distance_to_footprint(sq, (13, 14)) == pytest.approx(5.0)
 
 # ── COLMAP model + frame transfer ────────────────────────────────────────
 def test_read_a_text_colmap_model(tmp_path):
