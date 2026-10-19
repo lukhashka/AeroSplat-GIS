@@ -131,6 +131,28 @@ def train_inputs(cfg: Cfg, L: RunLayout) -> tuple[Path, Path]:
     return colmap_dir, images_dir
 
 
+def masks_dir(cfg: Cfg, L: RunLayout) -> Path:
+    """Masks of the capture's frames: `masks_dir`, else `masks/` next to the images dir."""
+    if cfg["masks_dir"]:
+        return abs_path(cfg["masks_dir"], L.project_dir)
+    return L.footage.parent / "masks"
+
+
+def tensorboard_dir(L: RunLayout) -> Path:
+    """gs/splat.pt -> gs/splat_tensorboard (legacy: data/<ds>_splat_tensorboard)."""
+    return L.splat_pt.with_name(L.splat_pt.stem + "_tensorboard")
+
+
+def train_aux_inputs(cfg: Cfg, L: RunLayout) -> list[Path]:
+    """Extra inputs of the train stage that exist only with masks / depth switched on."""
+    out = []
+    if cfg["masks"]:
+        out.append(masks_dir(cfg, L))
+    if cfg["rasterizer"] == "gsplat" and cfg["depth_reg"] == "mvs":
+        out.append(L.dense / "stereo" / "depth_maps")
+    return out
+
+
 def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
     colmap_dir, images_dir = train_inputs(cfg, L)
     a = ["--input", str(L.cloud_in), "--output", str(L.splat_pt),
@@ -147,6 +169,24 @@ def argv_train(cfg: Cfg, L: RunLayout) -> list[str]:
             if k != "absgrad":
                 _flag("--" + k.replace("_", "-"), cfg[k], a)
         _switch("--absgrad", cfg["absgrad"], a)
+        if cfg["depth_reg"] == "mvs":
+            a += ["--depth-mvs", str(L.dense), "--depth-weight", str(cfg["depth_weight"]),
+                  "--depth-weight-final", str(cfg["depth_weight_final"])]
+        if cfg["checkpoint_every"]:
+            a += ["--checkpoint-every", str(cfg["checkpoint_every"]),
+                  "--checkpoint-keep", str(cfg["checkpoint_keep"])]
+        _switch("--resume", cfg["train_resume"], a)
+        if cfg["tensorboard"]:
+            a += ["--tensorboard", str(tensorboard_dir(L))]
+    if cfg["masks"]:
+        if images_dir == L.dense / "images" and not cfg["masks_dir"]:
+            # Masks next to the capture are drawn on the original frames; these are
+            # undistorted (and possibly cropped) copies, so pixels would not line up.
+            raise ValueError(
+                f"masks: тренування йде на undistorted-кадрах {images_dir}, а маски з "
+                f"{masks_dir(cfg, L)} намальовано на оригіналах — пікселі не збігатимуться. "
+                "Задай masks_dir з масками саме цих кадрів.")
+        _flag("--masks", masks_dir(cfg, L), a)
     _flag("--seed", cfg["train_seed"], a)
     _flag("--eval-every", cfg["eval_every"], a)
     _flag("--eval-interval", cfg["eval_interval"], a)
@@ -310,8 +350,20 @@ def _geo_skip(cfg: Cfg) -> str | None:
     return None
 
 
-def _gsplat_keys(cfg: Cfg) -> tuple[str, ...]:
-    return _GSPLAT if cfg["rasterizer"] == "gsplat" else ()
+def _train_extra_keys(cfg: Cfg) -> tuple[str, ...]:
+    """gsplat options, masks and depth regularisation: in the fingerprint only when used.
+
+    checkpoint_every/keep, train_resume and tensorboard never are: they do not
+    change the trained splat.
+    """
+    keys: tuple[str, ...] = ()
+    if cfg["rasterizer"] == "gsplat":
+        keys += _GSPLAT
+        if cfg["depth_reg"] != "none":
+            keys += ("depth_reg", "depth_weight", "depth_weight_final")
+    if cfg["masks"]:
+        keys += ("masks", "masks_dir")
+    return keys
 
 
 def _georef_skip(cfg: Cfg) -> str | None:
@@ -373,9 +425,9 @@ STAGES: dict[str, Stage] = {s.name: s for s in [
           _PARSE),
     Stage("train", "5/9  3D Gaussian Splatting (aerosplat.gs.trainer)",
           lambda c: "aerosplat.gs.trainer", argv_train,
-          lambda c, L: [L.cloud_in],
+          lambda c, L: [L.cloud_in] + train_aux_inputs(c, L),
           lambda c, L: [L.splat_pt],
-          _TRAIN, extra_keys=_gsplat_keys),
+          _TRAIN, extra_keys=_train_extra_keys),
     Stage("eval", "6/9  Оцінка якості на test-кадрах (metrics.json + report.html)",
           lambda c: "aerosplat.gs.evaluate", argv_eval,
           lambda c, L: [L.splat_pt],

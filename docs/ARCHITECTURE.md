@@ -1,4 +1,4 @@
-# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `main`, стан на 2026-10-15: S1 + S2 + Фаза 2.2 gsplat)
+# AeroSplat-GIS — поточна архітектура (v0.6.1, гілка `main`, стан на 2026-10-15: S1 + S2 + Фаза 2.2 gsplat; 2026-10-19: маски, глибина MVS, checkpoint/resume)
 
 > Документ описує **фактичний** стан коду, а не README. Там, де README
 > розходиться з кодом, правдою вважається код (див. §8).
@@ -196,6 +196,45 @@ flowchart TD
   DC-складова SH (ADR-0002, доповнення 2026-10-15). SH3 збільшує `.pt` ≈3.7×
   (≈470 МБ на 2M гаусіанів).
 
+Додаткова supervision і довгі прогони (2026-10-19, `gs/supervision.py`, `gs/checkpoint.py`).
+Усе вимкнено за замовчуванням; з вимкненими опціями цикл тренування той самий:
+
+* **Маски** (`masks: true`, `--masks DIR`; будь-який растерізатор). Конвенція COLMAP
+  (`ImageReader.mask_path`): маска кадру `<ім'я>` — `<ім'я>.png` (або `<stem>.png`) у
+  каталозі масок, 0 = піксель ігнорується. У конвеєрі каталог — `masks/` поруч із кадрами
+  захоплення (`<capture>/masks/`, legacy `data/<ds>/masks/`) або `masks_dir`. Маска
+  ресемплиться консервативно (піксель валідний, лише якщо весь його відбиток валідний).
+  У loss замасковані пікселі рендера замінюються на GT (`masked_photometric_loss`): нуль
+  похибки й нуль градієнта, тож вони не впливають і на densify (екранні градієнти);
+  L1 і SSIM усереднюються лише по валідних пікселях. Кадр без файлу маски — увесь валідний;
+  каталог без жодної відповідної маски — помилка. Якщо тренування йде на undistorted
+  `dense/images` (без known poses), маски з оригіналів не беруться — потрібен явний
+  `masks_dir`. Авто-маски неба немає навмисно (див. docstring `supervision.py`): хук — будь-який
+  сегментатор, що пише ці PNG. Стадія `eval` маски поки не враховує.
+* **Регуляризація глибиною MVS** (`depth_reg: mvs`, `--depth-mvs <dense>`; лише gsplat).
+  Цілі — `dense/stereo/depth_maps/<кадр>.geometric.bin` стадії `dense`; для кожного кадру
+  перевіряється, що поза й інтринсики карти (модель `dense/sparse`) збігаються з камерою
+  тренування, а камери тренування — без дисторсії; інакше помилка. Рендер — gsplat
+  `RGB+ED` (очікувана глибина); loss — середня відносна похибка |d̂ − d|/d по пікселях із
+  ціллю, непрозорістю рендера > 0.5 і поза маскою. Глибини MVS — у одиницях тієї самої
+  реконструкції, що й пози, тож масштаб і зсув не підбираються (на відміну від монокулярних
+  пріорів); у known-poses Earth Studio це метри. Вага `depth_weight` згасає лог-лінійно до
+  `depth_weight_final` (за замовчуванням 1.0 → 0.01, як у Inria).
+* **Checkpoint / resume** (`checkpoint_every`, `checkpoint_keep`, `train_resume`; лише gsplat).
+  `gs/splat_checkpoints/ckpt_<ітерація>.pt` (legacy: `<ds>_splat_checkpoints/`): параметри,
+  стани Adam, стан densify (MCMC/default), exposure, порядок камер семплера, RNG CPU і CUDA,
+  історія loss і «підпис» запуску (опції, кадри, маски/глибина, стартова хмара). Запис —
+  у `.tmp` + `os.replace`, тримаються останні N; при читанні пошкоджений найновіший
+  пропускається. Resume з іншим підписом — помилка з переліком відмінностей; новий запуск без
+  resume видаляє старі чекпойнти, а успішно завершений — свої (результат — `.pt`; на
+  останній ітерації чекпойнт не пишеться). Продовження відтворює прямий прогін з тією ж точністю, з якою
+  два прямі прогони відтворюють один одного (атомарні додавання CUDA в backward gsplat не
+  детерміновані). Чекпойнт важкий: параметри + 2 моменти Adam ≈ 3× розміру `.pt`.
+  Ці ключі не входять у відбиток стадії `train`.
+* **TensorBoard** (`tensorboard: true` → `gs/splat_tensorboard/`, `--tensorboard DIR`; лише gsplat):
+  loss, PSNR, кількість гаусіанів, lr, похибка глибини, test PSNR. Пакет `tensorboard` —
+  опційний extra; без нього — зрозуміла помилка на старті.
+
 Оцінка й геоприв'язка:
 
 * `gs/evaluate.py` + `gs/report.py` — PSNR/SSIM/LPIPS, FPS, розмір →
@@ -298,7 +337,7 @@ flowchart TD
   projects/<project>/project.yaml
   projects/<project>/sites/<site>/
   ├── site.yaml
-  ├── captures/<capture>/{capture.yaml, images/, images_private/, images.jsonl, source/}
+  ├── captures/<capture>/{capture.yaml, images/, images_private/, images.jsonl, source/, masks/?}
   ├── epochs/<epoch>/{epoch.yaml, runs/<run_id>/}
   │     runs/<run_id>/{manifest.json, run.log, images/, known_poses/, sfm/, mvs/, gs/, reports/}
   ├── authored/      # авторське, пайплайн сюди не пише (access_points, targets, audit)
@@ -1491,6 +1530,9 @@ train-кадр 30 (орбіта замкнута; середня різниця 
 | `mvs/fused.ply` (`colmap_output_<ds>/dense/`) | dense | parse | PLY |
 | `gs/dense.pt`, `gs/cloud.pt` (`<ds>_dense.pt`, `<ds>_cloud.pt`) | parse | train, georef; server — лише без геоприв'язки | `torch.save` dict (pickle) |
 | `gs/splat.pt` (`<ds>_splat.pt`) | train | eval, georef; server — лише без геоприв'язки | `torch.save` dict (pickle) |
+| `gs/splat_checkpoints/ckpt_*.pt` (`<ds>_splat_checkpoints/`) | train (`checkpoint_every`) | train (`train_resume`) | `torch.save` dict, лише тензори й прості типи (`weights_only`) |
+| `masks/<кадр>.png` поруч із кадрами захоплення | людина / сегментатор | train (`masks`) | PNG, 0 = ігнорувати піксель |
+| `mvs/stereo/depth_maps/*.geometric.bin` | dense | train (`depth_reg: mvs`) | COLMAP dense array (float32) |
 | `gs/{dense,cloud,splat}_wgs84.pt` (`<ds>_*_wgs84.pt`) | georef | server | той самий формат + ключ `frame` (WGS84 Site ENU, A, b, джерело) |
 | `reports/metrics.json`, `report.html` (`<ds>/run/`) | eval | людина | JSON / HTML |
 | `occupancy/occupancy.{npz,json}` | occupancy | mission (8.1b), SIL | npz (`state`, `esdf_cm`, колонки) + JSON `occupancy-v1` (§3.17) |

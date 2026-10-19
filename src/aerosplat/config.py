@@ -118,6 +118,22 @@ class RunConfig(BaseModel):
     mcmc_refine_stop_frac: float = Field(0.85, gt=0, le=1)  # MCMC relocation until this fraction
     # "exposure": per-train-image colour affine, training only (mixed sources).
     appearance: Literal["none", "exposure"] = "none"
+    # "mvs": relative depth error against the dense stage's MVS depth maps, weight
+    # depth_weight decaying log-linearly to depth_weight_final (aerosplat.gs.supervision).
+    depth_reg: Literal["none", "mvs"] = "none"
+    depth_weight: float = Field(1.0, gt=0)          # dataset_v6: see docs/BASELINE.md
+    depth_weight_final: float = Field(0.01, gt=0)
+    # Checkpoints every N iterations into gs/splat_checkpoints/ (0 = none); train_resume
+    # continues the train stage from the newest one. Neither changes the result.
+    checkpoint_every: int = Field(0, ge=0)
+    checkpoint_keep: int = Field(2, ge=1)
+    train_resume: bool = False
+    tensorboard: bool = False                          # scalars into gs/splat_tensorboard/
+
+    # -- 3DGS, any rasterizer: per-image masks (0 = pixel ignored by the loss) --
+    # masks_dir None = "masks" next to the capture's images (<footage>/../masks).
+    masks: bool = False
+    masks_dir: Optional[str] = None
 
     # -- evaluation (Фаза 2.1) ---------------------------------------------
     # Кожен N-й кадр — test (не тренується). 0 = без спліту і без стадії eval.
@@ -194,6 +210,12 @@ class RunConfig(BaseModel):
         if self.occupancy_bbox is not None and self.occupancy_extent != "auto":
             raise ValueError(f"occupancy_bbox and occupancy_extent={self.occupancy_extent!r} "
                              f"contradict each other: an explicit bbox needs extent 'auto'")
+        gsplat_only = [k for k, on in (("depth_reg", self.depth_reg != "none"),
+                                       ("checkpoint_every", self.checkpoint_every > 0),
+                                       ("train_resume", self.train_resume),
+                                       ("tensorboard", self.tensorboard)) if on]
+        if gsplat_only and self.rasterizer != "gsplat":
+            raise ValueError(f"{', '.join(gsplat_only)} require rasterizer='gsplat'")
         return self
 
     def to_dict(self) -> dict[str, Any]:

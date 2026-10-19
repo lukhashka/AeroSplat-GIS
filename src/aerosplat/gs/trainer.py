@@ -66,6 +66,10 @@
 ступеня, antialiased, densify default/absgrad/MCMC, per-image exposure. Окремий цикл
 (train_gsplat); підготовка (хмара, камери, спліт, KNN-масштаб) спільна з цим файлом.
 .pt той самий плюс `sh`, `sh_degree`, `render` (ADR-0002, доповнення 2026-10-15).
+
+Додатково (Фаза 2.2, 2026-10-19): маски кадрів (`--masks`, будь-який растерізатор) і
+регуляризація глибиною MVS (`--depth-mvs`) — aerosplat/gs/supervision.py; чекпойнти й
+resume (`--checkpoint-every`, `--resume`) і TensorBoard — лише gsplat (gs/checkpoint.py).
 """
 
 import os
@@ -197,6 +201,11 @@ class Camera:
     H: int
     name: str
     image: Optional[Tensor] = None   # (H,W,3) float [0,1], лежить на CPU
+    # Optional supervision (aerosplat.gs.supervision), (H,W) on the CPU like `image`:
+    # mask — bool, True = the pixel takes part in the loss; depth — z-depth in
+    # world units, 0 = no target.
+    mask: Optional[Tensor] = None
+    depth: Optional[Tensor] = None
 
     def view_matrix(self, device) -> Tensor:
         V = torch.eye(4, device=device)
@@ -219,8 +228,13 @@ class Camera:
                 img.permute(2, 0, 1).unsqueeze(0), size=(H, W),
                 mode="bilinear", align_corners=False,
             ).squeeze(0).permute(1, 2, 0).contiguous()
+        mask = depth = None
+        if self.mask is not None or self.depth is not None:
+            from aerosplat.gs.supervision import resize_depth, resize_mask
+            mask = resize_mask(self.mask, W, H) if self.mask is not None else None
+            depth = resize_depth(self.depth, W, H) if self.depth is not None else None
         return Camera(self.R, self.t, self.fx * factor, self.fy * factor,
-                      self.cx * factor, self.cy * factor, W, H, self.name, img)
+                      self.cx * factor, self.cy * factor, W, H, self.name, img, mask, depth)
 
 
 # Кількість параметрів для кожної моделі камери COLMAP
@@ -920,6 +934,11 @@ def l1_loss(pred: Tensor, gt: Tensor) -> Tensor:
 
 def ssim_loss(pred: Tensor, gt: Tensor, window_size: int = 11) -> Tensor:
     """1 - SSIM. pred/gt: (C,H,W) або (B,C,H,W), значення в [0,1]."""
+    return 1.0 - ssim_map(pred, gt, window_size).mean()
+
+
+def ssim_map(pred: Tensor, gt: Tensor, window_size: int = 11) -> Tensor:
+    """Per-pixel SSIM, (B,C,H,W). pred/gt: (C,H,W) або (B,C,H,W), значення в [0,1]."""
     if pred.dim() == 3:
         pred, gt = pred.unsqueeze(0), gt.unsqueeze(0)
     C1, C2 = 0.01 ** 2, 0.03 ** 2
@@ -935,14 +954,33 @@ def ssim_loss(pred: Tensor, gt: Tensor, window_size: int = 11) -> Tensor:
     sig_y2 = F.conv2d(gt * gt, kernel, padding=pad, groups=ch) - mu_y2
     sig_xy = F.conv2d(pred * gt, kernel, padding=pad, groups=ch) - mu_xy
 
-    ssim_map = (((2 * mu_xy + C1) * (2 * sig_xy + C2)) /
-                ((mu_x2 + mu_y2 + C1) * (sig_x2 + sig_y2 + C2)))
-    return 1.0 - ssim_map.mean()
+    return (((2 * mu_xy + C1) * (2 * sig_xy + C2)) /
+            ((mu_x2 + mu_y2 + C1) * (sig_x2 + sig_y2 + C2)))
 
 
 def photometric_loss(pred: Tensor, gt: Tensor, lambda_ssim: float = 0.2) -> Tensor:
     """L = (1-λ)·L₁ + λ·L_SSIM,  λ = 0.2 (Kerbl et al. 2023)"""
     return (1.0 - lambda_ssim) * l1_loss(pred, gt) + lambda_ssim * ssim_loss(pred, gt)
+
+
+def masked_photometric_loss(pred: Tensor, gt: Tensor, valid: Tensor,
+                            lambda_ssim: float = 0.2) -> Tensor:
+    """photometric_loss over the pixels where `valid` (H,W) is True; pred/gt (C,H,W).
+
+    Masked pixels of the render are replaced by the ground truth before the
+    loss, so they contribute neither error nor gradient (hence nothing to the
+    screen-space gradients that drive densification), and SSIM windows that
+    straddle the mask edge see the ground truth there instead of whatever the
+    render has. Both terms are averaged over the valid pixels only, so the loss
+    scale does not depend on the masked share.
+    """
+    keep = valid.to(torch.bool).unsqueeze(0)                 # (1,H,W)
+    pred_m = torch.where(keep, pred, gt)
+    m = keep.to(pred.dtype)
+    n = m.sum().clamp(min=1.0) * pred.shape[0]
+    l1 = (pred_m - gt).abs().sum() / n
+    dssim = ((1.0 - ssim_map(pred_m, gt)[0]) * m).sum() / n     # = 1 − mean valid SSIM
+    return (1.0 - lambda_ssim) * l1 + lambda_ssim * dssim
 
 
 def psnr(pred: Tensor, gt: Tensor) -> float:
@@ -1277,6 +1315,15 @@ def train(
     mcmc_noise_lr: float = 5e5,
     mcmc_refine_stop_frac: float = 0.85,
     appearance: str = "none",
+    depth_mvs_dir: Optional[str] = None,
+    depth_weight: float = 0.0,
+    depth_weight_final: float = 0.01,
+    checkpoint_every: int = 0,
+    checkpoint_keep: int = 2,
+    resume: bool = False,
+    tensorboard_dir: Optional[str] = None,
+    # ── усі растерізатори (aerosplat.gs.supervision) ──
+    masks_dir: Optional[str] = None,
     # ── сумісність зі старою сигнатурою v3 (якщо train() кличуть з коду) ──
     use_cuda_rasterizer: Optional[bool] = None,
     H: Optional[int] = None,
@@ -1291,6 +1338,17 @@ def train(
     self_test_cloud = self_test
     if not self_test and not (colmap_dir and images_dir):
         raise ValueError("Потрібні --colmap і --images (або явний --self-test).")
+    gsplat_only = [name for name, on in (
+        ("depth", bool(depth_mvs_dir or depth_weight)), ("checkpoint_every", bool(checkpoint_every)),
+        ("resume", resume), ("tensorboard", bool(tensorboard_dir))) if on]
+    if gsplat_only and rasterizer_kind != "gsplat":
+        # Not silently ignored: a run the user expects to resume or to be depth-supervised
+        # must not quietly train without it.
+        raise ValueError(f"{', '.join(gsplat_only)} працюють лише з rasterizer=gsplat "
+                         f"(зараз {rasterizer_kind})")
+    if bool(depth_mvs_dir) != (depth_weight > 0):
+        raise ValueError("Глибина: потрібні і --depth-mvs (каталог dense), і --depth-weight > 0 "
+                         f"(зараз {depth_mvs_dir!r}, {depth_weight})")
     torch.manual_seed(seed)
     t_start = time.time()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1336,7 +1394,16 @@ def train(
         cams = attach_images(cams, images_dir, max_res=max_res)
         log(f"  Кадрів завантажено: {len(cams)} "
             f"({cams[0].W}×{cams[0].H}) за {time.time()-t0:.1f}s")
+        if masks_dir or depth_mvs_dir:
+            from aerosplat.gs.supervision import attach_masks, attach_mvs_depth
+            if masks_dir:
+                attach_masks(cams, masks_dir)
+            if depth_mvs_dir:
+                attach_mvs_depth(cams, depth_mvs_dir, train_sparse=colmap_dir)
     else:
+        if masks_dir or depth_mvs_dir:
+            raise ValueError("Маски й глибина потребують справжніх кадрів (--colmap/--images), "
+                             "не --self-test")
         self_test = True
         log("  ⚠️  --colmap / --images не задані.")
         log("  ⚠️  SELF-TEST: синтетичні камери, ground truth — рендер самої ж")
@@ -1395,7 +1462,10 @@ def train(
             max_aniso_ratio=max_aniso_ratio, mcmc_opacity_reg=mcmc_opacity_reg,
             mcmc_scale_reg=mcmc_scale_reg, mcmc_noise_lr=mcmc_noise_lr,
             mcmc_refine_stop=int(num_iterations * mcmc_refine_stop_frac), appearance=appearance,
-            warmup_iters=warmup_iters, eval_interval=eval_interval, save_every=save_every)
+            warmup_iters=warmup_iters, eval_interval=eval_interval, save_every=save_every,
+            depth_weight=depth_weight, depth_weight_final=depth_weight_final,
+            checkpoint_every=checkpoint_every, checkpoint_keep=checkpoint_keep, resume=resume,
+            tensorboard_dir=tensorboard_dir)
         if self_test:
             _self_test_ground_truth(GaussianModel(xyz0, rgb0, init_scale=scales).to(device),
                                     cams, device, chunk)
@@ -1463,7 +1533,11 @@ def train(
         rendered, aux = rasterizer.render(params, cam, cam.view_matrix(device),
                                           bg_color, screen_pts=screen_pts)
 
-        loss = photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1))
+        if cam.mask is None:
+            loss = photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1))
+        else:
+            loss = masked_photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1),
+                                           cam.mask.to(device, non_blocking=True))
         if scale_reg:
             loss = loss + scale_reg * anisotropy_penalty(model._scaling, max_aniso_ratio)
         loss.backward()
@@ -1626,6 +1700,23 @@ def main(argv=None) -> int:
                    help="до якої частки ітерацій MCMC релокує «мертві» сплати (gsplat: 25k/30k)")
     g.add_argument("--appearance", choices=["none", "exposure"], default="none",
                    help="exposure = афінна корекція кольору на кожен train-кадр (лише в тренуванні)")
+    g.add_argument("--depth-mvs", default=None,
+                   help="каталог dense (COLMAP MVS): регуляризація глибиною з "
+                        "stereo/depth_maps/<кадр>.geometric.bin; разом із --depth-weight")
+    g.add_argument("--depth-weight", type=float, default=0.0,
+                   help="вага відносної похибки глибини на старті (0 = вимкнено)")
+    g.add_argument("--depth-weight-final", type=float, default=0.01,
+                   help="вага в кінці (лог-лінійне згасання)")
+    g.add_argument("--checkpoint-every", type=int, default=0,
+                   help="чекпойнт кожні N ітерацій у <output>_checkpoints/ (0 = вимкнено)")
+    g.add_argument("--checkpoint-keep", type=int, default=2, help="скільки останніх чекпойнтів тримати")
+    g.add_argument("--resume", action="store_true",
+                   help="продовжити з останнього чекпойнта (якщо його немає — з нуля)")
+    g.add_argument("--tensorboard", default=None, metavar="DIR",
+                   help="писати скаляри TensorBoard у DIR (потрібен пакет tensorboard)")
+    parser.add_argument("--masks", default=None,
+                        help="каталог масок: <кадр>.png, 0 = піксель не бере участі в loss "
+                             "(aerosplat.gs.supervision); будь-який растерізатор")
     args = parser.parse_args(argv)
     if not args.self_test and not (args.input and args.colmap and args.images):
         parser.error("--input, --colmap і --images обов'язкові "
@@ -1677,6 +1768,14 @@ def main(argv=None) -> int:
         mcmc_noise_lr=args.mcmc_noise_lr,
         mcmc_refine_stop_frac=args.mcmc_refine_stop_frac,
         appearance=args.appearance,
+        depth_mvs_dir=resolve(args.depth_mvs),
+        depth_weight=args.depth_weight,
+        depth_weight_final=args.depth_weight_final,
+        checkpoint_every=args.checkpoint_every,
+        checkpoint_keep=args.checkpoint_keep,
+        resume=args.resume,
+        tensorboard_dir=resolve(args.tensorboard),
+        masks_dir=resolve(args.masks),
     )
     return 0
 

@@ -32,7 +32,7 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -40,10 +40,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from aerosplat.gs.checkpoint import (
+    checkpoint_dir, clear_checkpoints, load_latest_checkpoint, signature_diff, write_checkpoint,
+)
 from aerosplat.gs.sh import MAX_SH_DEGREE, num_sh_bases, rgb_to_sh_dc, sh_dc_to_rgb, sh_degree_of
+from aerosplat.gs.supervision import (
+    DEPTH_MIN_ALPHA, depth_loss, depth_weight_at, supervision_summary,
+)
 from aerosplat.gs.trainer import (
-    Camera, CameraSampler, anisotropy_penalty, inverse_sigmoid, log, photometric_loss, psnr,
-    xyz_lr_at,
+    Camera, CameraSampler, anisotropy_penalty, inverse_sigmoid, log, masked_photometric_loss,
+    photometric_loss, psnr, xyz_lr_at,
 )
 
 RASTERIZE_MODES = ("classic", "antialiased")
@@ -255,6 +261,22 @@ class GsplatRasterizer:
     def rasterize(self, params: Dict[str, Tensor], cam: Camera, view: Tensor, bg_color: Tensor,
                   sh_degree: Optional[int] = None) -> Tuple[Tensor, Dict[str, Any]]:
         """(H, W, 3) unclamped render and gsplat's meta (means2d, radii, ...)."""
+        renders, _, meta = self._rasterize(params, cam, view, bg_color, sh_degree, "RGB")
+        return renders[0], meta
+
+    def rasterize_with_depth(self, params: Dict[str, Tensor], cam: Camera, view: Tensor,
+                             bg_color: Tensor, sh_degree: Optional[int] = None
+                             ) -> Tuple[Tensor, Tensor, Tensor, Dict[str, Any]]:
+        """rasterize() plus the expected z-depth (H, W) and accumulated opacity (H, W).
+
+        Expected depth = Σ wᵢ zᵢ / Σ wᵢ (gsplat "RGB+ED"); the colour channels are
+        computed exactly as in rasterize().
+        """
+        renders, alphas, meta = self._rasterize(params, cam, view, bg_color, sh_degree, "RGB+ED")
+        return renders[0, ..., :3], renders[0, ..., 3], alphas[0, ..., 0], meta
+
+    def _rasterize(self, params: Dict[str, Tensor], cam: Camera, view: Tensor, bg_color: Tensor,
+                   sh_degree: Optional[int], render_mode: str) -> Tuple[Tensor, Tensor, Dict[str, Any]]:
         device = params["xyz"].device
         K = torch.tensor([[cam.fx, 0.0, cam.cx], [0.0, cam.fy, cam.cy], [0.0, 0.0, 1.0]],
                          device=device)
@@ -265,13 +287,13 @@ class GsplatRasterizer:
             colors, degree = sh, available if sh_degree is None else min(sh_degree, available)
         else:
             colors, degree = params["rgb"], None
-        renders, _, meta = self._rasterization(
+        return self._rasterization(
             means=params["xyz"], quats=params["rotation"], scales=params["scale"],
             opacities=params["opacity"].reshape(-1), colors=colors,
             viewmats=view[None], Ks=K[None], width=int(cam.W), height=int(cam.H),
             near_plane=NEAR_PLANE, sh_degree=degree, packed=self.packed, absgrad=self.absgrad,
-            rasterize_mode=self.rasterize_mode, backgrounds=bg_color[None])
-        return renders[0], meta
+            rasterize_mode=self.rasterize_mode, backgrounds=bg_color[None],
+            render_mode=render_mode)
 
     def render(self, params: Dict[str, Tensor], cam: Camera, view: Tensor, bg_color: Tensor,
                screen_pts: Optional[Tensor] = None) -> Tuple[Tensor, Dict[str, Any]]:
@@ -485,6 +507,16 @@ class GsplatOptions:
     warmup_iters: int = 0
     eval_interval: int = 1000
     save_every: int = 0
+    # Depth supervision (cameras with `depth`, aerosplat.gs.supervision): weight of the
+    # relative depth error, decaying log-linearly to depth_weight_final; 0 = off.
+    depth_weight: float = 0.0
+    depth_weight_final: float = 0.01
+    # Checkpoints every N iterations (0 = none), newest `checkpoint_keep` kept;
+    # resume = continue from the newest one in checkpoint_dir(output_path).
+    checkpoint_every: int = 0
+    checkpoint_keep: int = 2
+    resume: bool = False
+    tensorboard_dir: Optional[str] = None
 
     def __post_init__(self) -> None:
         for name, value, allowed in (("rasterize_mode", self.rasterize_mode, RASTERIZE_MODES),
@@ -494,6 +526,12 @@ class GsplatOptions:
                 raise ValueError(f"{name} must be one of {allowed}, got {value!r}")
         if not 0 <= self.sh_degree <= MAX_SH_DEGREE:
             raise ValueError(f"sh_degree must be 0..{MAX_SH_DEGREE}, got {self.sh_degree}")
+        if self.depth_weight < 0 or self.depth_weight_final <= 0:
+            raise ValueError("depth_weight must be >= 0 and depth_weight_final > 0, got "
+                             f"{self.depth_weight} / {self.depth_weight_final}")
+        if self.checkpoint_every < 0 or self.checkpoint_keep < 1:
+            raise ValueError("checkpoint_every must be >= 0 and checkpoint_keep >= 1, got "
+                             f"{self.checkpoint_every} / {self.checkpoint_keep}")
 
     def active_sh_degree(self, iteration: int) -> int:
         """Bands switched on so far: one more every `sh_degree_interval` iterations."""
@@ -506,15 +544,53 @@ class GsplatOptions:
                                         else "")
         sh = (f"SH ≤ {self.sh_degree}, +1 ступінь / {self.sh_degree_interval} іт."
               if self.sh_degree and self.sh_degree_interval else f"SH {self.sh_degree}")
+        depth = (f", depth {self.depth_weight:g}→{self.depth_weight_final:g}"
+                 if self.depth_weight else "")
         return (f"gsplat ({self.rasterize_mode}, {sh}, densify {dens}, "
-                f"appearance {self.appearance})")
+                f"appearance {self.appearance}{depth})")
+
+
+# Options that do not change what is trained: a checkpoint written with other
+# values of these is resumed all the same.
+_RESUME_NEUTRAL = ("eval_interval", "save_every", "checkpoint_every", "checkpoint_keep", "resume",
+                   "tensorboard_dir")
+
+
+def run_signature(opts: GsplatOptions, *, train_cams: List[Camera], extent: float,
+                  xyz0: Tensor) -> Dict[str, Any]:
+    """What a checkpoint must match to be resumed: options, frames, supervision, start cloud."""
+    masked, with_depth = supervision_summary(train_cams)
+    return {
+        "options": {k: v for k, v in asdict(opts).items() if k not in _RESUME_NEUTRAL},
+        "train_images": [c.name for c in train_cams],
+        "masked_images": masked,
+        "depth_images": with_depth,
+        "extent": f"{extent:.6e}",
+        "init_points": int(xyz0.shape[0]),
+        "init_sum": f"{float(xyz0.double().sum()):.6e}",
+    }
+
+
+def _tensorboard_writer(log_dir: str):
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ImportError as e:   # torch raises this when the tensorboard package is absent
+        raise ImportError("TensorBoard-лог потребує пакета tensorboard: pip install tensorboard "
+                          "(extra `aerosplat[tensorboard]`) або вимкни tensorboard") from e
+    os.makedirs(log_dir, exist_ok=True)
+    return SummaryWriter(log_dir=log_dir)
 
 
 def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale: Tensor,
                  train_cams: List[Camera], test_cams: List[Camera], extent: float,
                  device: torch.device, output_path: str,
                  cams_warm: Optional[List[Camera]] = None) -> SplatModel:
-    """Train on `train_cams` and save the .pt to `output_path` (see save_splat)."""
+    """Train on `train_cams` and save the .pt to `output_path` (see save_splat).
+
+    Cameras with `mask` are trained on their valid pixels only; with `depth` and
+    `opts.depth_weight` > 0 the relative depth error is added (supervision.py).
+    `opts.checkpoint_every` / `opts.resume`: see aerosplat.gs.checkpoint.
+    """
     from aerosplat.gs.evaluate import mean_test_psnr
 
     mcmc = opts.densify_strategy == "mcmc"
@@ -523,6 +599,10 @@ def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale:
     log(f"  Растерізатор: {opts.describe()}")
     if opts.absgrad and mcmc:
         log("  ⚠️  absgrad ігнорується з densify_strategy=mcmc (MCMC не дивиться на градієнти).")
+    use_depth = opts.depth_weight > 0
+    if use_depth and not any(c.depth is not None for c in train_cams):
+        raise ValueError("depth_weight > 0, але жоден train-кадр не має карти глибини")
+    writer = _tensorboard_writer(opts.tensorboard_dir) if opts.tensorboard_dir else None
 
     model = SplatModel(xyz0, rgb0, init_scale, opts.sh_degree,
                        init_opacity=0.5 if mcmc else 0.1).to(device)
@@ -546,10 +626,69 @@ def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale:
     bg_color = torch.zeros(3, device=device)
     sampler = CameraSampler(len(train_cams))
     losses: List[float] = []
-    t_loop = time.time()
     n_iter = opts.num_iterations
 
-    for iteration in range(1, n_iter + 1):
+    # ── Checkpoints ─────────────────────────────────────────────────
+    signature = run_signature(opts, train_cams=train_cams, extent=extent, xyz0=xyz0)
+    ckpt_dir = checkpoint_dir(output_path)
+    start = 1
+    if opts.resume:
+        found = load_latest_checkpoint(ckpt_dir, device)
+        if found is None:
+            log(f"  Resume: чекпойнтів у {ckpt_dir} немає — тренування з нуля.")
+        else:
+            path, ckpt = found
+            diff = signature_diff(ckpt["signature"], signature)
+            if diff:
+                raise RuntimeError(
+                    f"Чекпойнт {path} записано з іншими налаштуваннями або входами: "
+                    + "; ".join(diff[:8]) + ". Продовжити його цим запуском не можна — поверни "
+                    f"налаштування, вимкни resume або видали {ckpt_dir}.")
+            for name, value in ckpt["splats"].items():
+                model.splats[name] = nn.Parameter(value.to(device))
+            optimizers = create_optimizers(model, extent)
+            for name, opt in optimizers.items():
+                opt.load_state_dict(ckpt["optimizers"][name])
+            dens_state = {k: v.to(device) for k, v in ckpt["densifier"].items()}
+            if mcmc_dens is not None:
+                mcmc_dens.state = dens_state
+            elif densifier is not None:
+                densifier.state = dens_state
+            if exposure is not None and exposure_opt is not None:
+                exposure.load_state_dict(ckpt["exposure"])
+                exposure_opt.load_state_dict(ckpt["exposure_opt"])
+            sampler._order = [int(i) for i in ckpt["sampler_order"]]
+            losses = [float(v) for v in ckpt["losses"]]
+            torch.set_rng_state(ckpt["rng_cpu"].cpu())
+            if device.type == "cuda" and ckpt["rng_cuda"] is not None:
+                torch.cuda.set_rng_state(ckpt["rng_cuda"].cpu(), device)
+            start = int(ckpt["iteration"]) + 1
+            log(f"  Resume: {path} → з ітерації {start} ({model.n_gaussians:,} Гаусіанів)")
+    elif opts.checkpoint_every:
+        stale = clear_checkpoints(ckpt_dir)
+        if stale:
+            log(f"  Видалено {stale} чекпойнт(ів) попереднього запуску з {ckpt_dir}")
+
+    def save_checkpoint(iteration: int) -> None:
+        t0 = time.time()
+        payload = {
+            "signature": signature,
+            "splats": {k: v.detach() for k, v in model.splats.items()},
+            "optimizers": {k: o.state_dict() for k, o in optimizers.items()},
+            "densifier": dict(mcmc_dens.state if mcmc_dens is not None
+                              else densifier.state if densifier is not None else {}),
+            "exposure": exposure.state_dict() if exposure is not None else None,
+            "exposure_opt": exposure_opt.state_dict() if exposure_opt is not None else None,
+            "sampler_order": list(sampler._order),
+            "rng_cpu": torch.get_rng_state(),
+            "rng_cuda": torch.cuda.get_rng_state(device) if device.type == "cuda" else None,
+            "losses": losses,
+        }
+        path = write_checkpoint(ckpt_dir, iteration, payload, opts.checkpoint_keep)
+        log(f"    Чекпойнт {path} ({time.time() - t0:.1f}s)")
+
+    t_loop = time.time()
+    for iteration in range(start, n_iter + 1):
         lr_xyz = xyz_lr_at(iteration, n_iter, extent)
         optimizers["means"].param_groups[0]["lr"] = lr_xyz
         sh_deg = opts.active_sh_degree(iteration)
@@ -561,14 +700,32 @@ def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale:
         gt = cam.image.to(device, non_blocking=True)
 
         params = model.get_params()
-        rendered, meta = raster.rasterize(params, cam, cam.view_matrix(device), bg_color,
-                                          sh_degree=sh_deg)
+        depth_on = use_depth and cam.depth is not None
+        if depth_on:
+            rendered, depth_pred, alpha, meta = raster.rasterize_with_depth(
+                params, cam, cam.view_matrix(device), bg_color, sh_degree=sh_deg)
+        else:
+            rendered, meta = raster.rasterize(params, cam, cam.view_matrix(device), bg_color,
+                                              sh_degree=sh_deg)
         if densifier is not None:
             meta["means2d"].retain_grad()
         if exposure is not None:
             rendered = exposure(rendered, pick)
 
-        loss = photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1))
+        valid = cam.mask.to(device, non_blocking=True) if cam.mask is not None else None
+        if valid is None:
+            loss = photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1))
+        else:
+            loss = masked_photometric_loss(rendered.permute(2, 0, 1), gt.permute(2, 0, 1), valid)
+        d_loss: Optional[Tensor] = None
+        if depth_on:
+            assert cam.depth is not None
+            valid_d = alpha.detach() > DEPTH_MIN_ALPHA
+            if valid is not None:
+                valid_d &= valid
+            d_loss = depth_loss(depth_pred, cam.depth.to(device, non_blocking=True), valid_d)
+            loss = loss + depth_weight_at(iteration, n_iter, opts.depth_weight,
+                                          opts.depth_weight_final) * d_loss
         if opts.scale_reg:
             loss = loss + opts.scale_reg * anisotropy_penalty(model.splats["scales"],
                                                               opts.max_aniso_ratio)
@@ -607,24 +764,46 @@ def train_gsplat(opts: GsplatOptions, *, xyz0: Tensor, rgb0: Tensor, init_scale:
         if iteration % 50 == 0 or iteration == 1:
             with torch.no_grad():
                 psnr_val = psnr(rendered.clamp(0, 1), gt)
-            per_it = (time.time() - t_loop) / iteration
+            per_it = (time.time() - t_loop) / (iteration - start + 1)
             eta = per_it * (n_iter - iteration)
+            depth_txt = f" | depth {float(d_loss):.4f}" if d_loss is not None else ""
             log(f"  [{iteration:>6}/{n_iter}] loss {loss.item():.4f} | "
                 f"PSNR {psnr_val:5.2f} | N {model.n_gaussians:,} | SH {sh_deg} | "
-                f"lr_xyz {lr_xyz:.2e} | {per_it*1000:6.1f} ms/it | ETA {eta/60:.1f} min")
+                f"lr_xyz {lr_xyz:.2e}{depth_txt} | {per_it*1000:6.1f} ms/it | ETA {eta/60:.1f} min")
+            if writer is not None:
+                writer.add_scalar("train/loss", loss.item(), iteration)
+                writer.add_scalar("train/psnr", psnr_val, iteration)
+                writer.add_scalar("train/n_gaussians", model.n_gaussians, iteration)
+                writer.add_scalar("train/lr_xyz", lr_xyz, iteration)
+                if d_loss is not None:
+                    writer.add_scalar("train/depth_rel_error", float(d_loss), iteration)
 
         if test_cams and opts.eval_interval and iteration % opts.eval_interval == 0:
             raster.sh_degree = sh_deg
             test_psnr = mean_test_psnr(model.get_params(), raster, test_cams, device)
             log(f"    Test PSNR @ {iteration}: {test_psnr:.2f} dB ({len(test_cams)} кадрів)")
+            if writer is not None:
+                writer.add_scalar("test/psnr", test_psnr, iteration)
+                writer.flush()
 
         if opts.save_every and iteration % opts.save_every == 0:
             save_splat(model, output_path, opts.rasterize_mode)
+        if opts.checkpoint_every and iteration % opts.checkpoint_every == 0 and iteration < n_iter:
+            save_checkpoint(iteration)
 
     extra: Dict[str, Any] = {}
     if exposure is not None:
         extra["appearance"] = {"kind": "exposure", "images": [c.name for c in train_cams],
                                "affine": exposure.affine().detach().cpu()}
     save_splat(model, output_path, opts.rasterize_mode, extra)
-    log(f"\n  Середній loss: {sum(losses)/len(losses):.4f}")
+    if opts.checkpoint_every or opts.resume:
+        # The run is complete: its checkpoints (~3x the .pt each) can no longer be used —
+        # resuming would be a no-op and any changed setting is refused.
+        n_done = clear_checkpoints(ckpt_dir)
+        if n_done:
+            log(f"  Тренування завершено — видалено {n_done} чекпойнт(ів) з {ckpt_dir}")
+    if writer is not None:
+        writer.close()
+    if losses:
+        log(f"\n  Середній loss: {sum(losses)/len(losses):.4f}")
     return model

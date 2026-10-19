@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 # torch must match your CUDA build — see requirements.txt / README for the index URL.
 train = ["torch>=2.2", "torchvision>=0.17"]
+# Optional training log (`tensorboard: true` / `--tensorboard DIR`, gsplat only).
+tensorboard = ["tensorboard>=2.14"]
 dev = ["pytest", "ruff", "mypy", "httpx"]
 # ArduPilot SITL harness (aerosplat.sim, `pytest -m sitl`); SITL itself runs in WSL2 / Linux.
 sim = ["pymavlink==2.4.50"]
