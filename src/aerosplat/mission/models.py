@@ -51,6 +51,8 @@ class Code(str, Enum):
     ap_missing = "ap_missing"
     outside_grid = "outside_grid"               # the mission leaves the occupancy grid: no check
     no_takeoff_spot = "no_takeoff_spot"         # home search found no spot for this profile
+    # the takeoff search, run again, no longer proposes the spot the operator chose from it
+    takeoff_spot_changed = "takeoff_spot_changed"
     target_not_confirmed = "target_not_confirmed"
     target_revoked = "target_revoked"
     target_changed = "target_changed"           # the access point was edited after confirmation
@@ -288,7 +290,9 @@ class TakeoffCandidate(_Model):
 class TakeoffSearch(_Model):
     """Every candidate found, or an honest account of why there is none."""
 
-    target: Vec3
+    target: Vec3                            # where the transit ends: E, or the pad
+    # How the planner's approach put `target` there ("" : the direct approach, or a given point).
+    approach_note: str = ""
     radius_m: float                         # takeoff corridor r = r_drone + m + k·σ_transit
     relief_m: float                         # ground bumps the takeoff leg ignores
     sigma_transit_m: float                  # hypot(σ_georef, σ_GNSS)
@@ -327,6 +331,8 @@ class Approach(_Model):
     heading_deg: Optional[float] = None     # compass yaw at H (towards the opening); None: free
     candidates: int = 1                     # directions tried
     candidate_clearance_m: list[tuple[float, float, float]] = Field(default_factory=list)
+    # Directions of the cone not tried: E or H closer to the grid's edge than r + 2 voxels.
+    candidates_outside_grid: int = 0
 
 
 class Leg(_Model):

@@ -1,9 +1,11 @@
 // The takeoff-spot search and mission planning from the page (api_mission): what to send, how
 // to read the answers. No React and no runtime imports, so `npm test` runs it under plain Node.
-import type { MissionCreate, MissionRefusal, PlanningProfile, TakeoffQuery, Vec3 } from "../api/types";
+import type { MissionCreate, MissionRefusal, PlanningProfile, TakeoffParams, TakeoffQuery, Vec3 } from "../api/types";
 
-// Server defaults of TakeoffQuery; `home_search` always searches with these.
-export const SEARCH_DEFAULTS = { max_distance_m: 150, n: 5 } as const;
+// Server defaults of TakeoffParams; `home_search` always searches with these.
+export const SEARCH_DEFAULTS = { max_distance_m: 150, n: 5, ground_tol_m: 1, max_checks: 40 } as const;
+// The server's bounds of max_checks (api_mission.TakeoffParams).
+export const MAX_CHECKS_LIMIT = 400;
 
 /** Why columns were rejected (aerosplat.mission.takeoff.REASONS), each under its first failed test. */
 export const REJECT_LABEL: Record<string, string> = {
@@ -35,6 +37,15 @@ export function parseOptional(text: string): { value: number | undefined } | { e
   return Number.isFinite(v) ? { value: v } : { error: `«${text.trim()}» — не число` };
 }
 
+/** A count typed by the operator (max_checks): blank is the server's default, else a whole number in 1..max. */
+export function parseCount(text: string, max: number): { value: number | undefined } | { error: string } {
+  const p = parseOptional(text);
+  if ("error" in p || p.value === undefined) return p;
+  return Number.isInteger(p.value) && p.value >= 1 && p.value <= max
+    ? p
+    : { error: `«${text.trim()}» — потрібне ціле число від 1 до ${max}` };
+}
+
 /** The profile from the form: only what was typed; an unparsable field is an error, never a default. */
 export function profileFromForm(form: { sigma_gnss_m: string; r_drone_m: string }):
   | { profile: PlanningProfile | undefined }
@@ -56,18 +67,34 @@ export function searchKey(targetId: string, q: TakeoffQuery): string {
     q.profile ?? {},
     q.max_distance_m ?? SEARCH_DEFAULTS.max_distance_m,
     q.n ?? SEARCH_DEFAULTS.n,
+    q.ground_tol_m ?? SEARCH_DEFAULTS.ground_tol_m,
+    q.max_checks ?? SEARCH_DEFAULTS.max_checks,
   ]);
 }
 
-export type HomeChoice = { kind: "candidate"; enu: Vec3 } | { kind: "search" };
+/** Only the search's own parameters of a query (the server refuses anything else in home_from_search). */
+export function searchParams(q: TakeoffParams): TakeoffParams {
+  const out: TakeoffParams = {};
+  for (const key of ["max_distance_m", "n", "ground_tol_m", "max_checks"] as const) {
+    if (q[key] !== undefined) out[key] = q[key];
+  }
+  return out;
+}
 
-/** POST /missions body: home from a chosen candidate, or from the server's own search — never both. */
+/** Candidate #rank of the search made with `search`, or the server's own search (`home_search`). */
+export type HomeChoice = { kind: "candidate"; rank: number; enu: Vec3; search: TakeoffParams } | { kind: "search" };
+
+/** POST /missions body: home from a chosen candidate, or from the server's own search — never both.
+ *  A candidate goes as home_enu plus where it came from; the server runs that search again and
+ *  refuses (409 takeoff_spot_changed) when #rank is no longer that spot. */
 export function planBody(targetId: string, home: HomeChoice, opts: { run_id?: string; profile?: PlanningProfile } = {}): MissionCreate {
   const body: MissionCreate = { target_id: targetId };
   if (opts.run_id) body.run_id = opts.run_id;
   if (opts.profile && Object.keys(opts.profile).length) body.profile = opts.profile;
-  if (home.kind === "candidate") body.home_enu = [home.enu[0], home.enu[1], home.enu[2]];
-  else body.home_search = true;
+  if (home.kind === "candidate") {
+    body.home_enu = [home.enu[0], home.enu[1], home.enu[2]];
+    body.home_from_search = { rank: home.rank, ...searchParams(home.search) };
+  } else body.home_search = true;
   return body;
 }
 

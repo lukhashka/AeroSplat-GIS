@@ -17,6 +17,7 @@ from aerosplat.authored.models import Lifecycle
 from aerosplat.mission.corridor import Plane, check_leg
 from aerosplat.mission.models import (AltitudeFrame, AltitudeFrameError, Code, HandoverOverride,
                                       MissionRefused, PlanningProfile, Severity, Verdict)
+from aerosplat.mission import planner
 from aerosplat.mission.planner import cone_directions, convex_hull, heading_deg, plan_mission
 from aerosplat.surface.models import OCCUPIED, UNKNOWN
 
@@ -156,6 +157,131 @@ def test_an_entry_point_pushed_off_the_grid_is_refused(tmp_path, street):
 def test_a_mission_well_inside_the_grid_is_not_refused(tmp_path, street):
     p = plan(tmp_path, street, home_enu=(0.0, -30.0, 0.0))    # 10 m from the edge
     assert Code.outside_grid not in codes(p)
+
+
+def test_a_cone_that_cannot_stay_inside_the_grid_is_refused_before_any_corridor_check(
+        tmp_path, street, monkeypatch):
+    # E 45 m in front of the window with an approach corridor of r = 13.6 m: E is 10 m from
+    # the edge and needs 14.6, and no direction of the 30° cone brings it closer than 11.5.
+    # Checking those wide corridors, which reach beyond the grid, took about two minutes.
+    calls = []
+    monkeypatch.setattr(planner, "check_leg", lambda *a, **k: calls.append(a) or check_leg(*a, **k))
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, target_kw={
+            "override": HandoverOverride(entry_distance_m=45.0, min_clearance_m=10.0)})
+    assert refused_codes(e) == [Code.outside_grid] and calls == []
+    detail = e.value.findings[0].detail
+    assert "entry E (0.0, -30.0) needs 14.6 m to the edge, has 10.0" in detail
+    assert "all 24 other directions of the 30° approach cone fall short too" in detail
+    assert "occupancy_bbox=" in detail
+
+
+SQ = math.sqrt(0.5)
+
+
+def window_at(center, normal=(0.0, -1.0, 0.0)):
+    geom = ms.window_ap().geometry.model_copy(update={"center": center, "normal": normal})
+    return ms.window_ap(geometry=geom)
+
+
+def try_all_directions(monkeypatch):
+    """The cone search as it was: every direction tried, E and H checked after the choice."""
+    monkeypatch.setattr(planner, "directions_inside_grid", lambda grid, directions, *a: directions)
+
+
+def assert_inside_the_grid(p, grid):
+    """E and H of the plan keep the widest corridor radius plus two voxels from the edge, and
+    a feasible plan passes every leg check."""
+    need = max(legs(p)["transit"].radius_m, legs(p)["approach"].radius_m) + 2 * grid.res_m
+    for point in (p.approach.entry, p.approach.hover):
+        assert planner.grid_margin_m(grid, point) >= need
+    if p.verdict is Verdict.feasible:
+        assert all(leg.min_clearance_m >= leg.radius_m for leg in p.legs)
+
+
+@pytest.mark.parametrize("ap, case", [
+    (window_at((0.0, -26.0, 9.0)), "early"),       # E pushed off the grid in every direction
+    (window_at((-28.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), "early"),
+    (window_at((-26.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), "planned"),  # direct E short, tilted not
+    (window_at((-27.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), "planned"),
+    (window_at((-27.4, 0.0, 9.0), (-SQ, -SQ, 0.0)), "planned"),
+    (ms.window_ap(), "same"),
+    (ms.roof_pad_ap(), "same"),
+], ids=["entry-pushed-off", "diagonal-28", "diagonal-26", "diagonal-27", "diagonal-27.4",
+        "window", "roof-pad"])
+def test_only_directions_inside_the_grid_are_tried(tmp_path, street, monkeypatch, ap, case):
+    """With no direction of the cone inside the grid the refusal comes before any corridor is
+    checked, as the check after the search would give it. Otherwise only directions that fit
+    are tried: the old search took the clearest even when its E fell short, and was refused
+    outside_grid although a direction that fits had a clear corridor."""
+    def outcome(sub):
+        try:
+            p = plan(tmp_path / sub, street, ap)
+        except MissionRefused as e:
+            return [f.code for f in e.findings]
+        assert_inside_the_grid(p, street)
+        return p.verdict, p.approach.direction, p.approach.hover, p.approach.entry, codes(p)
+
+    calls = []
+    monkeypatch.setattr(planner, "check_leg", lambda *a, **k: calls.append(a) or check_leg(*a, **k))
+    now = outcome("now")
+    assert (calls == []) is (case == "early")
+    try_all_directions(monkeypatch)
+    old = outcome("old")
+    if case == "planned":
+        assert old == [Code.outside_grid]
+        assert now[0] is Verdict.feasible and now[4] == set()
+    else:
+        assert old == now
+
+
+def test_a_tilted_direction_that_fits_the_grid_is_planned_near_its_edge(tmp_path, street,
+                                                                        monkeypatch):
+    # E 50 m in front of the window, at (0, −35): 5 m from the edge, and it needs r + 2 voxels
+    # = 6.56. The clearest corridor of the cone puts E at (−8.7, −34.2), 5.8 m from the edge;
+    # the 15° tilts towards ±x keep it 6.7 m away.
+    entry50 = {"override": HandoverOverride(entry_distance_m=50.0)}
+    home = (9.75, 7.75, 0.0)
+    p = plan(tmp_path / "now", street, target_kw=entry50, home_enu=home)
+    assert p.verdict is Verdict.feasible, p.findings
+    a = p.approach
+    assert a.tilt_deg == pytest.approx(15.0)
+    assert abs(a.entry[0]) == pytest.approx(50 * math.sin(math.radians(15)))
+    assert planner.grid_margin_m(street, a.entry) == pytest.approx(6.70, abs=0.01)
+    assert a.candidates_outside_grid > 0
+    assert a.candidates + a.candidates_outside_grid == 25
+    assert_inside_the_grid(p, street)
+    # The old search chose the clearest corridor and was refused for its E.
+    try_all_directions(monkeypatch)
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path / "old", street, target_kw=entry50, home_enu=home)
+    assert refused_codes(e) == [Code.outside_grid]
+    assert "entry E (-8.7, -34.2) needs 6.6 m to the edge, has 5.8" in e.value.findings[0].detail
+
+
+def test_with_no_clear_direction_inside_the_grid_the_plan_is_infeasible_not_refused(
+        tmp_path, monkeypatch):
+    # The wall blocks every corridor of the cone. The direct E (0, −35) falls short of the
+    # grid's edge, so the plan shows the least tilted direction that fits, with its obstacles:
+    # a checked plan that is infeasible, not a refusal for a direction never checked.
+    grid = with_boxes(((-20.0, 20.0, 7.0, 7.5, 0.0, 15.0), OCCUPIED))
+    entry50 = {"override": HandoverOverride(entry_distance_m=50.0)}
+    p = plan(tmp_path / "now", grid, target_kw=entry50)
+    assert p.verdict is Verdict.infeasible
+    a = p.approach
+    assert a.tilt_deg == pytest.approx(15.0)                 # the only ring that fits
+    assert a.candidates == 8 and a.candidates_outside_grid == 17
+    assert_inside_the_grid(p, grid)
+    app = [f for f in p.findings if f.leg == "approach" and f.severity is Severity.blocking]
+    assert app and app[0].code is Code.obstacle_in_corridor
+    assert ("none of the 8 directions in the 30° cone that fit the grid is clear (17 more come "
+            "closer to its edge than r + 2 voxels and were not tried), the least tilted (15.0°) "
+            "is shown") in app[0].detail
+    try_all_directions(monkeypatch)
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path / "old", grid, target_kw=entry50)
+    assert refused_codes(e) == [Code.outside_grid]
+    assert "entry E (0.0, -35.0)" in e.value.findings[0].detail
 
 
 def test_wider_radius_is_what_catches_unknown_space_beside_the_corridor(tmp_path):
