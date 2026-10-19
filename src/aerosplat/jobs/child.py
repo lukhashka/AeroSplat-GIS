@@ -81,6 +81,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             return run_pipeline(q, job, args.projects_root)
         if job.kind == JobKind.diagnostic:
             return run_diagnostic(q, job)
+        if job.kind == JobKind.ingest:
+            from aerosplat.ingest.upload import run_ingest_job
+
+            return run_ingest_job(q, job, catalog)
         print(f"unknown job kind {job.kind}", file=sys.stderr)
         return 2
     except Exception:

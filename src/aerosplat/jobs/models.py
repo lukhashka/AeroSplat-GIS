@@ -18,6 +18,7 @@ from aerosplat.config import RunConfig
 class JobKind(str, Enum):
     pipeline = "pipeline"        # `aerosplat run --site ...` for one Site x Epoch
     diagnostic = "diagnostic"    # fake stages with sleeps: checks a worker end to end
+    ingest = "ingest"            # an uploaded capture: hash, lay out, register (CPU worker)
 
 
 class Resource(str, Enum):
@@ -159,6 +160,24 @@ class PipelineSpec(_Model):
         for k, v in self.overrides.items():
             a += ["--set", f"{k}={'none' if v is None else v}"]
         return a
+
+
+STAGING_RE = r"^\.upload-[0-9a-f]{32}$"
+
+
+class IngestSpec(_Model):
+    """An uploaded capture waiting in `captures/<staging>/` of its Site (aerosplat.ingest.upload)."""
+
+    site: str = Field(description="project/site")
+    capture_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+    source: str
+    license: str = ""
+    author: str = ""
+    notes: str = ""
+    # A directory *name*, never a path: the job resolves it inside the Site's captures/.
+    staging: str = Field(pattern=STAGING_RE)
+    files: int = Field(0, ge=0)
+    bytes: int = Field(0, ge=0)
 
 
 class DiagnosticSpec(_Model):

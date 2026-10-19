@@ -5,7 +5,7 @@ export type SiteKind = "urban" | "depot" | "critical";
 export type CaptureSource = "earthstudio" | "drone" | "handheld" | "internet";
 export type RunStatus = "running" | "ok" | "failed";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type JobKind = "pipeline" | "diagnostic";
+export type JobKind = "pipeline" | "diagnostic" | "ingest";
 export type Resource = "gpu" | "cpu";
 export type StageState = "started" | "skipped" | "done" | "failed";
 
@@ -153,6 +153,8 @@ export interface StageEventData {
   seconds?: number;
   error?: string;
   reason?: string;
+  /** e.g. images hashed so far by an ingest job (re-sent with state "started") */
+  progress?: { done: number; total: number };
 }
 
 export type JobEvent =

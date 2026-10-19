@@ -18,7 +18,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -31,8 +30,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from aerosplat import __version__
 from aerosplat.config import RunConfig
 from aerosplat.geo.crs import GeoPoint
-from aerosplat.jobs.models import (PIPELINE_STAGES, DiagnosticSpec, Job, JobEvent, JobKind,
-                                   JobStatus, PipelineSpec, Resource, WorkerInfo)
+from aerosplat.jobs.models import (PIPELINE_STAGES, DiagnosticSpec, IngestSpec, Job, JobEvent,
+                                   JobKind, JobStatus, PipelineSpec, Resource, WorkerInfo)
 from aerosplat.jobs.queue import JobNotFoundError, JobQueue
 from aerosplat.paths import PROJECT_DIR
 from aerosplat.pipeline.manifest import git_commit
@@ -284,53 +283,89 @@ def _safe_name(filename: str) -> str:
     return name
 
 
-@router.post("/sites/{project_id}/{site_id}/captures", response_model=CaptureOut, status_code=201)
+UPLOAD_CHUNK = 1 << 20
+
+
+@router.post("/sites/{project_id}/{site_id}/captures", response_model=Job, status_code=202)
 def upload_capture(project_id: str, site_id: str,
                    capture_id: str = Form(..., pattern=SLUG),
                    source: CaptureSource = Form(...),
                    license: str = Form(""), author: str = Form(""), notes: str = Form(""),
                    files: list[UploadFile] = File(...),
-                   cat: Catalog = Depends(get_catalog)) -> CaptureOut:
+                   cat: Catalog = Depends(get_catalog), q: JobQueue = Depends(get_queue)) -> Job:
     """Upload images (and, for Earth Studio, the export JSON) as a new capture.
 
-    Files are staged next to the captures on the same disk, then moved in by the
-    regular ingest adapters, so the catalog sees exactly what the CLI would.
+    The request only streams the files to a staging directory on the captures' disk and
+    runs the cheap checks; hashing, layout and registration are an `ingest` job on the
+    CPU worker (aerosplat.ingest.upload), whose progress streams like any job's. The
+    capture appears in the catalog only when that job has fully succeeded.
     """
+    from aerosplat.ingest.upload import (active_ingest, seal, staging_dir, staging_name,
+                                         sweep_stale_uploads)
+    from aerosplat.jobs.queue import new_job_id
+
     site = _site(cat, project_id, site_id)
+    sweep_stale_uploads(cat, site, q)
     if capture_id in {c.id for c in cat.list_captures(site)}:
         raise HTTPException(409, f"capture '{capture_id}' already exists in {site.key}")
-    staging = cat.site_dirs(site).captures / f".upload-{uuid.uuid4().hex[:8]}"
-    staging.mkdir(parents=True)
+    pending = active_ingest(q, site, capture_id)
+    if pending is not None:
+        raise HTTPException(409, f"capture '{capture_id}' is being ingested already (job {pending.id})")
+    if cat.site_dirs(site).capture(capture_id).root.exists():
+        raise HTTPException(409, f"directory for capture '{capture_id}' already exists in "
+                                 f"{site.key} (left by an unfinished import?); choose another id")
+    job_id = new_job_id()
+    staging = staging_dir(cat, site, staging_name(job_id))
+    (staging / "files").mkdir(parents=True)
+    queued = False
     try:
-        names = []
+        names: list[str] = []
+        total = 0
         for f in files:
             name = _safe_name(f.filename or "")
-            with (staging / name).open("wb") as out:
-                shutil.copyfileobj(f.file, out)
+            if name in names:
+                raise HTTPException(422, f"file '{name}' sent twice")
+            with (staging / "files" / name).open("wb") as out:
+                shutil.copyfileobj(f.file, out, UPLOAD_CHUNK)
+                total += out.tell()
             names.append(name)
-        if source == CaptureSource.earthstudio:
-            from aerosplat.ingest.earthstudio import ATTRIBUTION_FILE, import_earthstudio
-
-            jsons = [n for n in names if n.lower().endswith(".json")]
-            if len(jsons) != 1:
-                raise HTTPException(422, "Earth Studio upload needs exactly one export .json "
-                                         f"(got {len(jsons)})")
-            extras = [staging / n for n in names if n == ATTRIBUTION_FILE or n.endswith(".esp")]
-            capture = import_earthstudio(cat, site, staging / jsons[0], staging,
-                                         capture_id=capture_id, extra_files=extras,
-                                         author=author, move=True)
-        else:
-            from aerosplat.ingest.folder import import_folder
-
-            capture = import_folder(cat, site, staging, capture_id=capture_id, source=source,
-                                    license=license, author=author, notes=notes, move=True)
-    except (FileNotFoundError, FileExistsError, ValueError, CatalogError) as e:
-        raise HTTPException(422, f"{type(e).__name__}: {e}") from None
+        _check_upload(source, staging / "files", names)
+        spec = IngestSpec(site=site.key, capture_id=capture_id, source=source.value, license=license,
+                          author=author, notes=notes, staging=staging.name, files=len(names),
+                          bytes=total)
+        seal(staging, spec)                         # before the job exists: a worker may claim it at once
+        job = q.enqueue(JobKind.ingest, spec.model_dump(), resource=Resource.cpu, site_key=site.key,
+                        title=f"{site.key} · захоплення {capture_id} · {len(names)} файлів",
+                        job_id=job_id)
+        queued = True
+        return job
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
-    imgs = cat.list_images(site, capture.id)
-    return CaptureOut(capture=capture, images=len(imgs), bytes=sum(i.bytes for i in imgs),
-                      with_prior=sum(1 for i in imgs if i.prior is not None))
+        if not queued:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _check_upload(source: CaptureSource, files: Path, names: list[str]) -> None:
+    """What can be said without reading the images: fail the request, not a job later."""
+    from aerosplat.ingest.images import IMAGE_EXTS
+
+    if not any(Path(n).suffix.lower() in IMAGE_EXTS for n in names):
+        raise HTTPException(422, "no images in the upload (JPEG, PNG or TIFF)")
+    if source != CaptureSource.earthstudio:
+        return
+    jsons = [n for n in names if n.lower().endswith(".json")]
+    if len(jsons) != 1:
+        raise HTTPException(422, "Earth Studio upload needs exactly one export .json "
+                                 f"(got {len(jsons)})")
+    from aerosplat.geo.earthstudio_to_colmap import find_footage, load_frames
+    from aerosplat.ingest.earthstudio import frame_prefix
+
+    try:
+        _, frames = load_frames(files / jsons[0])
+        find_footage(str(files), frame_prefix(files / jsons[0]), len(frames))
+    except SystemExit as e:              # frame count mismatch (find_footage)
+        raise HTTPException(422, str(e.code)) from None
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as e:
+        raise HTTPException(422, f"{type(e).__name__}: {e}") from None
 
 
 # ── runs ─────────────────────────────────────────────────────────────────

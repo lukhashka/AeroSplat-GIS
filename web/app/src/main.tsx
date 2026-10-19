@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Link, Route, Routes } from "react-router-dom";
 
+import { AuthGate } from "./components/AuthGate";
 import { Shell } from "./components/Shell";
 import { Dashboard } from "./pages/Dashboard";
 import { FacadePage } from "./pages/FacadePage";
@@ -33,6 +34,7 @@ function NotFound() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
+      <AuthGate />
       <BrowserRouter basename="/app">
         <Routes>
           <Route element={<Shell />}>

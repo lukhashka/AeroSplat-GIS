@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -37,17 +37,25 @@ def list_images(directory: Path) -> list[str]:
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
 
 
+# (done, total) after each image is hashed; the ingest job turns it into progress events.
+ProgressFn = Callable[[int, int], None]
+
+
 def describe_images(directory: Path, names: Iterable[str],
                     priors: Optional[Mapping[str, GeoPoint]] = None,
-                    prior_sigma_m: Optional[float] = None) -> list[Image]:
+                    prior_sigma_m: Optional[float] = None,
+                    on_progress: Optional[ProgressFn] = None) -> list[Image]:
+    names = list(names)
     out = []
-    for name in names:
+    for i, name in enumerate(names, 1):
         p = directory / name
         w, h = image_size(p)
         prior = (priors or {}).get(name)
         out.append(Image(name=name, sha256=sha256_file(p), bytes=p.stat().st_size,
                          width=w, height=h, prior=prior,
                          prior_sigma_m=prior_sigma_m if prior is not None else None))
+        if on_progress is not None:
+            on_progress(i, len(names))
     return out
 
 

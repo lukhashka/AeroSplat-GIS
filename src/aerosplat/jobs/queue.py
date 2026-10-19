@@ -70,9 +70,12 @@ class JobQueue:
 
     # ── submit / inspect ─────────────────────────────────────────────────
     def enqueue(self, kind: JobKind, payload: dict[str, Any], *, resource: Resource,
-                site_key: Optional[str] = None, title: str = "", priority: int = 0) -> Job:
+                site_key: Optional[str] = None, title: str = "", priority: int = 0,
+                job_id: Optional[str] = None) -> Job:
+        """Queue a job. `job_id` lets the caller name files after the job before it exists
+        (an upload's staging directory is sealed before the job can be claimed)."""
         with self._tx() as s, s.begin():
-            row = JobRow(id=new_job_id(), kind=kind.value, resource=resource.value,
+            row = JobRow(id=job_id or new_job_id(), kind=kind.value, resource=resource.value,
                          status=JobStatus.queued.value, priority=priority, site_key=site_key,
                          title=title[:200], payload=payload, result={}, error=None,
                          cancel_requested=False, created_at=utcnow())

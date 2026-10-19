@@ -1,6 +1,7 @@
 import { useRef, useState, type DragEvent } from "react";
+import { useNavigate } from "react-router-dom";
 
-import { useUploadCapture } from "../api/hooks";
+import { useSystem, useUploadCapture } from "../api/hooks";
 import type { CaptureSource } from "../api/types";
 import { SLUG_RE, bytes, slugify } from "../lib/format";
 import { ErrorBox, Modal } from "./Modal";
@@ -28,6 +29,9 @@ export function UploadDialog({
   onClose: () => void;
 }) {
   const uploadMut = useUploadCapture(project, site);
+  const navigate = useNavigate();
+  const { data: sys } = useSystem();
+  const cpuOnline = !sys || sys.workers.some((w) => w.resource === "cpu" && w.online);
   const input = useRef<HTMLInputElement>(null);
   const [source, setSource] = useState<CaptureSource>("handheld");
   const [files, setFiles] = useState<File[]>([]);
@@ -78,7 +82,14 @@ export function UploadDialog({
     if (problem) return;
     uploadMut.mutate(
       { captureId: id, source, license, author, files: accepted, onProgress: setProgress },
-      { onSuccess: onClose },
+      {
+        // The files are on the server; hashing and registration are a job on the CPU worker.
+        // Its page shows the progress; the capture appears on the site when the job succeeds.
+        onSuccess: (job) => {
+          onClose();
+          navigate(`/jobs/${job.id}`);
+        },
+      },
     );
   };
 
@@ -95,7 +106,7 @@ export function UploadDialog({
                 <i style={{ width: `${Math.round(progress * 100)}%` }} />
               </div>
               <span className="num muted" style={{ fontSize: 12 }}>
-                {progress < 1 ? `${Math.round(progress * 100)}%` : "обробка на сервері…"}
+                {progress < 1 ? `${Math.round(progress * 100)}%` : "постановка в чергу…"}
               </span>
             </div>
           ) : (
@@ -177,6 +188,12 @@ export function UploadDialog({
           </label>
         )}
       </div>
+      {!cpuOnline && (
+        <div className="note">
+          CPU-воркер офлайн: файли завантажаться, але захоплення з'явиться лише після того, як воркер обробить задачу
+          (<code>aerosplat up</code> або <code>aerosplat worker --resource cpu</code>).
+        </div>
+      )}
       <ErrorBox error={uploadMut.error} />
     </Modal>
   );

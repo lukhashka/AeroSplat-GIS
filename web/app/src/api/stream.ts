@@ -57,7 +57,8 @@ function reduce(state: JobStreamState, action: Action): JobStreamState {
           stages.set(e.data.stage, {
             ...prev,
             ...e.data,
-            startedAt: e.data.state === "started" ? e.ts : prev?.startedAt,
+            // a repeated "started" (progress update) keeps the original start time
+            startedAt: e.data.state === "started" ? (prev?.state === "started" ? prev.startedAt : e.ts) : prev?.startedAt,
           });
         }
       }

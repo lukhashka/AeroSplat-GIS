@@ -2,12 +2,18 @@ import type { FacadeOrthoMeta, OrthoRequest, RenderMeta, RenderRequest } from ".
 
 export const API = "/api/v2";
 
+/** Fired on every 401: the server wants a token (request not from this machine). AuthGate listens. */
+export const UNAUTHORIZED_EVENT = "aerosplat:unauthorized";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     readonly detail: unknown,
   ) {
     super(formatDetail(detail) || `HTTP ${status}`);
+    if (status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: this.message }));
+    }
   }
 }
 
@@ -147,4 +153,24 @@ export const api2 = {
       body: JSON.stringify(body),
     }).then((r) => parse<T>(r)),
   del: <T>(path: string) => fetch(API + path, { method: "DELETE" }).then((r) => parse<T>(r)),
+};
+
+/** Who the server thinks we are (aerosplat.server.auth). */
+export interface WhoAmI {
+  authenticated: boolean;
+  via: "loopback" | "token" | null;
+  name: string | null;
+  local: boolean;
+  reason: string | null;
+}
+
+/**
+ * Trade a token for an HttpOnly session cookie: the browser then sends it with every request,
+ * including <img> thumbnails, the viewer iframe and the job WebSocket, which cannot carry an
+ * Authorization header. The token itself is never stored by the page.
+ */
+export const auth = {
+  whoami: () => api.get<WhoAmI>("/auth/whoami"),
+  login: (token: string) => api.post<WhoAmI>("/auth/login", { token }),
+  logout: () => api.post<WhoAmI>("/auth/logout"),
 };
