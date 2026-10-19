@@ -110,17 +110,29 @@ class EngineRenderer:
                                 run=run.run_id)))
         self.frames = 0
 
-    def render(self, view: View, width: int, height: int, K: Intrinsics
-               ) -> tuple[np.ndarray, np.ndarray]:
-        from aerosplat.render.models import Position, RenderRequest
+    def _request(self, view: View, width: int, height: int, K: Intrinsics) -> dict[str, Any]:
+        from aerosplat.render.models import Position
         fx, fy, cx, cy = K
         if abs(fx - fy) > 1e-6 * fx or abs(cx - (width / 2 - 0.5)) > 1e-6 \
                 or abs(cy - (height / 2 - 0.5)) > 1e-6:
             raise ValueError("the render service draws centred square-pixel pinholes only")
         fov = math.degrees(2.0 * math.atan(height / 2.0 / fy))
-        base = dict(position=Position(e=view.C[0], n=view.C[1], u=view.C[2]), yaw_deg=view.yaw_deg,
+        return dict(position=Position(e=view.C[0], n=view.C[1], u=view.C[2]), yaw_deg=view.yaw_deg,
                     pitch_deg=view.pitch_deg, roll_deg=view.roll_deg, width=width, height=height,
                     fov_deg=fov)
+
+    def render_rgb(self, view: View, width: int, height: int, K: Intrinsics) -> np.ndarray:
+        """The colour frame only (a camera frame: SIM-3 needs no depth)."""
+        from aerosplat.render.models import RenderRequest
+        rgb = self.engine.render(self.name, RenderRequest(**self._request(view, width, height, K),
+                                                          output="rgb")).image
+        self.frames += 1
+        return rgb
+
+    def render(self, view: View, width: int, height: int, K: Intrinsics
+               ) -> tuple[np.ndarray, np.ndarray]:
+        from aerosplat.render.models import RenderRequest
+        base = self._request(view, width, height, K)
         rgb = self.engine.render(self.name, RenderRequest(**base, output="rgb")).image
         d = self.engine.render(self.name, RenderRequest(**base, output="depth"))
         max_m = float(d.meta["depth"]["max_m"])

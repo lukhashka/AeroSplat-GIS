@@ -4,6 +4,9 @@
   companion (Raspberry Pi 5) and never import torch / gsplat.
 * `build` — atlas assembly from any renderer; `twin` — the site run's splat as that renderer
   (ground station, GPU); `bench` — the feasibility bench (`python -m aerosplat.vps.bench`).
+* `route` — the pre-flight step of one mission (SIM-3): its corridor atlas, the localizability
+  of its route (fix rate / σ per segment, gaps against the drift budget -> `vps_gap`) and the
+  binding of both to the plan (`python -m aerosplat.vps.route`). Ground station.
 """
 
 # The operating point (owner delegated the choice, 2026-10-19; ADR-0015 §6–7): AKAZE at 960×540.
