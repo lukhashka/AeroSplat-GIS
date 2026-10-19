@@ -150,6 +150,25 @@ def grid_shortfalls(grid: OccupancyGrid,
     return short
 
 
+def grid_extent(grid: OccupancyGrid) -> str:
+    s = grid.spec
+    return f"x {s.x0:.1f}…{s.x1:.1f}, y {s.y0:.1f}…{s.y1:.1f} m"
+
+
+def rebuild_hint(grid: OccupancyGrid, short: list[tuple[str, F64, float, float]]) -> str:
+    """How to rebuild occupancy so that the points `grid_shortfalls` found fit: the grid's
+    extent grown to hold each with its need plus 10 m, rounded out to 10 m."""
+    s = grid.spec
+    pad = 10.0
+    xs = [s.x0, s.x1] + [v for _, p, need, _ in short for v in (p[0] - need - pad, p[0] + need + pad)]
+    ys = [s.y0, s.y1] + [v for _, p, need, _ in short for v in (p[1] - need - pad, p[1] + need + pad)]
+    box = (math.floor(min(xs) / 10) * 10, math.floor(min(ys) / 10) * 10,
+           math.ceil(max(xs) / 10) * 10, math.ceil(max(ys) / 10) * 10)
+    return (f"Rebuild occupancy with an extent that holds it, e.g. --set occupancy_bbox="
+            f"{box[0]:g},{box[1]:g},{box[2]:g},{box[3]:g} (or a larger occupancy_radius, or a "
+            f"Site bbox)")
+
+
 def require_inside_grid(grid: OccupancyGrid, points: list[tuple[str, F64, float]], *,
                         note: str = "") -> None:
     """Refuse a mission whose points, with the corridor radius around each, leave the grid.
@@ -159,23 +178,15 @@ def require_inside_grid(grid: OccupancyGrid, points: list[tuple[str, F64, float]
     rectangle and legs are straight, so checking each leg's ends checks the whole corridor.
     `note` follows the list of points in the refusal.
     """
-    s = grid.spec
     short = grid_shortfalls(grid, points)
     if not short:
         return
-    pad = 10.0
-    xs = [s.x0, s.x1] + [v for _, p, need, _ in short for v in (p[0] - need - pad, p[0] + need + pad)]
-    ys = [s.y0, s.y1] + [v for _, p, need, _ in short for v in (p[1] - need - pad, p[1] + need + pad)]
-    box = (math.floor(min(xs) / 10) * 10, math.floor(min(ys) / 10) * 10,
-           math.ceil(max(xs) / 10) * 10, math.ceil(max(ys) / 10) * 10)
     what = "; ".join(f"{name} ({p[0]:.1f}, {p[1]:.1f}) needs {need:.1f} m to the edge, has "
                      f"{have:.1f}" for name, p, need, have in short)
     raise MissionRefused([_finding(
         Code.outside_grid,
-        f"the mission leaves the occupancy grid (x {s.x0:.1f}…{s.x1:.1f}, y {s.y0:.1f}…{s.y1:.1f} m): "
-        f"{what}{note}. Outside the grid nothing is known, so the corridor cannot be checked. Rebuild "
-        f"occupancy with an extent that holds it, e.g. --set occupancy_bbox={box[0]:g},{box[1]:g},"
-        f"{box[2]:g},{box[3]:g} (or a larger occupancy_radius, or a Site bbox)",
+        f"the mission leaves the occupancy grid ({grid_extent(grid)}): {what}{note}. Outside the "
+        f"grid nothing is known, so the corridor cannot be checked. {rebuild_hint(grid, short)}",
         at=short[0][1])])
 
 

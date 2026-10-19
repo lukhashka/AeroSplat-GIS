@@ -335,6 +335,37 @@ def test_home_search_refuses_when_there_is_no_spot(env):
     assert both.status_code == 422
 
 
+def test_home_search_names_a_target_too_near_the_grid_edge(env):
+    # E 50 m in front of the window: (0, -35), 5 m from the grid's edge, where a transit needs
+    # r + 2 voxels = 6.56 m. The search used to spend 400 checks and advise raising max_checks.
+    client, authored, missions = env
+    t = target(client, authored.create(ms.window_ap()).id,
+               override={"entry_distance_m": 50.0}).json()
+    s = client.post(f"{BASE}/targets/{t['id']}/takeoff",
+                    json={"profile": QUIET, "max_checks": 400}).json()
+    assert s["candidates"] == [] and s["checked"] == 0
+    assert s["rejected"]["target_near_grid_edge"] == s["searched_columns"] > 0
+    r = mission(client, t["id"], home_search=True)
+    # no_takeoff_spot, not outside_grid: no plan was made, and what failed is the search.
+    assert r.status_code == 409 and reasons(r) == {"no_takeoff_spot"}
+    detail = r.json()["detail"]["reasons"][0]["detail"]
+    assert detail == s["message"] and "max_checks" not in detail
+    assert "the target (0.0, -35.0), where the transit ends, is 5.0 m from the edge" in detail
+    assert "--set occupancy_bbox=-40,-60,40,40 " in detail
+    assert not missions.exists() or not any(missions.iterdir())    # nothing stored
+
+
+def test_home_search_plans_a_target_just_inside_the_margin(env):
+    client, authored, _ = env
+    t = target(client, authored.create(ms.window_ap()).id,
+               override={"entry_distance_m": 48.0}).json()       # E (0, -33): 7.0 m from the edge
+    m = mission(client, t["id"], home_search=True)
+    assert m.status_code == 201, m.text
+    plan = m.json()
+    assert plan["verdict"] == "feasible" and plan["approach"]["entry"] == pytest.approx([0.0, -33.0, 9.0])
+    assert plan["home"]["source"].startswith("takeoff search: nearest of 5 spots within 150 m")
+
+
 def test_takeoff_search_needs_the_semantics_of_the_same_run(env, tmp_path):
     import shutil
 

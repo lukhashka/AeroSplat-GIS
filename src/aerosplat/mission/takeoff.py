@@ -20,6 +20,12 @@ candidates, nearest the target first, at least `spacing_m` apart, so the list na
 places rather than adjacent voxels of one car park. With no candidate, the search says why —
 how many columns failed which test — and names the most open ground it saw and the σ_GNSS
 that would let it qualify. It never relaxes a criterion on its own.
+
+Before any of that, the target itself — where the transit ends — must be at least r + 2 voxels
+from the grid's edge, as the planner requires of E (`grid_shortfalls`; its need there is
+max(r_transit, r_approach) + 2 voxels). Closer, no transit to it can be checked and the planner
+refuses every plan ending there (outside_grid), so the search says so at once, with the
+planner's occupancy_bbox hint, instead of failing every exact check.
 """
 
 from __future__ import annotations
@@ -39,7 +45,8 @@ from aerosplat.authored.models import AccessPoint
 from aerosplat.mission.corridor import SQRT3, Plane, check_leg
 from aerosplat.mission.models import (MissionTarget, PlanningProfile, TakeoffCandidate,
                                       TakeoffSearch)
-from aerosplat.mission.planner import check_home, transit_altitude
+from aerosplat.mission.planner import (check_home, grid_extent, grid_shortfalls, rebuild_hint,
+                                      transit_altitude)
 from aerosplat.semantics.models import SEMANTICS_JSON, TERRAIN_NPZ, SemanticsResult, TerrainModel
 from aerosplat.surface.models import FREE, ColumnSource
 from aerosplat.surface.occupancy import OccupancyGrid
@@ -49,9 +56,10 @@ MEASURED = (int(ColumnSource.POINTS), int(ColumnSource.CELL))
 # How far around a spot its open ground is measured, beyond the corridor radius.
 OPEN_REACH_M = 10.0
 # The order in which columns are rejected; each column counts under its first failed test.
-REASONS = ("near_grid_edge", "not_measured", "building", "not_ground", "obstacle_within_radius",
-           "home_check", "transit_blocked", "transit_too_high", "takeoff_leg", "transit_leg",
-           "not_checked")
+# target_near_grid_edge: the target is too near the grid's edge, so every column counts under it.
+EXACT_REASONS = ("home_check", "transit_blocked", "transit_too_high", "takeoff_leg", "transit_leg")
+REASONS = ("target_near_grid_edge", "near_grid_edge", "not_measured", "building", "not_ground",
+           "obstacle_within_radius", *EXACT_REASONS, "not_checked")
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,17 @@ def find_takeoff_spots(grid: OccupancyGrid, ground: Ground, target, *,
     in_disk = dist <= max_distance_m
     searched = int(in_disk.sum())
 
+    # The transit ends at the target. Closer to the grid's edge than r + 2 voxels, it is a point
+    # the planner refuses as E (its need there is max(r_transit, r_approach) + 2 voxels), so no
+    # home can serve it: say so now rather than fail every exact check (or, a voxel further in,
+    # propose homes whose plans are then refused with outside_grid).
+    short = grid_shortfalls(grid, [("target", target3, radius)])
+    if short:
+        rejected["target_near_grid_edge"] = searched
+        return TakeoffSearch(**base, searched_columns=searched, rejected=rejected, checked=0,
+                             candidates=[], message=_edge_message(grid, base, short, searched,
+                                                                  prof, sigma_georef_m))
+
     # Highest blocked layer per column (-1: none; layers - 1: blocked to the sky).
     blocked = grid.state[i0:i1, j0:j1, :] != FREE
     any_b = blocked.any(axis=2)
@@ -284,13 +303,29 @@ def find_takeoff_spots(grid: OccupancyGrid, ground: Ground, target, *,
                                           best_open, sigma_fit))
 
 
-def _message(found, base, searched, rejected, prof, sigma_georef_m, best_open, sigma_fit) -> str:
+def _terms(base, prof, sigma_georef_m) -> tuple[str, str]:
+    """(where, profile): how the messages name the searched disk and the radius."""
     where = (f"within {base['max_distance_m']:g} m of the target"
              + (" (cut by the grid's edge)" if base["grid_limited"] else ""))
-    r = base["radius_m"]
-    profile = (f"r = {r:.2f} m (r_drone {prof.r_drone_m:g} + m {prof.transit_margin_m:g} + "
-               f"{prof.k_sigma:g}·σ {base['sigma_transit_m']:.2f}; σ_GNSS {prof.sigma_gnss_m:g}, "
-               f"σ_georef {sigma_georef_m:g})")
+    profile = (f"r = {base['radius_m']:.2f} m (r_drone {prof.r_drone_m:g} + m "
+               f"{prof.transit_margin_m:g} + {prof.k_sigma:g}·σ {base['sigma_transit_m']:.2f}; "
+               f"σ_GNSS {prof.sigma_gnss_m:g}, σ_georef {sigma_georef_m:g})")
+    return where, profile
+
+
+def _edge_message(grid, base, short, searched, prof, sigma_georef_m) -> str:
+    where, profile = _terms(base, prof, sigma_georef_m)
+    _, p, need, have = short[0]
+    at = f"{have:.1f} m from the edge of" if have >= 0 else f"{-have:.1f} m outside"
+    return (f"no takeoff spot {where} for {profile}: the target ({p[0]:.1f}, {p[1]:.1f}), where "
+            f"the transit ends, is {at} the occupancy grid ({grid_extent(grid)}) and needs "
+            f"r + 2 voxels = {need:.2f} m, so no transit to it can be checked and the planner "
+            f"refuses any plan whose transit ends there (outside_grid); no column was checked "
+            f"(target_near_grid_edge {searched}). {rebuild_hint(grid, short)}")
+
+
+def _message(found, base, searched, rejected, prof, sigma_georef_m, best_open, sigma_fit) -> str:
+    where, profile = _terms(base, prof, sigma_georef_m)
     if found:
         c = found[0]
         return (f"{len(found)} takeoff spot(s) {where} for {profile}; nearest at "
@@ -300,7 +335,7 @@ def _message(found, base, searched, rejected, prof, sigma_georef_m, best_open, s
     if rejected["not_checked"]:
         # The budget of exact checks ran out first: that is not "there is none".
         return (f"no takeoff spot confirmed {where} for {profile}: the exact checks stopped "
-                f"after {sum(rejected[k] for k in REASONS[5:-1])} failures with "
+                f"after {sum(rejected[k] for k in EXACT_REASONS)} failures with "
                 f"{rejected['not_checked']} candidates left unchecked — raise max_checks to "
                 f"settle it ({why})")
     text = (f"no takeoff spot {where} for {profile}: of {searched} columns, {why or 'none qualified'}")
