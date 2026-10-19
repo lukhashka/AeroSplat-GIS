@@ -1,0 +1,105 @@
+# Vehicle profile of the GNSS-free TEST BED (owner's decision 2026-10-19, DECISIONS #16,
+# ADR-0015 §6): X500 V2 class quad, Pixhawk 6C/6X (ArduPilot 4.7), Raspberry Pi 5 8 GB companion,
+# IMX290 4 mm tilted down-forward for VPS, optional IMX296 global-shutter camera for VIO, optical
+# flow + downward lidar module, three forward rangefinders, M10 GNSS as monitor only.
+# The delivery airframe is chosen later; this profile is the test bed, not the product.
+#
+# SITL PHYSICS IS NOT THIS AIRFRAME. SITL flies its built-in "+" quad (configs/sitl.yaml); only the
+# parameters below change between this profile and sitl-quad-extnav (4S battery thresholds and a
+# 4S simulated pack). Mass, inertia, motor and propeller of the X500 are NOT simulated. What the
+# profile adds is data: r_drone for the planner, the camera mount for VPS (aerosplat.vps), the
+# sensor layout and the parameters the real vehicle will need (`hardware_params`, never sent to
+# SITL).
+#
+# Sources and estimates:
+#   * wheelbase 500 mm and 10" (1045) propellers: Holybro X500 V2 kit specification (vendor).
+#     r_drone = 0.250 (motor arm) + 0.127 (propeller radius) = 0.377 m -> 0.40 m (rounded up; no
+#     propeller guards). The planner's PlanningProfile.r_drone_m default (0.5 m) is NOT changed by
+#     this file: a plan for this vehicle sets r_drone_m from `frame.r_drone_m` explicitly.
+#   * ESTIMATED (not weighed / not flown): take-off mass, 4S 5000 mAh pack, cruise and max speed,
+#     battery thresholds (3.5 V / 3.3 V per cell under load), camera tilt 45° (the bench value;
+#     the mount is not built yet).
+
+vehicle: x500-pi5-imx290
+description: X500 V2 class test bed (Pixhawk 6C/6X + Pi 5, IMX290 VPS); SITL physics = built-in quad
+camera: "imx290:4mm"            # the VPS camera (= cameras[vps_main]); configs/sim/cameras/imx290.yaml
+params:
+  # 4S LiPo thresholds (ESTIMATED: 3.5 V / 3.3 V per cell under load; tune on the real pack).
+  BATT_LOW_VOLT: 14.0
+  BATT_CRT_VOLT: 13.2
+  BATT_LOW_TIMER: 10
+  BATT_CAPACITY: 5000
+  # Thrust compensation range of a 4S pack (4.2 V and 3.3 V per cell).
+  MOT_BAT_VOLT_MAX: 16.8
+  MOT_BAT_VOLT_MIN: 13.2
+  # Downward rangefinder of the flow module; as in sitl-quad-extnav.
+  RNGFND1_MAX: 30
+  RNGFND1_ORIENT: 25            # down
+boot_params:
+  FLOW_TYPE: 10                 # SITL optical flow sensor driver (hardware: hardware_params)
+  RNGFND1_TYPE: 100             # SITL rangefinder driver
+  SIM_FLOW_ENABLE: 1
+  SIM_BATT_VOLTAGE: 16.8        # SITL pack = full 4S, else the 4S thresholds fire on the ground
+
+frame:
+  name: Holybro X500 V2 class
+  wheelbase_m: 0.500
+  prop_diameter_m: 0.254        # 10 x 4.5" (1045)
+  r_drone_m: 0.40
+  mass_takeoff_kg: 2.0          # frame + 4S 5000 mAh + Pixhawk + Pi 5 + cameras + sensors
+  battery: {chemistry: lipo, cells: 4, capacity_mah: 5000}
+  cruise_speed_mps: 8.0
+  max_speed_mps: 12.0
+  source: "Holybro X500 V2 kit specification: 500 mm wheelbase, 1045 propellers"
+  estimated: [mass_takeoff_kg, battery, cruise_speed_mps, max_speed_mps]
+  physics: "SITL built-in quad (configs/sitl.yaml); the X500 is not simulated"
+
+cameras:
+  - name: vps_main
+    camera: "imx290:4mm"
+    role: vps
+    pitch_deg: -45              # down-forward; ESTIMATED (bench value), mount not built
+    yaw_deg: 0
+    note: "rolling shutter: VPS only; short exposure and a vibration damper"
+  - name: vio
+    camera: "imx296:6mm"
+    role: vio
+    pitch_deg: -30
+    yaw_deg: 0
+    optional: true
+    note: "Raspberry Pi Global Shutter Camera; lens and tilt not chosen"
+
+rangefinders:
+  - {name: down, model: "lidar of the flow module (H-Flow class)", yaw_deg: 0, pitch_deg: -90,
+     min_m: 0.1, max_m: 30, role: ground}
+  # TF-Luna (8 m) or TFmini-S (12 m); the class is not chosen, so the shorter range is listed.
+  # ArduPilot's RNGFNDx_ORIENT has 45° steps (Forward-Left / Forward-Right), not ±30°: the
+  # autopilot's proximity sectors see these as forward / forward-left / forward-right. The ±30°
+  # layout is what the companion's wall logic (layer C, aerosplat.sim.extnav) uses.
+  - {name: front, model: "TF-Luna / TFmini-S", yaw_deg: 0, pitch_deg: 0, min_m: 0.2, max_m: 8,
+     role: wall}
+  - {name: front_left, model: "TF-Luna / TFmini-S", yaw_deg: -30, pitch_deg: 0, min_m: 0.2,
+     max_m: 8, role: wall}
+  - {name: front_right, model: "TF-Luna / TFmini-S", yaw_deg: 30, pitch_deg: 0, min_m: 0.2,
+     max_m: 8, role: wall}
+
+flow:
+  model: "H-Flow class: optical flow + downward lidar, DroneCAN"
+  rangefinder: down
+
+companion:
+  board: Raspberry Pi 5 8 GB
+  link: "UART MAVLink2 to Pixhawk TELEM2"
+  serial_baud: 921600
+
+nav:
+  gnss: monitor                 # M10 receiver, never an EKF3 source; `none` also flies (SIM-2n)
+  gnss_receiver: u-blox M10
+  vps_camera: vps_main
+
+hardware_params:
+  # The real vehicle only; checked against the pinned build's parameter table by the tests.
+  SERIAL2_PROTOCOL: 2           # MAVLink2 on TELEM2 (companion)
+  SERIAL2_BAUD: 921             # 921600
+  FLOW_TYPE: 6                  # DroneCAN optical flow
+  RNGFND1_TYPE: 24              # DroneCAN rangefinder of the flow module

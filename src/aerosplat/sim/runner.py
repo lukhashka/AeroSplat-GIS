@@ -51,7 +51,7 @@ from typing import Any, Optional
 
 import numpy as np
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from aerosplat.geo.crs import EnuFrame, GeoPoint
 from aerosplat.mission.export import (BOOT_PARAMS, POSITIONAL, WireItem, enu_from_geodetic,
@@ -61,6 +61,8 @@ from aerosplat.mission.models import (AltitudeFrameError, ExtNavSpec, GnssUse, M
                                       Verdict as PlanVerdict)
 from aerosplat.paths import PROJECT_DIR
 from aerosplat.sim import mavmission
+from aerosplat.sim.airframe import (Airframe, CameraMount, Companion as CompanionBoard, Flow, Frame,
+                                    NavHardware, Rangefinder)
 from aerosplat.sim.extnav import Companion
 from aerosplat.sim.faults import (FLAT_GROUND, RUNNER_PARAMS, RUNNER_SYSID, FaultUnavailable,
                                   Injection, Response, failsafe_trigger_problems, injection,
@@ -118,6 +120,27 @@ class VehicleProfile(_Model):
     # Must hold from power-on (sensor drivers): SITL boots with them, the runner reads them back.
     boot_params: dict[str, float] = {}
     camera: Optional[str] = None            # configs/sim/cameras: "<camera>:<lens>" (data)
+    # The real airframe the profile stands for (aerosplat.sim.airframe): data, never sent to SITL.
+    frame: Optional[Frame] = None
+    cameras: tuple[CameraMount, ...] = ()
+    rangefinders: tuple[Rangefinder, ...] = ()
+    flow: Optional[Flow] = None
+    companion: Optional[CompanionBoard] = None
+    nav: Optional[NavHardware] = None
+    # Autopilot parameters of the real vehicle only (the SITL drivers stay in boot_params).
+    hardware_params: dict[str, float] = {}
+
+    @property
+    def airframe(self) -> Airframe:
+        return Airframe(frame=self.frame, cameras=self.cameras, rangefinders=self.rangefinders,
+                        flow=self.flow, companion=self.companion, nav=self.nav)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "VehicleProfile":
+        bad = self.airframe.check(self.camera)
+        if bad:
+            raise ValueError("; ".join(bad))
+        return self
 
 
 def load_vehicle(name: str, folder: Path = VEHICLES_DIR) -> VehicleProfile:

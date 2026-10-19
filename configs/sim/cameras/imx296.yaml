@@ -1,0 +1,18 @@
+# Camera profile: Sony IMX296 (Raspberry Pi Global Shutter Camera), the optional VIO camera of the
+# x500-pi5-imx290 test bed (DECISIONS #16, ADR-0015 §6). Data only; read by aerosplat.sim.camera.
+#
+# Sensor numbers: Raspberry Pi Global Shutter Camera product brief (IMX296LQR-C, 1/2.9",
+# 1456 x 1088 active pixels, 3.45 µm square pixels, global shutter). The board takes CS-mount
+# lenses; the lens is NOT chosen yet: 6 mm is the nominal focal length of the common wide CS
+# lens and is here only so the profile resolves. Distortion unknown until calibrated.
+
+camera: imx296
+description: Sony IMX296 1/2.9" global shutter (Raspberry Pi Global Shutter Camera), 1456x1088
+sensor:
+  width_px: 1456
+  height_px: 1088
+  pixel_um: 3.45
+  shutter: global
+lenses:
+  6mm: {focal_mm: 6.0, use: "VIO candidate lens (not chosen)"}
+distortion: {model: none, calibrated: false}
