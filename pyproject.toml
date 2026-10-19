@@ -24,6 +24,8 @@ dependencies = [
 [project.optional-dependencies]
 # torch must match your CUDA build — see requirements.txt / README for the index URL.
 train = ["torch>=2.2", "torchvision>=0.17"]
+# Optional training log (`tensorboard: true` / `--tensorboard DIR`, gsplat only).
+tensorboard = ["tensorboard>=2.14"]
 dev = ["pytest", "ruff", "mypy", "httpx"]
 
 [project.scripts]
