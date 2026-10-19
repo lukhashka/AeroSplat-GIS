@@ -210,6 +210,27 @@ def test_replace_many_writes_the_state_once_and_one_audit_line_each(store):
     assert all(f.notes == "ok" for f in store.features())
 
 
+def test_create_many_stores_a_batch_with_one_audit_line_each(store):
+    batch = [a_point(u=u, lifecycle=Lifecycle.candidate) for u in (-4.0, 0.0, 4.0)]
+    store.create_many(batch, by="lukhashka", what="gridfit@1.0.0 запропонував")
+    assert [f.id for f in store.features()] == sorted(f.id for f in batch)
+    log = store.audit()
+    assert len(log) == 3 and all(e.op == "create" and e.by == "op:lukhashka" for e in log)
+    assert all(e.what.startswith("gridfit@1.0.0 запропонував opening.window") for e in log)
+    assert store.create_many([]) == []
+
+
+def test_create_many_is_all_or_nothing_on_a_duplicate(store):
+    kept = store.create(a_point(u=-4.0))
+    with pytest.raises(AuthoredError, match="already exists"):
+        store.create_many([a_point(u=0.0), kept])
+    twice = a_point(u=4.0)
+    with pytest.raises(AuthoredError, match="already exists"):
+        store.create_many([twice, twice])
+    assert [f.id for f in store.features()] == [kept.id]
+    assert len(store.audit()) == 1
+
+
 def test_a_bad_line_in_the_log_does_not_hide_the_good_ones(store):
     store.create(a_point())
     with store.audit_path.open("a", encoding="utf-8") as fh:

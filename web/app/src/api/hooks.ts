@@ -7,6 +7,8 @@ import type {
   AccessPointPatch,
   AddressOut,
   AuditEntry,
+  GridfitOut,
+  GridfitRequest,
   CaptureOut,
   CaptureSource,
   ImageRec,
@@ -263,6 +265,16 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
       mutationFn: (body: { floor_offset?: number; by?: string }) =>
         api.post<AddressOut>(
           `/sites/${project}/${site}/facades/${facadeId}/address`,
+          body,
+        ),
+      onSuccess: refresh,
+    }),
+    // Window candidates from the facade's periodic grid: stored as `candidate`,
+    // never verified (ADR-0009); the operator reviews them with V / X.
+    gridfit: useMutation({
+      mutationFn: (body: GridfitRequest) =>
+        api.post<GridfitOut>(
+          `/sites/${project}/${site}/facades/${facadeId}/candidates/gridfit`,
           body,
         ),
       onSuccess: refresh,

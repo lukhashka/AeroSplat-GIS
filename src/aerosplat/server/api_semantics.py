@@ -18,20 +18,26 @@ because somebody said so, and every change is appended to `authored/audit.jsonl`
 
 from __future__ import annotations
 
+import io
 import json
 from typing import Any, Optional
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
+from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
+from aerosplat.authored.candidates import Proposal, make_candidates, screen
 from aerosplat.authored.geometry import geometry_from_uv, make_access_point
 from aerosplat.authored.models import AccessPoint, Address, AuditEntry, Lifecycle, Origin, actor
 from aerosplat.authored.store import AuthoredError, AuthoredStore, NotFound as ApNotFound
 from aerosplat.semantics.addressing import Opening, address_facade, canonical_address, floor_label
+from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitResult, gridfit
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
-from aerosplat.semantics.ortho import FacadeOrthoError, FacadeOrthoSpec, facade_ortho
+from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
+                                       facade_ortho)
 from aerosplat.semantics.products import SemanticsMissing, SemanticsProduct, require_semantics
 from aerosplat.server import api_v2
 from aerosplat.store.catalog import Catalog
@@ -208,6 +214,41 @@ class AddressOut(BaseModel):
     features: list[AccessPoint] = Field(default_factory=list)
 
 
+# What a grid cell is proposed as. The fit finds window-sized openings in a repeating
+# grid; whether one is a door or a loggia is the reviewer's call (they can reclassify).
+GRIDFIT_CLASS = "opening.window"
+# The ortho gridfit renders for itself. Metric, so any scale works; this is the one it
+# was measured at on dataset_1910 (≈ 13 cm/px captures), and it keeps a 95 m wall
+# well under the render size limit.
+GRIDFIT_GSD_CM = 8.0
+
+
+class GridfitRequest(_In):
+    gsd_cm: float = Field(GRIDFIT_GSD_CM, ge=2.0, le=20.0)
+    run_id: Optional[str] = None
+    # Also render depth, so a cell behind a tree, a pole or a van -- anything well in
+    # front of the wall plane -- is dropped even when it is not green (§5.5).
+    depth: bool = True
+    # Fit and screen, but store nothing: what pressing the button would propose.
+    dry_run: bool = False
+    by: Optional[str] = None
+
+
+class GridfitOut(BaseModel):
+    facade_id: str
+    model: str
+    run_id: str
+    gsd_cm: float
+    dry_run: bool
+    refused: bool
+    result: GridfitResult
+    proposed: int                           # cells the fit would propose
+    # Stored as `candidate` (or, on a dry run, what would have been).
+    candidates: list[AccessPoint] = Field(default_factory=list)
+    # Proposals dropped because they land on an existing feature, by its lifecycle.
+    skipped: dict[str, int] = Field(default_factory=dict)
+
+
 # ── taxonomy ─────────────────────────────────────────────────────────────
 def _class_out(tax: Taxonomy, cls: TaxonomyClass) -> TaxonomyClassOut:
     handover = tax.handover_of(cls.id)
@@ -374,6 +415,108 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
     return AddressOut(facade_id=facade_id, rows=rows, column_centres=result.column_centres,
                       floor_height_m=result.floor_height_m, ambiguous=result.ambiguous,
                       reasons=result.reasons, features=store.features(facade_id=facade_id))
+
+
+def _decode(png: bytes, what: str, shape: tuple[int, int]) -> np.ndarray:
+    try:
+        arr = np.asarray(Image.open(io.BytesIO(png)))
+    except (OSError, ValueError):
+        raise HTTPException(502, f"render service returned an unreadable {what} image") from None
+    if arr.shape[:2] != shape:
+        raise HTTPException(502, f"render service returned a {what} image of "
+                                 f"{arr.shape[1]} × {arr.shape[0]} px, asked for "
+                                 f"{shape[1]} × {shape[0]}")
+    return arr
+
+
+def _run_gridfit(cat: Catalog, site: Site, product: SemanticsProduct, facade: Facade,
+                 grid: FacadeGrid, spec: FacadeOrthoSpec, shape: tuple[int, int],
+                 layers: dict[str, tuple[bytes, str]], tax: Taxonomy,
+                 body: GridfitRequest) -> GridfitOut:
+    """The CPU half of the gridfit endpoint: decode, fit, screen, store."""
+    rgb = _decode(layers["rgb"][0], "rgb", shape)[..., :3]
+    alpha = _decode(layers["alpha"][0], "alpha", shape).astype(float)
+    alpha = (alpha[..., 0] if alpha.ndim == 3 else alpha) / 255.0
+    front = None
+    if "depth" in layers:
+        depth = _decode(layers["depth"][0], "depth", shape).astype(float)
+        try:
+            max_m = float(json.loads(layers["depth"][1])["depth"]["max_m"])
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(502, "render service sent depth without its scale") from None
+        # Depth is the distance from the camera plane, which stands `standoff_m` in
+        # front of the wall; 0 means nothing was hit.
+        front = np.where(depth > 0, spec.standoff_m - depth / 65535.0 * max_m, np.nan)
+
+    coverage = None
+    cov = _coverage_out(product, facade)
+    if cov is not None:
+        coverage = CoverageRaster(views=np.asarray(cov.views, np.int32), u_min=cov.u_min,
+                                  v_min=cov.v_min, cell_m=cov.cell_m)
+    prior = tax.get(GRIDFIT_CLASS).size_prior_m
+    params = (GridfitParams(opening_w_m=prior.width, opening_h_m=prior.height) if prior
+              else GridfitParams())
+    result = gridfit(rgb, alpha, grid, coverage=coverage, front_m=front,
+                     bounds_uv=(facade.u_min, facade.u_max, facade.v_ground, facade.v_max),
+                     params=params)
+
+    proposals = [Proposal(rect=(c.u0, c.u1, c.v0, c.v1), confidence=c.confidence,
+                          notes=result.note(c)) for c in result.proposals]
+    store = _store(cat, site)
+    # Screen and store under the authored lock, so two presses of the button cannot
+    # both decide that a cell is still free.
+    with store.lock:
+        keep, skipped = screen(proposals, facade, store.features())
+        candidates = make_candidates(
+            keep, site_key=site.key, facade=facade, class_id=GRIDFIT_CLASS,
+            taxonomy=tax.version_string, model=result.model, created_by="pipeline:gridfit",
+            run_id=product.run.id, epoch_id=product.run.epoch_id,
+            evidence=[f"ortho:{facade.id}@{spec.gsd_cm:g}cm"])
+        if candidates and not body.dry_run:
+            store.create_many(candidates, by=body.by, what=f"{result.model} запропонував")
+    return GridfitOut(facade_id=facade.id, model=result.model, run_id=product.run.id,
+                      gsd_cm=spec.gsd_cm, dry_run=body.dry_run, refused=result.refused,
+                      result=result, proposed=len(proposals), candidates=candidates,
+                      skipped=skipped)
+
+
+@router.post("/sites/{project_id}/{site_id}/facades/{facade_id:path}/candidates/gridfit",
+             response_model=GridfitOut)
+async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
+                         body: GridfitRequest = GridfitRequest(),
+                         cat: Catalog = Depends(get_catalog)) -> GridfitOut:
+    """Propose window candidates from the facade's periodic grid (ROADMAP 7.3, step 1).
+
+    Renders the wall head-on (rgb, alpha and, by default, depth), fits the storey and
+    bay grid (`aerosplat.semantics.gridfit`) and stores every cell that looks like an
+    opening as a `candidate` with `origin: pipeline` -- never `verified` (ADR-0009).
+    Cells that land on a feature already there are skipped, a rejected one included,
+    so a wrong candidate is not proposed twice (§3.4) and a second press adds nothing.
+
+    A facade the grid does not describe comes back `refused` with the reasons, and
+    nothing is stored: that is an answer, not an error.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    facade = _facade(product, facade_id)
+    scene = api_v2._scene_name(cat, site)
+    if scene is None:
+        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    tax = _taxonomy(site)
+    _check_class(tax, GRIDFIT_CLASS, {})
+    spec = FacadeOrthoSpec(gsd_cm=body.gsd_cm)
+    try:
+        request, grid = facade_ortho(facade, spec)
+    except FacadeOrthoError as e:
+        raise HTTPException(422, str(e)) from None
+
+    layers: dict[str, tuple[bytes, str]] = {}
+    for output in ("rgb", "alpha", "depth") if body.depth else ("rgb", "alpha"):
+        one = request.model_copy(update={"output": output})
+        layers[output] = await run_in_threadpool(
+            api_v2._render_call, scene, one.model_dump_json(exclude_none=True))
+    return await run_in_threadpool(_run_gridfit, cat, site, product, facade, grid, spec,
+                                   (request.height, request.width), layers, tax, body)
 
 
 @router.get("/sites/{project_id}/{site_id}/facades/{facade_id:path}", response_model=FacadeOut)
