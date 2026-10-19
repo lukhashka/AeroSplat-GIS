@@ -410,15 +410,23 @@ class Catalog:
             q = q.order_by(RunRow.created_at, RunRow.slug)
             return [_run(r, site.key) for r in s.scalars(q)]
 
-    def latest_run(self, site: Site, *, status: RunStatus = RunStatus.ok,
-                   epoch_id: Optional[str] = None,
-                   with_products: Sequence[str] = ()) -> Optional[Run]:
-        """Most recently finished run in `status` that has at least one of `with_products`."""
+    def finished_runs(self, site: Site, *, status: RunStatus = RunStatus.ok,
+                      epoch_id: Optional[str] = None,
+                      with_products: Sequence[str] = ()) -> list[Run]:
+        """Runs in `status` that have at least one of `with_products`, most recently finished first."""
         runs = [r for r in self.list_runs(site, epoch_id) if r.status == status]
         if with_products:
             runs = [r for r in runs if any(k in r.products for k in with_products)]
         runs.sort(key=lambda r: (r.finished_at or r.created_at, r.id))
-        return runs[-1] if runs else None
+        return runs[::-1]
+
+    def latest_run(self, site: Site, *, status: RunStatus = RunStatus.ok,
+                   epoch_id: Optional[str] = None,
+                   with_products: Sequence[str] = ()) -> Optional[Run]:
+        """Most recently finished run in `status` that has at least one of `with_products`."""
+        runs = self.finished_runs(site, status=status, epoch_id=epoch_id,
+                                  with_products=with_products)
+        return runs[0] if runs else None
 
     def product_path(self, site: Site, run: Run, kind: str) -> Optional[Path]:
         rel = run.products.get(kind)

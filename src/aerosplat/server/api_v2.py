@@ -41,7 +41,7 @@ from aerosplat.store.catalog import Catalog, CatalogError, NotFoundError
 from aerosplat.store.models import (BBox, Capture, CaptureSource, Epoch, Image, Project, Run,
                                     RunStatus, Site, SiteKind)
 from aerosplat.store.paths import default_projects_root
-from aerosplat.store.scenes import CLOUD, SPLAT
+from aerosplat.store.scenes import scene_run
 
 router = APIRouter(prefix="/api/v2", tags=["v2"])
 
@@ -180,7 +180,7 @@ def _brief(run: Run) -> RunBrief:
 
 
 def _scene_name(cat: Catalog, site: Site) -> Optional[str]:
-    run = cat.latest_run(site, with_products=(SPLAT, CLOUD))
+    run = scene_run(cat, site)
     return site.key if run is not None else None
 
 
@@ -389,7 +389,7 @@ def run_detail(project_id: str, site_id: str, epoch_id: str, run_id: str,
         except ValueError:
             metrics = None
     report = cat.product_path(site, run, "report")
-    latest = cat.latest_run(site, with_products=(SPLAT, CLOUD))
+    latest = scene_run(cat, site)
     return RunDetail(run=run, stages=_manifest_stages(dirs.manifest), metrics=metrics,
                      has_report=bool(report and report.is_file()),
                      scene=site.key if latest is not None and latest.id == run.id else None)

@@ -7,6 +7,7 @@ No torch here: this only resolves paths and the `scene-meta.metric` block.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -16,6 +17,8 @@ from aerosplat.geo.sphere_enu import EARTH_MODEL as SPHERE_ENU_AFFINE
 from aerosplat.store.catalog import Catalog
 from aerosplat.store.models import Run, Site
 from aerosplat.store.paths import CATALOG_FILE
+
+log = logging.getLogger(__name__)
 
 # Product kinds a run registers (Catalog.finish_run) and the server reads.
 # For georeferenced Earth Studio runs SPLAT/CLOUD are the georef stage's
@@ -107,6 +110,43 @@ def run_metric(catalog: Catalog, site: Site, run: Run) -> Optional[dict[str, Any
                         site=site.key, epoch=run.epoch_id, run=run.id)
 
 
+# Scene discovery reruns every few seconds (render service, /scenes/refresh);
+# each skipped or replaced run is reported once per process.
+_reported: set[str] = set()
+
+
+def _report_once(msg: str) -> None:
+    if msg not in _reported:
+        _reported.add(msg)
+        log.warning(msg)
+
+
+def _missing_products(catalog: Catalog, site: Site, run: Run) -> list[Path]:
+    """The run's registered splat/cloud files that are no longer on disk."""
+    paths = (catalog.product_path(site, run, kind) for kind in (SPLAT, CLOUD))
+    return [p for p in paths if p is not None and not p.is_file()]
+
+
+def scene_run(catalog: Catalog, site: Site) -> Optional[Run]:
+    """The run a Site's scene is served from: its latest successful run whose
+    registered splat/cloud files all still exist.
+
+    A run whose folder was deleted would otherwise resolve to missing files and
+    shadow a legacy `data/<ds>_*.pt` scene of the same name; such runs are
+    skipped (with a warning) in favour of an older complete run, or no scene.
+    """
+    runs = catalog.finished_runs(site, with_products=(SPLAT, CLOUD))
+    for i, run in enumerate(runs):
+        missing = _missing_products(catalog, site, run)
+        if not missing:
+            return run
+        older = (f"беру старіший run {runs[i + 1].id}" if i + 1 < len(runs)
+                 else "сцену каталогу пропущено")
+        _report_once(f"   ⚠️  [Scenes] {site.key}: run {run.id} — немає файлів "
+                     f"{', '.join(str(p) for p in missing)}; {older}")
+    return None
+
+
 def catalog_scenes(catalog: Catalog) -> dict[str, SceneSource]:
     out: dict[str, SceneSource] = {}
     sites = catalog.list_sites()
@@ -114,7 +154,7 @@ def catalog_scenes(catalog: Catalog) -> dict[str, SceneSource]:
     for s in sites:
         bare_counts[s.id] = bare_counts.get(s.id, 0) + 1
     for site in sites:
-        run = catalog.latest_run(site, with_products=(SPLAT, CLOUD))
+        run = scene_run(catalog, site)
         if run is None:
             continue
         splat, cloud = catalog.product_path(site, run, SPLAT), catalog.product_path(site, run, CLOUD)
@@ -167,7 +207,8 @@ def legacy_scenes(data_dir: Path) -> dict[str, SceneSource]:
 
 def discover_scenes(projects_root: Optional[Path], data_dir: Optional[Path]
                     ) -> dict[str, SceneSource]:
-    """name -> scene. Catalog sites win over legacy datasets of the same name.
+    """name -> scene. Catalog sites win over legacy datasets of the same name,
+    unless none of the site's runs still has its splat/cloud files (scene_run).
 
     The catalog is only opened if it already exists: the server never
     creates a project tree as a side effect of starting.
