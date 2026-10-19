@@ -538,6 +538,71 @@ export interface AddressOut {
   features: AccessPoint[];
 }
 
+// ── window candidates from the facade grid (aerosplat.semantics.gridfit) ──
+export interface GridfitRefusal {
+  code: string;
+  message: string;
+}
+
+export interface GridfitStrip {
+  phase_m: number;
+  width_m: number;
+}
+
+export interface GridfitCell {
+  u0: number;
+  u1: number;
+  v0: number;
+  v1: number;
+  row: number;
+  bay: number;
+  strip: number;
+  score: number | null;
+  rendered: number;
+  covered: number;
+  vegetation: number;
+  occluded: number;
+  accepted: boolean;
+  reason: "" | "not_rendered" | "uncovered" | "occluded" | "vegetation" | "wall";
+  confidence: number;
+}
+
+export interface GridfitResult {
+  model: string;
+  m_per_px: number;
+  usable_fraction: number;
+  cue: string | null;
+  agreement: number | null;
+  bay_m: number | null;
+  strips: GridfitStrip[];
+  floor: { floor_m: number; strength: number; band_phase_m: number; band_h_m: number } | null;
+  refusals: GridfitRefusal[];
+  notes: string[];
+  cells: GridfitCell[];
+}
+
+export interface GridfitRequest {
+  gsd_cm?: number;
+  run_id?: string | null;
+  depth?: boolean;
+  dry_run?: boolean;
+  by?: string;
+}
+
+export interface GridfitOut {
+  facade_id: string;
+  model: string;
+  run_id: string;
+  gsd_cm: number;
+  dry_run: boolean;
+  refused: boolean;
+  result: GridfitResult;
+  proposed: number;
+  candidates: AccessPoint[];
+  /** Proposals dropped because they land on an existing feature, by its lifecycle. */
+  skipped: Partial<Record<Lifecycle, number>>;
+}
+
 export interface AuditEntry {
   at: string;
   by: string;

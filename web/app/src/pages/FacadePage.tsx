@@ -8,6 +8,7 @@ import type {
   CoverageGrid,
   FacadeGrid,
   FacadeOrthoMeta,
+  GridfitOut,
   Lifecycle,
   TaxonomyClass,
 } from "../api/types";
@@ -30,6 +31,35 @@ const LIFECYCLE_TONE: Record<Lifecycle, string> = {
 };
 
 type Draft = { u0: number; v0: number; u1: number; v1: number };
+
+const SKIPPED_LABEL: Record<Lifecycle, string> = {
+  candidate: "вже кандидати",
+  verified: "вже підтверджені",
+  rejected: "раніше відхилені",
+  stale: "на перевірці",
+};
+
+/** One line on what the grid fit did: how many candidates, from what grid, or why not. */
+function gridfitSummary(g: GridfitOut): { text: string; warn: boolean } {
+  const r = g.result;
+  if (g.refused)
+    return { text: `Сітку не знайдено: ${r.refusals.map((x) => x.message).join("; ")}`, warn: true };
+  const grid = [
+    r.floor && `поверх ${r.floor.floor_m.toFixed(2)} м`,
+    r.bay_m != null && `крок колонок ${r.bay_m.toFixed(2)} м`,
+  ].filter(Boolean);
+  const skipped = (Object.entries(g.skipped) as [Lifecycle, number][])
+    .filter(([, n]) => n > 0)
+    .map(([lc, n]) => `${n} ${SKIPPED_LABEL[lc]}`);
+  return {
+    text:
+      `${g.candidates.length} нових кандидатів` +
+      (grid.length ? ` (${grid.join(", ")})` : "") +
+      (skipped.length ? ` · пропущено: ${skipped.join(", ")}` : "") +
+      (g.candidates.length ? " · перевірте кожен: V підтвердити, X відхилити" : ""),
+    warn: false,
+  };
+}
 
 /** Pixel ↔ (u, v) for the orthophoto, in *image* pixels (0…width, 0…height at the edges). */
 function mapping(g: FacadeGrid) {
@@ -172,6 +202,9 @@ export function FacadePage() {
   const [hover, setHover] = useState<{ u: number; v: number } | null>(null);
   const [help, setHelp] = useState(false);
   const [addressNote, setAddressNote] = useState<string | null>(null);
+  const [gridNote, setGridNote] = useState<{ text: string; warn: boolean } | null>(null);
+  // The note is about one facade; moving to another must not leave it behind.
+  useEffect(() => setGridNote(null), [facadeKey]);
   const stageRef = useRef<HTMLDivElement>(null);
 
   // The classes an operator can put on a wall: openings first, then the constraints
@@ -281,6 +314,28 @@ export function FacadePage() {
     );
   };
 
+  /**
+   * Window candidates from the facade's periodic grid (gridfit). They arrive as
+   * `candidate`, never verified (ADR-0009): the first one is selected so the review
+   * can start straight away with V / X and the arrows.
+   */
+  const runGridfit = () => {
+    if (!facadeKey || edits.gridfit.isPending) return;
+    edits.gridfit.mutate(
+      {},
+      {
+        onSuccess: (g) => {
+          setGridNote(gridfitSummary(g));
+          const first = g.candidates[0];
+          if (first && !g.dry_run) {
+            setDraft(null);
+            setSelected(first.id);
+          }
+        },
+      },
+    );
+  };
+
   const step = (delta: number) => {
     if (!list.length) return;
     const at = list.findIndex((f) => f.id === selected);
@@ -314,6 +369,7 @@ export function FacadePage() {
     if (e.key === "ArrowLeft" || e.key === "k") return step(-1);
     if (e.key === "c" || e.key === "C") return setShowCoverage((v) => !v);
     if (e.key === "a" || e.key === "A") return void runAddress();
+    if (e.key === "g" || e.key === "G") return void runGridfit();
     if (!current) return;
     if (e.key === "v" || e.key === "V") return setLifecycle(current.id, "verified");
     if (e.key === "x" || e.key === "X") return setLifecycle(current.id, "rejected");
@@ -428,7 +484,11 @@ export function FacadePage() {
         </div>
       )}
       <ErrorBox error={renderError instanceof ApiError && renderError.status === 503 ? null : renderError} />
-      <ErrorBox error={edits.create.error ?? edits.update.error ?? edits.remove.error ?? edits.address.error} />
+      <ErrorBox
+        error={
+          edits.create.error ?? edits.update.error ?? edits.remove.error ?? edits.address.error ?? edits.gridfit.error
+        }
+      />
 
       <div className="render-layout">
         <div className="panel render-controls">
@@ -483,6 +543,22 @@ export function FacadePage() {
                   Адресація <kbd>A</kbd>
                 </button>
               </div>
+              <button
+                className="btn sm"
+                style={{ width: "100%", marginBottom: 8 }}
+                disabled={edits.gridfit.isPending}
+                title="Знайти повторювану сітку поверхів і колонок на ортофото і запропонувати її клітинки як кандидати (не підтверджені). Фасад без чіткої сітки буде відхилено з причиною."
+                onClick={runGridfit}
+              >
+                {edits.gridfit.isPending ? "Шукаю вікна…" : "Знайти вікна за сіткою"} <kbd>G</kbd>
+              </button>
+              {gridNote && (
+                <div className="draft-box" style={{ marginBottom: 8 }}>
+                  <small className={gridNote.warn ? "" : "faint"} style={gridNote.warn ? { color: "var(--amber)" } : undefined}>
+                    {gridNote.text}
+                  </small>
+                </div>
+              )}
               {addressNote && (
                 <div className="draft-box" style={{ marginBottom: 8 }}>
                   <small className={addressNote.includes("неоднозначно") ? "" : "faint"}
@@ -674,6 +750,7 @@ export function FacadePage() {
             <div><kbd>Del</kbd> видалити</div>
             <div><kbd>C</kbd> карта покриття</div>
             <div><kbd>A</kbd> адресація (поверхи й колонки)</div>
+            <div><kbd>G</kbd> знайти вікна за сіткою (кандидати на перевірку)</div>
           </div>
         </div>
       )}

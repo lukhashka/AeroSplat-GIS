@@ -148,6 +148,32 @@ class AuthoredStore:
                 after=feature.model_dump(mode="json", by_alias=True)))
             return feature
 
+    def create_many(self, features: list[AccessPoint], *, by: Optional[str] = None,
+                    what: str = "proposed") -> list[AccessPoint]:
+        """Add several features in one state write, one audit entry each.
+
+        For a pipeline proposing a facade's worth of candidates at once: all of them or,
+        on a duplicate id, none.
+        """
+        who = actor(by)
+        with self._lock:
+            state = self.load()
+            seen = {f.id for f in state.features}
+            for f in features:
+                if f.id in seen:
+                    raise AuthoredError(f"access point '{f.id}' already exists")
+                seen.add(f.id)
+            if not features:
+                return []
+            state.features.extend(features)
+            self._save(state)
+            for f in features:
+                self._append_audit(AuditEntry(
+                    by=who, op="create", feature_id=f.id, site_key=self.site_key,
+                    what=f"{what} {f.class_} on {f.where}",
+                    after=f.model_dump(mode="json", by_alias=True)))
+            return features
+
     @staticmethod
     def _carry_over(new: AccessPoint, old: AccessPoint, who: str, what: str) -> None:
         """Keep the old record's history, and append this change to it.
