@@ -98,3 +98,67 @@ def test_render_command_uses_the_gsplat_env_script_only_when_needed(monkeypatch,
     assert up.render_service_command(8123)[0] == sys.executable
     monkeypatch.setattr(up.os, "name", "posix")
     assert up.render_service_command(8123)[0] == sys.executable
+
+
+def _windows_with_env_script(monkeypatch, tmp_path):
+    env_bat = tmp_path / "tools" / "gsplat_env.bat"
+    env_bat.parent.mkdir()
+    env_bat.write_text("@echo off\n")
+    monkeypatch.setattr(up, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(up.os, "name", "nt")
+    return env_bat
+
+
+def test_gpu_worker_runs_in_the_gsplat_env_when_gsplat_would_jit_build(monkeypatch, tmp_path):
+    env_bat = _windows_with_env_script(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "gsplat", type(sys)("gsplat"))     # no csrc: JIT build
+    gpu = up.worker_command("gpu")
+    assert gpu[:3] == ["cmd.exe", "/c", str(env_bat)]
+    assert gpu[3:] == [sys.executable, "-m", "aerosplat.jobs.worker", "--resource", "gpu"]
+    # The CPU worker never renders: no toolchain, no extra seconds of vcvars per restart.
+    assert up.worker_command("cpu") == [sys.executable, "-m", "aerosplat.jobs.worker",
+                                        "--resource", "cpu"]
+
+
+def test_gpu_worker_is_not_wrapped_when_nothing_would_be_built(monkeypatch, tmp_path):
+    _windows_with_env_script(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "gsplat", None)                    # not installed
+    assert up.worker_command("gpu")[0] == sys.executable
+    gsplat = type(sys)("gsplat")
+    csrc = type(sys)("gsplat.csrc")
+    gsplat.csrc = csrc
+    monkeypatch.setitem(sys.modules, "gsplat", gsplat)
+    monkeypatch.setitem(sys.modules, "gsplat.csrc", csrc)               # prebuilt
+    assert up.worker_command("gpu")[0] == sys.executable
+    monkeypatch.setattr(up.os, "name", "posix")
+    monkeypatch.setitem(sys.modules, "gsplat", type(sys)("gsplat"))
+    assert up.worker_command("gpu")[0] == sys.executable                # the script is Windows-only
+
+
+def test_gpu_worker_is_not_wrapped_without_the_env_script(monkeypatch, tmp_path):
+    monkeypatch.setattr(up, "PROJECT_DIR", tmp_path)                    # no tools/gsplat_env.bat
+    monkeypatch.setattr(up.os, "name", "nt")
+    monkeypatch.setitem(sys.modules, "gsplat", type(sys)("gsplat"))
+    assert up.worker_command("gpu")[0] == sys.executable
+
+
+def test_supervisor_spawns_the_gpu_worker_with_its_wrapped_command(monkeypatch, tmp_path):
+    _windows_with_env_script(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "gsplat", type(sys)("gsplat"))
+    spawned = []
+
+    class FakeProc:
+        returncode = None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(up.subprocess, "Popen", lambda cmd, **kw: spawned.append(cmd) or FakeProc())
+    monkeypatch.setattr(up, "kill_tree", lambda p: None)
+    sup = up.WorkerSupervisor(["gpu", "cpu"])
+    sup.start_all()
+    sup.stop()
+    sup.join(timeout=2)
+    gpu = next(c for c in spawned if c[-1] == "gpu")
+    cpu = next(c for c in spawned if c[-1] == "cpu")
+    assert gpu[0] == "cmd.exe" and cpu[0] == sys.executable

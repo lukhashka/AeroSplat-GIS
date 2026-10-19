@@ -27,7 +27,7 @@ from aerosplat.geo.affine import AffineMap
 from aerosplat.io.colmap_model import CameraPose, read_model
 from aerosplat.logging_utils import fix_console_encoding, get_logger
 from aerosplat.semantics.buildings import find_buildings
-from aerosplat.semantics.coverage import facade_coverage, transform_pose
+from aerosplat.semantics.coverage import coverage_report, facade_coverage, transform_pose
 from aerosplat.semantics.facades import facades_of_building
 from aerosplat.semantics.models import (COVERAGE_NPZ, SEMANTICS_JSON, TERRAIN_NPZ, Facade,
                                         SemanticsResult)
@@ -106,23 +106,13 @@ def run_semantics(cloud: Path, out_dir: Path, *, sparse: Optional[Path] = None,
                                             max_gsd_m=coverage_max_gsd_m)
             facades[i] = f.model_copy(update={"coverage": summary})
             grids[f.id] = grid
-        cov = [f.coverage for f in facades if f.coverage]
-        if cov:
-            best = [c.best_gsd_cm for c in cov if c.best_gsd_cm is not None]
-            log.info(f"  Покриття ({len(cameras)} кадрів): видно медіана "
-                     f"{100 * float(np.median([c.visible_fraction for c in cov])):.0f}%, "
-                     f"з потрібною деталізацією "
-                     f"{100 * float(np.median([c.fraction for c in cov])):.0f}% "
-                     f"(поріг {100 * coverage_max_gsd_m:.0f} см/px, "
-                     f"найкраще {min(best):.0f} см/px)" if best else
-                     f"  Покриття ({len(cameras)} кадрів): жоден фасад не видно")
-            coarse = [c for c in cov if c.too_coarse]
-            if best and len(coarse) > 0.5 * len(cov):
-                warnings.append(
-                    f"{len(coarse)} із {len(cov)} фасадів видно, але не різкіше ніж "
-                    f"{min(best):.0f} см/px (потрібно {100 * coverage_max_gsd_m:.0f}): "
-                    f"зйомка задалеко, щоб читати отвори — потрібен ближчий обліт")
-                log.warning(f"  ⚠️  {warnings[-1]}")
+        lines, cov_warnings = coverage_report(buildings, facades, max_gsd_m=coverage_max_gsd_m,
+                                              n_cameras=len(cameras))
+        for line in lines:
+            log.info(f"  {line}")
+        for w in cov_warnings:
+            warnings.append(w)
+            log.warning(f"  ⚠️  {w}")
     else:
         warnings.append("камер немає (sfm/sparse не знайдено) — карту покриття не побудовано")
         log.warning("  ⚠️  Камер не знайдено — без карти покриття")

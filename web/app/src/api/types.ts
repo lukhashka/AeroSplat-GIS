@@ -724,3 +724,117 @@ export interface SimReport {
   timing: Record<string, number>;
   faults: { fault: string; reason: string; on: number | null; off: number | null; note: string }[];
 }
+
+// ── targets, takeoff spots and planning (aerosplat.mission.models, api_mission) ──
+export type TargetState = "draft" | "confirmed" | "revoked";
+
+export interface SigmaTerm {
+  value_m: number;
+  source: string;
+}
+
+export interface MissionTarget {
+  id: string;
+  site_key: string;
+  ap_id: string;
+  ap_class: string;
+  ap_kind: string;
+  taxonomy: string;
+  handover: {
+    mode: string;
+    standoff_m: number;
+    min_clearance_m: number;
+    approach_cone_deg: number;
+    entry_distance_m: number | null;
+    hover_dh_m: number;
+    max_sigma_m: number;
+    source: string;
+    overridden: string[];
+  };
+  sigma: { ap: SigmaTerm; georef: SigmaTerm };
+  state: TargetState;
+  created_by: string;
+  created_at: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  notes: string;
+}
+
+/** The vehicle and the margins; only the fields sent, the server's defaults fill the rest. */
+export interface PlanningProfile {
+  r_drone_m?: number;
+  sigma_gnss_m?: number;
+  k_sigma?: number;
+  transit_margin_m?: number;
+  max_alt_rel_m?: number;
+  wire_height_m?: number;
+  surface_relief_m?: number;
+}
+
+export interface TakeoffQuery {
+  run_id?: string;
+  profile?: PlanningProfile;
+  max_distance_m?: number; // default 150
+  n?: number; // default 5
+  ground_tol_m?: number; // default 1
+}
+
+/** A place to arm and take off from, checked as a plan's home and takeoff would be. */
+export interface TakeoffCandidate {
+  rank: number;
+  enu: Vec3; // on the measured ground
+  distance_m: number; // horizontally, to the target
+  open_radius_m: number;
+  transit_z: number | null; // null for `best_open`, which was never checked
+  climb_m: number | null;
+  above_dtm_m: number;
+  notes: string[];
+}
+
+/** Every candidate found, or an honest account of why there is none (`message`). */
+export interface TakeoffSearch {
+  target: Vec3; // where the transit ends (E, or the pad)
+  radius_m: number; // takeoff corridor r = r_drone + m + k·σ_transit
+  relief_m: number;
+  sigma_transit_m: number;
+  max_distance_m: number;
+  spacing_m: number;
+  ground_tol_m: number;
+  grid_limited: boolean;
+  searched_columns: number;
+  rejected: Record<string, number>; // first failed test -> columns
+  checked: number;
+  candidates: TakeoffCandidate[];
+  best_open: TakeoffCandidate | null;
+  sigma_gnss_would_fit_m: number | null;
+  message: string;
+}
+
+export interface MissionCreate {
+  target_id: string;
+  run_id?: string;
+  home_enu?: Vec3; // default: the Site origin, on the surface
+  home_search?: boolean; // instead of home_enu: the nearest spot of the takeoff search
+  profile?: PlanningProfile;
+  altitude_frame?: "relative_home";
+  by?: string;
+}
+
+/** POST /missions answers with the whole plan; this is the part the page reads. */
+export interface MissionPlan {
+  id: string;
+  site_key: string;
+  verdict: MissionVerdict;
+  findings: MissionFinding[];
+  home: { enu: Vec3; lat: number; lon: number; h_ellipsoid: number; source: string };
+  transit_z: number;
+  occupancy: { run_id: string; epoch_id: string; format: string; res_m: number };
+}
+
+/** The `detail` of a 409 from the planner: why there is no plan, every reason named. */
+export interface MissionRefusal {
+  message: string;
+  reasons: MissionFinding[];
+}

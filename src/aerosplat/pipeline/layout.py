@@ -19,7 +19,7 @@ from aerosplat.geo.crs import GeoPoint
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
 
 if TYPE_CHECKING:
-    from aerosplat.store.models import Capture, Site
+    from aerosplat.store.models import BBox, Capture, Site
     from aerosplat.store.paths import SiteDirs
 
 
@@ -72,6 +72,8 @@ class RunLayout:
     frame_prefix: str
     # Site ENU origin; None only for legacy runs (origin = mean of the frames).
     origin: Optional[GeoPoint] = None
+    # The Site's WGS84 bbox, if it has one: the default extent of the occupancy grid.
+    site_bbox: Optional["BBox"] = None
     site_key: Optional[str] = None
     epoch_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -176,6 +178,7 @@ class RunLayout:
             occupancy_dir=run.root / "occupancy",
             frame_prefix=capture.frame_prefix or site.id,
             origin=site.origin,
+            site_bbox=site.bbox,
             site_key=site.key,
             epoch_id=epoch_id,
             run_id=run_id,

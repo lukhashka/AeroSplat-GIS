@@ -126,3 +126,47 @@ def confirmed(tmp_path, ap: AccessPoint, *, sigma_ap: float = 0.1, sigma_georef:
     target = targets.create(load_taxonomy(), ap.id, by="tester", sigma_ap_m=sigma_ap,
                             sigma_georef_m=sigma_georef, confirm=True, **kw)
     return target, authored, targets
+
+
+# ── the ground the takeoff search reads (semantics terrain of the same "run") ──
+def street_terrain():
+    """The semantics raster of the street: 1 m cells over the grid, flat DTM at z = 0, the
+    building's footprint labelled 1 (B01). (TerrainModel, dsm, dtm, labels)."""
+    from aerosplat.semantics.models import TerrainModel
+
+    rows, cols = int(SHAPE[0] * RES), int(SHAPE[1] * RES)
+    model = TerrainModel(res_m=1.0, x0=X0, y0=Y0, rows=rows, cols=cols, n_points=rows * cols,
+                         filled_cells=rows * cols)
+    xc = X0 + np.arange(cols) + 0.5
+    yc = Y0 + np.arange(rows) + 0.5
+    inside = ((yc >= 15) & (yc < 30))[:, None] & ((xc >= -10) & (xc < 10))[None, :]
+    labels = inside.astype(np.int32)
+    dtm = np.zeros((rows, cols))
+    dsm = np.where(inside, 20.0, 0.0)
+    return model, dsm, dtm, labels
+
+
+def street_ground(labels: bool = True):
+    from aerosplat.mission.takeoff import Ground
+
+    model, _, dtm, lab = street_terrain()
+    return Ground(terrain=model, dtm=dtm, labels=lab if labels else None)
+
+
+def write_street_semantics(folder) -> None:
+    """semantics.json + terrain.npz for the street, as the semantics stage would write them."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    from aerosplat.semantics.models import Building, SemanticsResult
+
+    model, dsm, dtm, labels = street_terrain()
+    b = Building(id="B01", footprint=[(-10, 15), (10, 15), (10, 30), (-10, 30)], area_m2=300,
+                 ground_z=0.0, roof_z=20.0, height_m=20.0)
+    folder = _Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "semantics.json").write_text(
+        SemanticsResult(terrain=model, buildings=[b], facades=[]).model_dump_json(),
+        encoding="utf-8")
+    np.savez_compressed(folder / "terrain.npz", dsm=dsm, dtm=dtm, labels=labels)
+    assert _json.loads((folder / "semantics.json").read_text(encoding="utf-8"))["terrain"]

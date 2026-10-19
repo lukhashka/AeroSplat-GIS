@@ -151,6 +151,14 @@ class RunConfig(BaseModel):
     # Колонки без даних: невідомі до лінії дахів ("skyline") або до неба ("sky").
     occupancy_unknown: Literal["skyline", "sky"] = "skyline"
     occupancy_skyline_quantile: float = Field(0.9999, gt=0.5, le=1)
+    # Межі сітки (aerosplat.surface.extent). Поза сіткою все заблоковано (OUTSIDE), тож місія
+    # мусить уміщатися в ній; сітку ніколи не обрізають мовчки під occupancy_max_voxels.
+    #   "auto"   — occupancy_bbox, якщо задано; інакше bbox ділянки (site.yaml); інакше квадрат
+    #              ±occupancy_radius навколо початку Site (центру зйомки);
+    #   "radius" — квадрат навколо початку Site, навіть коли в ділянки є bbox;
+    #   "raster" — увесь растр рельєфу: усе, що покриває хмара (Earth Studio: ~1.6 × 1.8 км).
+    occupancy_extent: Literal["auto", "radius", "raster"] = "auto"
+    occupancy_radius: float = Field(150.0, gt=0, le=5000)      # півсторона квадрата, м
     occupancy_bbox: Optional[str] = None                       # "xmin,ymin,xmax,ymax", Site ENU
     occupancy_max_voxels: int = Field(400_000_000, ge=1)
     # Space carving (aerosplat.surface.carving): промені камер до точок, які вони бачили
@@ -181,6 +189,9 @@ class RunConfig(BaseModel):
                              f"semantics_res={self.semantics_res}")
         if self.occupancy_headroom < self.occupancy_assumed_margin + 2 * self.occupancy_res:
             raise ValueError("occupancy_headroom must exceed occupancy_assumed_margin + 2 voxels")
+        if self.occupancy_bbox is not None and self.occupancy_extent != "auto":
+            raise ValueError(f"occupancy_bbox and occupancy_extent={self.occupancy_extent!r} "
+                             f"contradict each other: an explicit bbox needs extent 'auto'")
         return self
 
     def to_dict(self) -> dict[str, Any]:

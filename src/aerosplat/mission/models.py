@@ -49,6 +49,8 @@ class Code(str, Enum):
     unsupported_kind = "unsupported_kind"
     override_relaxes_taxonomy = "override_relaxes_taxonomy"
     ap_missing = "ap_missing"
+    outside_grid = "outside_grid"               # the mission leaves the occupancy grid: no check
+    no_takeoff_spot = "no_takeoff_spot"         # home search found no spot for this profile
     target_not_confirmed = "target_not_confirmed"
     target_revoked = "target_revoked"
     target_changed = "target_changed"           # the access point was edited after confirmation
@@ -266,6 +268,41 @@ class HomePoint(_Model):
     # AMSL needs a verified absolute height and a geoid model; v0 has neither.
     amsl_m: Optional[float] = None
     amsl_verified: bool = False
+
+
+class TakeoffCandidate(_Model):
+    """A place to arm and take off from (aerosplat.mission.takeoff), checked like a plan's home."""
+
+    rank: int = Field(ge=1)
+    enu: Vec3                               # on the measured ground (column centre)
+    distance_m: float                       # horizontally, to the target
+    open_radius_m: float                    # ≈ open ground around it (±0.1 m; capped)
+    # ENU height of a transit from here to the target, and how far above home that is
+    # (None for `TakeoffSearch.best_open`, which was never checked).
+    transit_z: Optional[float] = None
+    climb_m: Optional[float] = None
+    above_dtm_m: float                      # surface minus the semantics DTM
+    notes: list[str] = Field(default_factory=list)
+
+
+class TakeoffSearch(_Model):
+    """Every candidate found, or an honest account of why there is none."""
+
+    target: Vec3
+    radius_m: float                         # takeoff corridor r = r_drone + m + k·σ_transit
+    relief_m: float                         # ground bumps the takeoff leg ignores
+    sigma_transit_m: float                  # hypot(σ_georef, σ_GNSS)
+    max_distance_m: float
+    spacing_m: float                        # candidates are at least this far apart
+    ground_tol_m: float
+    grid_limited: bool                      # the search disk reaches beyond the grid
+    searched_columns: int
+    rejected: dict[str, int]                # first failed test -> columns
+    checked: int                            # candidates that went through the exact checks
+    candidates: list[TakeoffCandidate]
+    best_open: Optional[TakeoffCandidate] = None    # the most open ground, when none qualifies
+    sigma_gnss_would_fit_m: Optional[float] = None  # ... and the σ_GNSS that would let it
+    message: str
 
 
 class OccupancyRef(_Model):

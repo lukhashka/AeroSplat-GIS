@@ -6,6 +6,7 @@ import type { FlightTrajectory, MissionGeometry, SimReport, SimRunSummary } from
 import { FlightTimeline } from "../components/FlightTimeline";
 import { Icon } from "../components/Icon";
 import { MissionMap } from "../components/MissionMap";
+import { MissionPlanner } from "../components/MissionPlanner";
 import { MissionScene, type SceneLayer, type SceneStatus, type SceneView } from "../components/MissionScene";
 import { ErrorBox } from "../components/Modal";
 import {
@@ -59,6 +60,8 @@ export function FlightPage() {
   const [params, setParams] = useSearchParams();
   const missions = useMissions(project, site);
   const sims = useSiteSims(project, site);
+  const [planning, setPlanning] = useState(false);
+  const showPlanner = planning || (!!missions.data && !missions.data.length);
 
   // mission and run: from the URL, else the newest mission that has flown, else the first one
   const flown = useMemo(() => new Set((sims.data ?? []).map((r) => r.mission_id)), [sims.data]);
@@ -92,6 +95,13 @@ export function FlightPage() {
           <h1>Місія / проліт</h1>
         </div>
         <div className="row">
+          <button
+            className={`btn${showPlanner ? " primary" : ""}`}
+            title="Спланувати місію до підтвердженої цілі: місце зльоту, план, вердикт"
+            onClick={() => setPlanning((p) => !p)}
+          >
+            <Icon name="plus" /> Нова місія
+          </button>
           <label className="field inline">
             <span>Місія</span>
             <select value={missionId ?? ""} onChange={(e) => select(e.target.value)} disabled={!missions.data?.length}>
@@ -123,12 +133,22 @@ export function FlightPage() {
       </div>
 
       <ErrorBox error={missions.error ?? sims.error ?? geometry.error ?? report.error ?? trajectory.error} />
+      {showPlanner && (
+        <MissionPlanner
+          project={project}
+          site={site}
+          onPlanned={(id) => {
+            setPlanning(true); // stays open with the verdict when this was the site's first mission
+            select(id);
+          }}
+        />
+      )}
       {missions.data && !missions.data.length && (
         <div className="panel">
           <div className="empty">
             <div className="big">На ділянці ще немає місій</div>
-            Місію планують з підтвердженої цілі (API v2 <span className="mono">POST /missions</span>), проліт — раннером
-            SITL: <span className="mono">python -m aerosplat.sim.runner scenario.yaml</span>.
+            Сплануйте першу з підтвердженої цілі вище; проліт — раннером SITL:{" "}
+            <span className="mono">python -m aerosplat.sim.runner scenario.yaml</span>.
           </div>
         </div>
       )}

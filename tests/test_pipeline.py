@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import sys
 
 import pytest
 import torch
@@ -104,6 +105,103 @@ def test_every_stage_entry_resolves(cloud_source):
     for stage in STAGES.values():
         assert callable(stage.entry(cfg)), stage.name
         assert stage.script(cfg).is_file(), stage.name
+
+
+# ── rasterizer=gsplat is checked before the first stage, not when training starts ──
+@pytest.fixture
+def no_gsplat_toolchain(monkeypatch):
+    from aerosplat.gs import gsplat_backend
+
+    asked: list[int] = []
+
+    def problems():
+        asked.append(1)
+        return ["cl.exe (MSVC) не в PATH"]
+
+    monkeypatch.setattr(gsplat_backend, "gsplat_problems", problems)
+    return asked
+
+
+def test_gsplat_run_without_toolchain_is_refused_in_preflight(layout, no_gsplat_toolchain):
+    cfg, L = layout
+    cfg = dict(cfg, rasterizer="gsplat")
+    with pytest.raises(SystemExit) as e:
+        runner.preflight(cfg, L, ["sfm", "dense", "parse", "train"])
+    msg = str(e.value.code)
+    assert "'train'" in msg and "cl.exe (MSVC) не в PATH" in msg and "rasterizer=auto" in msg
+    assert not L.manifest_path.exists()                  # nothing ran, nothing was recorded
+
+
+def test_gsplat_dry_run_only_warns(layout, no_gsplat_toolchain):
+    cfg, L = layout
+    runner.preflight(dict(cfg, rasterizer="gsplat"), L, ["train"], dry_run=True)
+    assert no_gsplat_toolchain                           # it was checked
+
+
+def test_gsplat_check_is_skipped_when_nothing_renders_with_gsplat(layout, no_gsplat_toolchain):
+    cfg, L = layout
+    for raster in ("auto", "cuda", "torch"):
+        assert runner.check_rasterizer(dict(cfg, rasterizer=raster), L, ["train"]) is None
+    gs = dict(cfg, rasterizer="gsplat")
+    assert runner.check_rasterizer(gs, L, ["sfm", "dense", "parse"]) is None
+    assert runner.check_rasterizer(dict(gs, eval_every=0), L, ["eval"]) is None   # eval skipped
+    assert no_gsplat_toolchain == []                     # never even asked
+    assert runner.check_rasterizer(gs, L, ["eval"]) is not None
+
+
+def test_gsplat_check_does_not_refuse_a_resume_whose_training_is_done(layout, no_gsplat_toolchain,
+                                                                      monkeypatch):
+    cfg, L = layout
+    cfg = dict(cfg, rasterizer="gsplat", eval_every=0)
+    calls: list[str] = []
+    _fake_stage(monkeypatch, calls)
+    L.splat_pt.parent.mkdir(parents=True, exist_ok=True)
+    L.splat_pt.write_bytes(b"x")
+    runner.run_stages(cfg, L, ["train"])
+    assert runner.stages_to_run(cfg, L, ["train", "georef"], resume=True) == []
+    assert runner.check_rasterizer(cfg, L, ["train"], resume=True) is None
+    assert runner.check_rasterizer(cfg, L, ["train"], resume=False) is not None
+    # A changed training option makes train run again: then the check applies.
+    assert runner.check_rasterizer(dict(cfg, iterations=10), L, ["train"], resume=True) is not None
+
+
+def test_gsplat_problems_names_each_missing_piece(monkeypatch):
+    from aerosplat.gs import gsplat_backend as gb
+
+    monkeypatch.setitem(sys.modules, "gsplat", None)
+    assert gb.gsplat_problems() == [gb.GSPLAT_MISSING]
+    with pytest.raises(ImportError, match="pip install gsplat"):
+        gb.require_gsplat()
+
+    fake = type(sys)("gsplat")
+    monkeypatch.setitem(sys.modules, "gsplat", fake)
+    monkeypatch.setattr(gb.torch.cuda, "is_available", lambda: False)
+    assert "CUDA" in gb.gsplat_problems()[0]
+
+    monkeypatch.setattr(gb.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(gb, "build_env_problems", lambda: ["ninja не знайдено в PATH"])
+    (p,) = gb.gsplat_problems()
+    assert "ninja не знайдено" in p and "gsplat_env.bat" in p and "aerosplat up" in p
+    with pytest.raises(RuntimeError, match="ninja"):
+        gb.require_gsplat()
+
+    monkeypatch.setattr(gb, "build_env_problems", lambda: [])
+    assert gb.gsplat_problems() == []                    # the toolchain is right: JIT will work
+    monkeypatch.setattr(gb, "build_env_problems", lambda: ["x"])
+    csrc = type(sys)("gsplat.csrc")
+    fake.csrc = csrc
+    monkeypatch.setitem(sys.modules, "gsplat.csrc", csrc)
+    assert gb.gsplat_problems() == []                    # prebuilt: no toolchain needed
+
+
+def test_stage_failure_reason_reaches_the_run_log(layout, monkeypatch):
+    cfg, L = layout
+    calls: list[str] = []
+    _fake_stage(monkeypatch, calls, fail="sfm")
+    with pytest.raises(ValueError):
+        runner.run_stages(cfg, L, ["sfm"])
+    assert "впала після" in L.log_path.read_text(encoding="utf-8")
+    assert "ValueError: boom" in L.log_path.read_text(encoding="utf-8")
 
 
 # ── Site runs (ADR-0006): RunLayout as a view on the project tree ─────────
