@@ -1,4 +1,4 @@
-# Vehicle profile of the GNSS-free TEST BED (owner's decision 2026-10-19, DECISIONS #16,
+# Vehicle profile of the GNSS-free TEST BED (owner's hardware decision 2026-10-19,
 # ADR-0015 §6): X500 V2 class quad, Pixhawk 6C/6X (ArduPilot 4.7), Raspberry Pi 5 8 GB companion,
 # IMX290 4 mm tilted down-forward for VPS, optional IMX296 global-shutter camera for VIO, optical
 # flow + downward lidar module, three forward rangefinders, M10 GNSS as monitor only.

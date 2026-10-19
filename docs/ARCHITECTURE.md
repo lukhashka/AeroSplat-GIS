@@ -1341,7 +1341,12 @@ numpy, детерміновано. Регулярний фасад повтор�
 * `camera` — профілі камер (`configs/sim/cameras/imx290.yaml`: інтринсики для 2.8/4/6 мм,
   rolling shutter); дані для SIM-3 і карти локалізовності.
 * Профілі апаратів — `configs/sim/vehicles/` (`sitl-quad`; `sitl-quad-extnav` з потоком і
-  далекоміром SITL, `boot_params` — драйвери, що діють лише з увімкнення).
+  далекоміром SITL, `boot_params` — драйвери, що діють лише з увімкнення; `x500-pi5-imx290` —
+  тестовий апарат, ADR-0015 §6). Розділи про справжній апарат (`frame` з r_drone, `cameras` з
+  кріпленням, `rangefinders`, `flow`, `companion`, `nav`, `hardware_params` — лише для заліза,
+  у SITL не надсилаються) описує `sim.airframe` і перехресно перевіряє `VehicleProfile`
+  (r_drone не менший за кінці пропелерів і не більший на > 0.15 м; камера профілю = камера VPS;
+  далекомір потоку дивиться вниз). Усі розділи необов'язкові — старі профілі не змінились.
 * Профіль навігації місії — `mission.models.NavProfile` у `PlanningProfile.nav`; експорт
   (`export.nav_parameters`, `nav_problems`) пише й перевіряє навігаційну частину `.parm`.
 
@@ -1434,6 +1439,45 @@ numpy, детерміновано. Регулярний фасад повтор�
   `dataset_1910` (run `20261019-105253`): ортофото 6431×5004 px по 0.25 м, 12 плиток, ~1 хв
   на RTX 4060; DSM/DTM/nDSM 1610×1253 по 1 м; LAZ 2.59 млн точок; `.ply` 130 МБ; межі будівель
   з nDSM лягають на ортофото (узгодженість між продуктами, не абсолютна перевірка).
+
+### 3.26 Візуальна локалізація відносно двійника — `aerosplat/vps/` (ADR-0015, шар A)
+
+Прототип VPS: кадр камери апарата → поза в Site ENU з коваріацією **або відмова з причиною**.
+Дві половини з жорсткою межею залежностей: те, що летить на companion (Raspberry Pi 5), імпортує
+лише numpy + OpenCV (тест перевіряє в окремому інтерпретаторі, що `torch`, `gsplat`, `pydantic`
+не завантажуються); те, що будує атлас, живе на наземній станції з GPU. Бенч і числа —
+[SIMULATION_AND_DELIVERY §4.12](SIMULATION_AND_DELIVERY.md).
+
+* `features` — екстрактори, що підключаються: ORB (32 Б) і AKAZE (61 Б), обидва бінарні
+  (Hamming); ознаки розкладаються по сітці кадру (`bucket`), бо PnP потрібні точки по всьому
+  кадру, а не лише багато. Координати пікселів — OpenCV (центр пікселя (0,0) у (0,0)); render
+  service має центр у (0.5, 0.5) — `geometry.cv_intrinsics` переводить. Глобальний дескриптор
+  (кадр 32×18) — лише для пошуку без апріорної пози.
+* `atlas` — один `.npz` без pickle: пози ключових кадрів, точка, куди дивиться вісь, ознаки
+  (піксель, дескриптор, 3D-точка в Site ENU відносно `anchor`), метадані (run, sha256 сплату,
+  інтринсики, екстрактор і параметри, версії ПЗ, область). **`content_hash`** (sha256 усіх
+  масивів і метаданих) перевіряється при завантаженні; `expect_hash` — хеш, який назве пакет
+  місії (ADR-0015 §4). Пошкоджений, змінений чи «не той» атлас — `AtlasError`, не робота.
+* `build` — збирач атласу з будь-якого `Renderer` (rgb + z-глибина): глибина в точці ознаки —
+  білінійна; точки на силуетах (розкид глибини у вікні 5×5 > 6 %), без глибини й далі 250 м
+  відкидаються — очікувана глибина 3DGS змішує дах і вулицю на краю.
+* `twin` — run ділянки як `Renderer`: `RenderEngine` у процесі, сцена закріплена за шляхом
+  (`gs/splat_wgs84.pt`), **без каталогу** (нічого під `projects/` не пишеться); DTM/DSM з
+  `semantics/terrain.npz` для висот над землею й перевірки, що поза не в будівлі.
+* `localize` — `Localizer(atlas).localize(image, K, prior)`: кандидати (найближчі за точкою
+  погляду до апріорної пози з EKF/AHRS; без неї — глобальний дескриптор) → зіставлення з
+  ratio-тестом **проти найближчої іншої 3D-точки** (той самий об'єкт з сусідніх кадрів не
+  вбиває правильний збіг) → PnP-RANSAC (AP3P) + LM → перевірки. Причини відмови:
+  `bad_input`, `no_features`, `outside_atlas`, `too_few_matches`, `pnp_failed`,
+  `too_few_inliers` (< 40), `low_inlier_ratio` (< 0.30), `poor_geometry` (inlier-и < 5 з 16
+  клітин або вироджена інформаційна матриця), `high_residual`, `implausible_pose`,
+  `sigma_too_large` (σ_h > 1.5 м або курс > 3°), `ambiguous` (інша поза пояснює ≥ половину
+  inlier-ів серед решти збігів), `prior_mismatch` (далі за 3σ від апріорної — HOLD, ADR §2.5).
+  Коваріація — інформація Гаусса–Ньютона репроєкцій (чисельний якобіан), масштаб залишку з
+  підлогою 0.7 px × 2, плюс σ_map = 0.3 м самого двійника.
+* `perturb` — фотометричні збурення, розмиття, шум, JPEG (грубе наближення доменного розриву).
+* `bench` — `run` (GPU: атласи, набір запитів, експорт) і `localize` (CPU: те, що запускається на
+  Pi з копії папки).
 
 ## 4. Системи координат (ключове для GIS)
 
@@ -1602,7 +1646,8 @@ AeroSplat-GIS/
 │   ├── mission/                   # targets, planner, corridor, export, store (місії v0, 8.1b)
 │   └── server/                    # main.py (FastAPI, сцени v1), auth.py, api_v2.py, api_semantics.py, api_mission.py, up.py
 
-│   ├── sim/                       # sitl, params, runner, oracles, extnav, camera… (SIL, SIM-0/1/2n)
+│   ├── sim/                       # sitl, params, runner, oracles, extnav, camera, airframe… (SIL, SIM-0/1/2n)
+│   ├── vps/                       # atlas, features, localize (companion, CPU), build, twin, bench (ADR-0015 A)
 │   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, api_semantics.py, api_mission.py, up.py
 ├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
 │   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored); e2e/ — Playwright

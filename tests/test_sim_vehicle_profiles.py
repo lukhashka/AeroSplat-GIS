@@ -1,4 +1,4 @@
-"""Vehicle profiles (configs/sim/vehicles): the SITL part and the airframe data (DECISIONS #16).
+"""Vehicle profiles (configs/sim/vehicles): the SITL part and the airframe data (ADR-0015 §6).
 
 The x500-pi5-imx290 test bed must load with the existing runner code, give the planner an r_drone
 that matches its frame and propellers, resolve its VPS camera to the IMX290 4 mm, and name only
