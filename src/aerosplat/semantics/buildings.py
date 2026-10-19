@@ -70,6 +70,11 @@ def _shoelace(p: F64) -> float:
     return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
 
 
+def cross2(a: F64, b: F64) -> F64:
+    """z of the cross product of 2-D vectors (np.cross on 2-D input is deprecated in NumPy 2)."""
+    return a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+
+
 def drop_collinear(points: F64, tolerance: float = 1e-9) -> F64:
     """Remove points that lie on the segment between their neighbours.
 
@@ -80,7 +85,7 @@ def drop_collinear(points: F64, tolerance: float = 1e-9) -> F64:
     if len(points) < 3:
         return points
     prev, nxt = np.roll(points, 1, axis=0), np.roll(points, -1, axis=0)
-    corner = np.abs(np.cross(points - prev, nxt - points)) > tolerance
+    corner = np.abs(cross2(points - prev, nxt - points)) > tolerance
     return points[corner] if corner.sum() >= 3 else points
 
 
@@ -101,7 +106,7 @@ def simplify(points: F64, tolerance: float) -> F64:
         seg = b - a
         n = float(np.hypot(*seg))
         rel = points[lo + 1:hi] - a
-        d = (np.abs(np.cross(np.broadcast_to(seg, rel.shape), rel)) / n if n > 1e-12
+        d = (np.abs(cross2(np.broadcast_to(seg, rel.shape), rel)) / n if n > 1e-12
              else np.hypot(rel[:, 0], rel[:, 1]))
         k = int(np.argmax(d))
         if d[k] > tolerance:
