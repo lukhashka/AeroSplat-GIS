@@ -3,7 +3,8 @@
     aerosplat up                      # http://127.0.0.1:8000 , GPU + CPU workers, render service :8001
     aerosplat up --no-cpu-worker --no-render
     aerosplat up --projects-root D:/aerosplat/projects
-    aerosplat up --host 0.0.0.0       # other machines too: needs a token (`aerosplat token create`)
+    aerosplat up --host 0.0.0.0 --tls-self-signed   # other machines too: token + HTTPS
+    aerosplat up --host 0.0.0.0 --tls-cert c.pem --tls-key k.pem
 
 Workers and the render service run as separate processes (a crashed or OOM-killed job never touches the
 API). A worker that exits is restarted with a growing delay, so the UI never
@@ -130,6 +131,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--require-auth", action="store_true",
                     help="токен потрібен навіть із цієї машини (тунелі, reverse proxy без "
                          "X-Forwarded-For)")
+    ap.add_argument("--tls-cert", type=Path, default=None, help="PEM-сертифікат для HTTPS")
+    ap.add_argument("--tls-key", type=Path, default=None, help="PEM-ключ до --tls-cert (без пароля)")
+    ap.add_argument("--tls-self-signed", action="store_true",
+                    help="HTTPS із самопідписаним сертифікатом у <projects>/auth/tls (відбиток — "
+                         "у виводі)")
+    ap.add_argument("--insecure-http", action="store_true",
+                    help="мережевий доступ по HTTP без TLS (лише за reverse proxy з TLS)")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--projects-root", type=Path, default=None)
     ap.add_argument("--no-gpu-worker", action="store_true")
@@ -160,10 +168,36 @@ def main(argv: Optional[list[str]] = None) -> int:
     if problem:
         print(f"⛔ Не запускаю: {problem}", flush=True)
         return 2
+    from aerosplat.server.tls import TlsError, check_pair, self_signed, transport_problem
+
+    if (args.tls_cert is None) != (args.tls_key is None):
+        print("⛔ Не запускаю: --tls-cert і --tls-key задаються разом", flush=True)
+        return 2
+    if args.tls_cert is not None and args.tls_self_signed:
+        print("⛔ Не запускаю: або --tls-cert/--tls-key, або --tls-self-signed", flush=True)
+        return 2
+    tls = None
+    try:
+        if args.tls_cert is not None:
+            tls = check_pair(args.tls_cert, args.tls_key)
+        elif args.tls_self_signed:
+            tls = self_signed(default_projects_root() / "auth" / "tls")
+    except TlsError as e:
+        print(f"⛔ Не запускаю: TLS — {e}", flush=True)
+        return 2
+    problem = transport_problem(is_loopback_bind(args.host), tls is not None, args.insecure_http)
+    if problem:
+        print(f"⛔ Не запускаю: {problem}", flush=True)
+        return 2
+    scheme = "https" if tls is not None else "http"
+    if tls is not None:
+        print(f"🔒 HTTPS: {tls.cert}{' (самопідписаний)' if tls.self_signed else ''}\n"
+              f"   SHA-256 відбиток: {tls.fingerprint}", flush=True)
     if not is_loopback_bind(args.host):
         print(f"🔐 Сервер доступний з мережі ({args.host}): запити не з цієї машини потребують "
-              f"токена. Це HTTP без TLS — токен іде відкритим текстом; лише довірена мережа "
-              f"або reverse proxy з TLS.", flush=True)
+              f"токена."
+              + ("" if tls is not None else " ⚠️ HTTP без TLS (--insecure-http): токен іде "
+                                            "відкритим текстом."), flush=True)
 
     resources = [r for r, off in (("gpu", args.no_gpu_worker), ("cpu", args.no_cpu_worker))
                  if not off]
@@ -183,9 +217,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         from aerosplat.server.main import app, describe_scenes
 
         describe_scenes()
-        print(f"\n🚀 AeroSplat-GIS: http://{args.host}:{args.port}/   "
+        print(f"\n🚀 AeroSplat-GIS: {scheme}://{args.host}:{args.port}/   "
               f"(процеси: {', '.join(resources) or '—'})\n", flush=True)
-        uvicorn.run(app, host=args.host, port=args.port)
+        ssl = {} if tls is None else {"ssl_certfile": str(tls.cert), "ssl_keyfile": str(tls.key)}
+        uvicorn.run(app, host=args.host, port=args.port, **ssl)
     finally:
         supervisor.stop()
     return 0

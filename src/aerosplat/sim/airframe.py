@@ -79,6 +79,13 @@ class Frame(_Model):
         return self
 
 
+class VpsSettings(_Model):
+    """How the companion runs the VPS on this camera (aerosplat.vps; defaults there)."""
+
+    extractor: Literal["orb", "akaze"] = "akaze"
+    resolution: tuple[int, int] = (960, 540)
+
+
 class CameraMount(_Model):
     """A camera on the vehicle. Angles follow the render service (RenderRequest): pitch is above
     the horizon (-90 = straight down), yaw is relative to the nose (positive = right)."""
@@ -90,6 +97,13 @@ class CameraMount(_Model):
     yaw_deg: float = Field(0.0, ge=-180, le=180)
     optional: bool = False
     note: str = ""
+    vps: Optional[VpsSettings] = None           # only on the camera whose role is "vps"
+
+    @model_validator(mode="after")
+    def _vps_only_on_vps(self) -> "CameraMount":
+        if self.vps is not None and self.role != "vps":
+            raise ValueError(f"camera {self.name}: vps settings on a {self.role} camera")
+        return self
 
 
 class Rangefinder(_Model):

@@ -44,15 +44,15 @@ from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitRe
 from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
                                           match_facades)
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
-from aerosplat.semantics.pads import PadParams, PadZone, find_pads
+from aerosplat.semantics.pads import EARTHSTUDIO_MAX_RMS_M, PadParams, PadZone, find_pads
 from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
                                        facade_ortho)
 from aerosplat.semantics.products import (SemanticsMissing, SemanticsProduct, require_semantics,
                                           semantics_runs)
 from aerosplat.render.models import RenderRequest
 from aerosplat.server import api_v2
-from aerosplat.store.catalog import Catalog
-from aerosplat.store.models import Site
+from aerosplat.store.catalog import Catalog, NotFoundError
+from aerosplat.store.models import CaptureSource, Site
 from aerosplat.store.scenes import SceneLookupError, run_scene_source
 from aerosplat.taxonomy import ApKind, Taxonomy, TaxonomyError, cached_taxonomy
 from aerosplat.taxonomy.models import Attribute, TaxonomyClass
@@ -866,7 +866,9 @@ class PadsRequest(_In):
     roofs: bool = True
     ground: bool = True
     max_slope_deg: float = Field(PadParams.max_slope_deg, gt=0.0, le=15.0)
-    max_rms_m: float = Field(PadParams.max_rms_m, gt=0.0, le=0.5)
+    # None: by the run's capture source — EARTHSTUDIO_MAX_RMS_M when every capture is Earth
+    # Studio, else PadParams.max_rms_m (§5.7).
+    max_rms_m: Optional[float] = Field(None, gt=0.0, le=0.5)
     clearance_m: float = Field(PadParams.clearance_m, ge=0.5, le=10.0)
     yard_radius_m: float = Field(PadParams.yard_radius_m, ge=0.0, le=100.0)
     min_sky_view: float = Field(PadParams.min_sky_view, ge=0.0, le=1.0)
@@ -919,6 +921,17 @@ def _pad_note(model: str, z: PadZone) -> str:
     return "; ".join([text, *z.notes])
 
 
+def _pad_rms_for(cat: Catalog, site: Site, product: SemanticsProduct) -> float:
+    """The plane residual for a run's data: looser only when all of it is Earth Studio."""
+    ids = product.run.capture_ids
+    try:
+        sources = {cat.get_capture(site, c).source for c in ids}
+    except NotFoundError:                   # a capture gone from the catalog: be strict
+        return PadParams.max_rms_m
+    return (EARTHSTUDIO_MAX_RMS_M if ids and sources == {CaptureSource.earthstudio}
+            else PadParams.max_rms_m)
+
+
 @router.post("/sites/{project_id}/{site_id}/pads/candidates", response_model=PadsOut)
 def pad_candidates(project_id: str, site_id: str, body: PadsRequest,
                    cat: Catalog = Depends(get_catalog)) -> PadsOut:
@@ -945,7 +958,8 @@ def pad_candidates(project_id: str, site_id: str, body: PadsRequest,
         rasters = product.rasters()
     except FileNotFoundError as e:
         raise HTTPException(404, str(e)) from None
-    params = PadParams(max_slope_deg=body.max_slope_deg, max_rms_m=body.max_rms_m,
+    max_rms = body.max_rms_m if body.max_rms_m is not None else _pad_rms_for(cat, site, product)
+    params = PadParams(max_slope_deg=body.max_slope_deg, max_rms_m=max_rms,
                        clearance_m=body.clearance_m, yard_radius_m=body.yard_radius_m,
                        min_sky_view=body.min_sky_view)
     result = find_pads(rasters, product.result.buildings, building_ids=body.building_ids,

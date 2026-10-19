@@ -58,7 +58,11 @@ cameras:
   - name: vps_main
     camera: "imx290:4mm"
     role: vps
-    pitch_deg: -45              # down-forward; ESTIMATED (bench value), mount not built
+    # down-forward 45°: chosen 2026-10-19 (owner delegated). Sees ground and facades at once,
+    # and matches the oblique views of the Earth Studio twin the atlas is rendered from; the
+    # bench measured it. Mount not built yet.
+    pitch_deg: -45
+    vps: {extractor: akaze, resolution: [960, 540]}
     yaw_deg: 0
     note: "rolling shutter: VPS only; short exposure and a vibration damper"
   - name: vio

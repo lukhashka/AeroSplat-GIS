@@ -159,3 +159,24 @@ def test_nav_vps_camera_must_be_a_vps_mount():
     raw["nav"]["vps_camera"] = "vio"
     with pytest.raises(ValidationError, match="does not have role vps"):
         VehicleProfile.model_validate(raw)
+
+
+def test_test_bed_vps_runs_akaze_at_960x540_on_the_45_degree_camera():
+    """The operating point chosen 2026-10-19 (ADR-0015 §6–7) is what the profile carries."""
+    from aerosplat import vps
+    from aerosplat.sim.runner import load_vehicle
+
+    v = load_vehicle("x500-pi5-imx290")
+    (cam,) = [c for c in v.cameras if c.role == "vps"]
+    assert cam.pitch_deg == -45 and cam.camera == "imx290:4mm"
+    assert (cam.vps.extractor, tuple(cam.vps.resolution)) == (vps.DEFAULT_EXTRACTOR, vps.DEFAULT_RESOLUTION)
+
+
+def test_vps_settings_only_on_the_vps_camera():
+    import pytest
+    from pydantic import ValidationError
+
+    from aerosplat.sim.airframe import CameraMount
+
+    with pytest.raises(ValidationError, match="vps settings on a vio camera"):
+        CameraMount(name="v", camera="imx296:6mm", role="vio", pitch_deg=-30, vps={})

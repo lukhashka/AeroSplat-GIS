@@ -559,6 +559,35 @@ def test_pad_candidates_from_the_roof_and_the_yard_are_candidates_only(client):
     assert third["candidates"] == [] and third["skipped"].get("rejected") == 1
 
 
+def test_pad_residual_follows_the_capture_source(client):
+    """Earth Studio only: 10 cm (its 1 m mesh raster); unknown or real data: §5.7's 5 cm."""
+    from aerosplat.semantics.pads import EARTHSTUDIO_MAX_RMS_M, PadParams
+    from aerosplat.server import api_semantics
+    from aerosplat.store.models import CaptureSource
+
+    _write_terrain()
+    body = {"building_ids": ["B01"], "dry_run": True}
+    assert client.post(f"{BASE}/pads/candidates", json=body).json()["params"]["max_rms_m"] ==         PadParams.max_rms_m                                   # the run lists no capture: strict
+    assert client.post(f"{BASE}/pads/candidates", json={**body, "max_rms_m": 0.2}).json()[
+        "params"]["max_rms_m"] == 0.2                         # an explicit value always wins
+
+    class Run:
+        capture_ids = ["c1"]
+
+    class Product:
+        run = Run()
+
+    class Cat:
+        def __init__(self, source):
+            self.source = source
+
+        def get_capture(self, site, cid):
+            return type("C", (), {"source": self.source})()
+
+    assert api_semantics._pad_rms_for(Cat(CaptureSource.earthstudio), None, Product()) ==         EARTHSTUDIO_MAX_RMS_M
+    assert api_semantics._pad_rms_for(Cat(CaptureSource.drone), None, Product()) == PadParams.max_rms_m
+
+
 def test_pad_candidates_say_why_not(client):
     _write_terrain()
     r = client.post(f"{BASE}/pads/candidates",

@@ -262,14 +262,17 @@ GPU-задачі за раз. Окремо: `aerosplat worker --resource gpu`, `
 
 ``` bash
 aerosplat token create alice      # токен показується один раз; зберігається лише його хеш
-aerosplat up --host 0.0.0.0       # запити не з цієї машини вимагають токен
+aerosplat up --host 0.0.0.0 --tls-self-signed   # HTTPS; запити не з цієї машини — з токеном
 aerosplat token list              # хто має доступ
 aerosplat token revoke alice      # діє з наступного запиту
 ```
 
 У браузері UI сам попросить токен (далі — HttpOnly-cookie сесії); скрипти шлють заголовок
 `Authorization: Bearer <токен>`. Зміни, зроблені з токеном, журнал аудиту підписує
-`token:<ім'я>`. Це HTTP без TLS: лише довірена мережа або reverse proxy з TLS. Запити через
+`token:<ім'я>`. **Мережевий доступ — лише HTTPS:** без `--tls-self-signed` (сертифікат
+створюється один раз у `<projects>/auth/tls/`; браузер попередить — звірте SHA-256 відбиток із
+виводу `up`) або `--tls-cert c.pem --tls-key k.pem` сервер на не-loopback адресі не стартує.
+`--insecure-http` — лише за reverse proxy з TLS на цій же машині. Запити через
 проксі чи тунель на цій машині (`X-Forwarded-For` тощо) теж вимагають токен;
 `aerosplat up --require-auth` вимагає його навіть з localhost (тунелі без таких заголовків).
 

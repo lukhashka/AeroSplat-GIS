@@ -48,6 +48,13 @@ F64 = NDArray[np.float64]
 PadKind = Literal["roof", "ground"]
 
 
+# Plane residual allowed on data from Earth Studio only (owner delegated the choice, 2026-10-19):
+# its 1 m raster of a baked mesh leaves 7.5–9.3 cm on the flat roof of the dataset_1910 tower,
+# so §5.7's 5 cm rejects every roof there. Real captures keep 5 cm (PadParams.max_rms_m); a
+# run whose capture source is unknown or mixed keeps it too — the stricter value is the safe one.
+EARTHSTUDIO_MAX_RMS_M = 0.10
+
+
 @dataclass(frozen=True)
 class PadParams:
     max_slope_deg: float = 5.0          # §5.7 item 1: `land`
