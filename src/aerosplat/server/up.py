@@ -3,6 +3,7 @@
     aerosplat up                      # http://127.0.0.1:8000 , GPU + CPU workers, render service :8001
     aerosplat up --no-cpu-worker --no-render
     aerosplat up --projects-root D:/aerosplat/projects
+    aerosplat up --host 0.0.0.0       # other machines too: needs a token (`aerosplat token create`)
 
 Workers and the render service run as separate processes (a crashed or OOM-killed job never touches the
 API). A worker that exits is restarted with a growing delay, so the UI never
@@ -124,7 +125,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     fix_console_encoding()
     ap = argparse.ArgumentParser(prog="aerosplat up", description=__doc__.split("\n")[0])
     ap.add_argument("--host", default="127.0.0.1",
-                    help="адреса сервера; API без автентифікації — лише localhost (ADR-0010)")
+                    help="адреса сервера; не-loopback (напр. 0.0.0.0) вимагає токенів доступу "
+                         "(aerosplat token create), інакше сервер не стартує")
+    ap.add_argument("--require-auth", action="store_true",
+                    help="токен потрібен навіть із цієї машини (тунелі, reverse proxy без "
+                         "X-Forwarded-For)")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--projects-root", type=Path, default=None)
     ap.add_argument("--no-gpu-worker", action="store_true")
@@ -143,6 +148,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     from aerosplat.store.paths import default_projects_root
 
     Catalog.open(default_projects_root()).close()
+
+    # Authentication before any non-localhost access: refuse to start rather than serve the
+    # network without tokens. The middleware denies such requests anyway (fail closed);
+    # this turns a silent "401 for everyone" into one clear message at startup.
+    from aerosplat.server.auth import REQUIRE_AUTH_ENV, is_loopback_bind, startup_problem
+
+    if args.require_auth:
+        os.environ[REQUIRE_AUTH_ENV] = "1"
+    problem = startup_problem(args.host)
+    if problem:
+        print(f"⛔ Не запускаю: {problem}", flush=True)
+        return 2
+    if not is_loopback_bind(args.host):
+        print(f"🔐 Сервер доступний з мережі ({args.host}): запити не з цієї машини потребують "
+              f"токена. Це HTTP без TLS — токен іде відкритим текстом; лише довірена мережа "
+              f"або reverse proxy з TLS.", flush=True)
 
     resources = [r for r, off in (("gpu", args.no_gpu_worker), ("cpu", args.no_cpu_worker))
                  if not off]

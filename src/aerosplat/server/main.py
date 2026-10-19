@@ -46,7 +46,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
-from aerosplat.server import api_mission, api_semantics, api_sim, api_v2
+from aerosplat.server import api_mission, api_semantics, api_sim, api_v2, auth
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
 from aerosplat.store.paths import default_projects_root
 from aerosplat.store.scenes import SceneSource, discover_scenes
@@ -61,11 +61,15 @@ app.add_middleware(
     allow_origins=["*"],
     # NOTE: wildcard origin + allow_credentials=True is invalid per the CORS
     # spec — browsers refuse to expose the response to JS when both are set.
-    # This API doesn't use cookies/auth headers, so credentials aren't needed.
+    # Credentials stay off on purpose: the UI's session cookie (aerosplat.server.auth) is
+    # same-origin only, and cross-origin scripts must send a Bearer token explicitly.
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost: every request — REST, WebSocket, scene data, static files — passes the same
+# check (loopback stays open, anything else needs a token; aerosplat.server.auth).
+app.add_middleware(auth.AuthMiddleware)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 project_dir = str(PROJECT_DIR)
@@ -1003,6 +1007,7 @@ def refresh_scenes() -> Dict[str, object]:
 
 
 app.state.refresh_scenes = refresh_scenes
+app.include_router(auth.router)
 app.include_router(api_v2.router)
 app.include_router(api_semantics.router)
 app.include_router(api_mission.router)
@@ -1068,5 +1073,5 @@ if __name__ == "__main__":
     import uvicorn
 
     describe_scenes()
-    # localhost only: the API has no authentication yet (ADR-0010).
+    # localhost only; to serve other machines use `aerosplat up --host ...` with tokens.
     uvicorn.run(app, host="127.0.0.1", port=8000)

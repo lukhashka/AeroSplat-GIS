@@ -32,6 +32,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--max-scenes", type=int, default=1)
     args = ap.parse_args(argv)
 
+    from aerosplat.server.auth import is_loopback_bind
+
+    if not is_loopback_bind(args.host):
+        # No authentication here at all: only the API (which checks tokens) talks to it.
+        print(f"⛔ Сервіс рендерингу слухає лише цю машину (127.0.0.1); '{args.host}' відхилено. "
+              f"Доступ з мережі — через API (aerosplat up --host ... з токенами).", flush=True)
+        return 2
+
     if args.projects_root is not None:
         os.environ["AEROSPLAT_PROJECTS"] = str(args.projects_root.resolve())
 
