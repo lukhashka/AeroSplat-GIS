@@ -23,6 +23,7 @@ from aerosplat.semantics.models import (COVERAGE_NPZ, SEMANTICS_JSON, Building, 
 from aerosplat.server import api_semantics, api_v2                     # noqa: E402
 from aerosplat.store import Catalog, Site                              # noqa: E402
 from aerosplat.store.models import RunStatus                           # noqa: E402
+from aerosplat.store.scenes import SceneLookupError                    # noqa: E402
 
 ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
 BASE = "/api/v2/sites/demo/pier"
@@ -42,7 +43,11 @@ def stub_render():
             seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
-            self.send_header("X-Render-Meta", '{"stub":true,"width":1,"height":1}')
+            # Like the real service, the meta names the run it rendered; `wrong_run` makes
+            # the stub misbehave as a service older than the API would.
+            run = seen.get("wrong_run", seen["body"].get("run"))
+            self.send_header("X-Render-Meta", json.dumps({"stub": True, "width": 1, "height": 1,
+                                                          "run": run}))
             self.end_headers()
             self.wfile.write(b"\x89PNG-stub")
 
@@ -213,7 +218,10 @@ def test_a_gsd_too_fine_for_one_image_is_refused_before_the_gpu(site):
 
 
 def test_the_ortho_needs_a_trained_scene(client, monkeypatch):
-    monkeypatch.setattr(api_v2, "_scene_name", lambda cat, s: None)
+    def no_scene(cat, site, run):
+        raise SceneLookupError(f"run {run.id} of {site.key} has no trained scene (no splat product)")
+
+    monkeypatch.setattr(api_semantics, "run_scene_source", no_scene)
     r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
     assert r.status_code == 404 and "no trained scene" in r.json()["detail"]
 
@@ -222,6 +230,59 @@ def test_the_render_service_being_down_says_how_to_start_it(client, monkeypatch)
     monkeypatch.setenv("AEROSPLAT_RENDER_URL", "http://127.0.0.1:9")
     r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
     assert r.status_code == 503 and "aerosplat up" in r.json()["detail"]
+
+
+def add_run(run_id, facades=None, *, splat=True):
+    """Another, newer run of the same Site; same facades as r1 unless told otherwise."""
+    cat = api_v2.get_catalog()
+    s = cat.get_site("demo", "pier")
+    cat.create_run(s, "baseline", run_id, capture_ids=[], config={}, earth_model="wgs84",
+                   georeferenced=True)
+    dirs = cat.run_dirs(s, "baseline", run_id)
+    old = cat.run_dirs(s, "baseline", "r1").root / "semantics" / SEMANTICS_JSON
+    result = SemanticsResult(**json.loads(old.read_text(encoding="utf-8")))
+    if facades is not None:
+        result = result.model_copy(update={"facades": facades})
+    sem = dirs.root / "semantics"
+    sem.mkdir(parents=True)
+    (sem / SEMANTICS_JSON).write_text(result.model_dump_json(), encoding="utf-8")
+    products = {"semantics": sem}
+    if splat:
+        dirs.gs.mkdir(parents=True)
+        (dirs.gs / "splat_wgs84.pt").write_bytes(b"stub")
+        products["splat"] = dirs.gs / "splat_wgs84.pt"
+    cat.finish_run(s, "baseline", run_id, status=RunStatus.ok, products=products)
+
+
+def test_the_ortho_of_a_pinned_run_comes_from_that_runs_scene(site):
+    """Session 2026-10-18…19, error 20: `?run=` pinned the facade but not the splat."""
+    client, seen = site
+    add_run("r2")
+    assert client.post(f"{BASE}/facades/B01/N1/ortho", json={}).status_code == 200
+    assert seen["body"]["run"] == "r2"                   # default: the newest run, by name
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={"run_id": "r1"})
+    assert r.status_code == 200 and seen["body"]["run"] == "r1"
+    assert json.loads(r.headers["x-render-meta"])["run"] == "r1"
+
+
+def test_a_run_without_its_own_splat_is_refused_rather_than_mixed(site):
+    client, seen = site
+    add_run("r2", splat=False)
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
+    assert r.status_code == 404 and "r2" in r.json()["detail"]
+    assert "path" not in seen                            # the newest scene was not used instead
+    body = client.get(f"{BASE}/semantics").json()
+    assert body["run_id"] == "r2" and body["scene"] is None
+    assert [(x["id"], x["scene"]) for x in body["runs"]] == [("r2", False), ("r1", True)]
+    assert client.get(f"{BASE}/semantics?run_id=r1").json()["scene"] == "demo/pier"
+    assert client.post(f"{BASE}/facades/B01/N1/ortho", json={"run_id": "r1"}).status_code == 200
+
+
+def test_a_render_service_that_answers_with_another_run_is_caught(site):
+    client, seen = site
+    seen["wrong_run"] = "r0"                             # e.g. a service older than the API
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
+    assert r.status_code == 502 and "r0" in r.json()["detail"]
 
 
 def test_the_ortho_route_wins_over_the_facade_detail_route(site):

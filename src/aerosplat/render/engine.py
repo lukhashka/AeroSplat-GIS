@@ -21,7 +21,7 @@ from aerosplat.gs.gsplat_backend import NEAR_PLANE, RASTERIZE_MODES, require_gsp
 from aerosplat.gs.sh import sh_degree_of
 from aerosplat.render import camera as cam
 from aerosplat.render.models import RenderRequest
-from aerosplat.store.scenes import SceneSource, discover_scenes
+from aerosplat.store.scenes import SceneLookupError, SceneSource, discover_scenes, pinned_scene
 
 SCENE_LIST_TTL_S = 3.0
 DEPTH_UNSET = 0
@@ -106,21 +106,31 @@ class RenderEngine:
                 self._listing = (now, discover_scenes(self.projects_root, self.data_dir))
             return self._listing[1]
 
-    def _resolve(self, name: str) -> SceneSource:
+    def _resolve(self, name: str, run: Optional[str] = None) -> SceneSource:
         src = self.scenes().get(name) or self.scenes(fresh=True).get(name)
+        if run is not None and (src is None or src.run != run):
+            # Pinned to a run that is not the one the listing serves: look that run up in
+            # the catalog, and refuse rather than render some other run (§5.9).
+            site_key = src.site if src is not None and src.site else name
+            try:
+                src = pinned_scene(self.projects_root, site_key, run)
+            except SceneLookupError as e:
+                raise SceneNotFound(str(e)) from None
         if src is None or not src.splat or not Path(src.splat).is_file():
             raise SceneNotFound(f"no trained scene '{name}' (run the pipeline first)")
         return src
 
-    def get_scene(self, name: str) -> LoadedScene:
+    def get_scene(self, name: str, run: Optional[str] = None) -> LoadedScene:
         with self._lock:
-            src = self._resolve(name)
+            src = self._resolve(name, run)
+            # A pinned run is cached under its own key, so it never answers for the newest one.
+            key = src.name if src.run is None else f"{src.name}@{src.run}"
             mtime = Path(src.splat).stat().st_mtime
-            have = self._scenes.get(src.name)
+            have = self._scenes.get(key)
             if have is not None and have.path == src.splat and have.mtime == mtime:
                 have.last_used = time.monotonic()
                 return have
-            self._scenes.pop(src.name, None)
+            self._scenes.pop(key, None)
             while len(self._scenes) >= self.max_scenes:
                 self._scenes.pop(min(self._scenes, key=lambda k: self._scenes[k].last_used))
             t0 = time.perf_counter()
@@ -138,7 +148,7 @@ class RenderEngine:
                 source=src, path=src.splat, mtime=mtime, params=params, rasterize_mode=mode,
                 bounds_min=xyz.min(0).values.cpu().numpy(), bounds_max=xyz.max(0).values.cpu().numpy(),
                 frame=frame, loaded_s=time.perf_counter() - t0)
-            self._scenes[src.name] = scene
+            self._scenes[key] = scene
             return scene
 
     def unload_idle(self) -> list[str]:
@@ -203,7 +213,7 @@ class RenderEngine:
     def render(self, scene_name: str, req: RenderRequest) -> Rendered:
         t_start = time.perf_counter()
         with self._lock:
-            scene = self.get_scene(scene_name)
+            scene = self.get_scene(scene_name, req.run)
             eye, yaw, pitch, roll = self._pose(scene, req)
             ortho = req.mode == "ortho"
             V = cam.view_matrix(eye, yaw, pitch, roll)

@@ -15,7 +15,7 @@ from typing import Any, Optional
 from aerosplat.geo.crs import GeoPoint
 from aerosplat.geo.sphere_enu import EARTH_MODEL as SPHERE_ENU_AFFINE
 from aerosplat.store.catalog import Catalog
-from aerosplat.store.models import Run, Site
+from aerosplat.store.models import Run, RunStatus, Site
 from aerosplat.store.paths import CATALOG_FILE
 
 log = logging.getLogger(__name__)
@@ -145,6 +145,61 @@ def scene_run(catalog: Catalog, site: Site) -> Optional[Run]:
         _report_once(f"   ⚠️  [Scenes] {site.key}: run {run.id} — немає файлів "
                      f"{', '.join(str(p) for p in missing)}; {older}")
     return None
+
+
+class SceneLookupError(LookupError):
+    """A scene pinned to one run that cannot be served (unknown run, no splat, files gone)."""
+
+
+def run_scene_source(catalog: Catalog, site: Site, run: Run) -> SceneSource:
+    """The scene of one particular run, for a caller that must not mix runs.
+
+    `scene_run` serves a Site's newest complete run, which is right for a viewer but wrong
+    for anything drawn in another run's frame: a facade of an older run rendered from the
+    newest splat is a picture of a different reconstruction (ACCESS_POINTS §5.9). Raises
+    `SceneLookupError` instead of falling back to some other run.
+    """
+    if run.status != RunStatus.ok:
+        raise SceneLookupError(f"run {run.id} of {site.key} is {run.status.value}, not ok")
+    splat = catalog.product_path(site, run, SPLAT)
+    if splat is None:
+        raise SceneLookupError(f"run {run.id} of {site.key} has no trained scene (no splat product)")
+    if not splat.is_file():
+        raise SceneLookupError(f"run {run.id} of {site.key}: splat file {splat} is missing")
+    cloud = catalog.product_path(site, run, CLOUD)
+    return SceneSource(name=site.key, cloud=str(cloud or ""), splat=str(splat),
+                       metric=run_metric(catalog, site, run), kind="catalog", site=site.key,
+                       run=run.id)
+
+
+def find_run(catalog: Catalog, site: Site, run_id: str) -> Run:
+    """A run of the Site by id, in any epoch. Raises `SceneLookupError` if absent or ambiguous."""
+    runs = [r for r in catalog.list_runs(site) if r.id == run_id]
+    if not runs:
+        raise SceneLookupError(f"site {site.key} has no run '{run_id}'")
+    if len(runs) > 1:
+        raise SceneLookupError(f"run id '{run_id}' exists in several epochs of {site.key} "
+                               f"({', '.join(r.epoch_id for r in runs)})")
+    return runs[0]
+
+
+def pinned_scene(projects_root: Optional[Path], site_key: str, run_id: str) -> SceneSource:
+    """`run_scene_source` by name, opening the catalog for the call (the render service's path)."""
+    if projects_root is None or not (projects_root / CATALOG_FILE).is_file():
+        raise SceneLookupError(f"no project catalog: cannot pin '{site_key}' to run {run_id}")
+    if site_key.count("/") != 1:
+        raise SceneLookupError(f"a scene pinned to a run must be named <project>/<site>, "
+                               f"not '{site_key}'")
+    project_id, site_id = site_key.split("/")
+    catalog = Catalog.open(projects_root)
+    try:
+        try:
+            site = catalog.get_site(project_id, site_id)
+        except LookupError as e:
+            raise SceneLookupError(str(e)) from None
+        return run_scene_source(catalog, site, find_run(catalog, site, run_id))
+    finally:
+        catalog.close()
 
 
 def catalog_scenes(catalog: Catalog) -> dict[str, SceneSource]:

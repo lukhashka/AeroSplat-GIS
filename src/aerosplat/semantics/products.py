@@ -68,6 +68,14 @@ def _semantics_dir(catalog: Catalog, site: Site, run: Run) -> Optional[Path]:
     return path if (path / SEMANTICS_JSON).is_file() else None
 
 
+def semantics_runs(catalog: Catalog, site: Site) -> list[Run]:
+    """Successful runs whose semantics output is on disk, newest first (for a run picker)."""
+    runs = [r for r in catalog.list_runs(site) if r.status == RunStatus.ok
+            and _semantics_dir(catalog, site, r) is not None]
+    runs.sort(key=lambda r: (r.finished_at or r.created_at, r.id), reverse=True)
+    return runs
+
+
 def find_semantics(catalog: Catalog, site: Site, *, run_id: Optional[str] = None,
                    epoch_id: Optional[str] = None) -> Optional[SemanticsProduct]:
     """The newest successful run with semantics, or a named one. None when there is none."""

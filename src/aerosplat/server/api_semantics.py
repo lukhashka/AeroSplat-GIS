@@ -38,10 +38,13 @@ from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitRe
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
 from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
                                        facade_ortho)
-from aerosplat.semantics.products import SemanticsMissing, SemanticsProduct, require_semantics
+from aerosplat.semantics.products import (SemanticsMissing, SemanticsProduct, require_semantics,
+                                          semantics_runs)
+from aerosplat.render.models import RenderRequest
 from aerosplat.server import api_v2
 from aerosplat.store.catalog import Catalog
 from aerosplat.store.models import Site
+from aerosplat.store.scenes import SceneLookupError, run_scene_source
 from aerosplat.taxonomy import ApKind, Taxonomy, TaxonomyError, cached_taxonomy
 from aerosplat.taxonomy.models import Attribute, TaxonomyClass
 
@@ -86,6 +89,43 @@ def _store(cat: Catalog, site: Site) -> AuthoredStore:
     return AuthoredStore.for_site(cat.site_dirs(site), site.key)
 
 
+def _run_has_scene(cat: Catalog, site: Site, product: SemanticsProduct) -> bool:
+    try:
+        run_scene_source(cat, site, product.run)
+        return True
+    except SceneLookupError:
+        return False
+
+
+def _run_scene(cat: Catalog, site: Site, product: SemanticsProduct) -> str:
+    """The scene name to render this run's facades from, pinned to that run.
+
+    A facade belongs to the run that fitted it; rendering it from another run's splat
+    would put this run's frame over a different reconstruction (session 2026-10-18…19,
+    error 20). So a run without its own splat is a 404, not a fallback to the newest.
+    """
+    try:
+        run_scene_source(cat, site, product.run)
+    except SceneLookupError as e:
+        raise HTTPException(404, f"{e}; the facades of this run cannot be rendered from "
+                                 f"another run's scene") from None
+    return site.key
+
+
+def _pinned_render(scene: str, request: RenderRequest, run_id: str) -> tuple[bytes, str]:
+    """Render through the service pinned to `run_id`, and check that it was that run."""
+    png, meta_json = api_v2._render_call(
+        scene, request.model_copy(update={"run": run_id}).model_dump_json(exclude_none=True))
+    try:
+        got = json.loads(meta_json).get("run")
+    except (ValueError, AttributeError):
+        got = None
+    if got != run_id:
+        raise HTTPException(502, f"render service rendered run {got!r} instead of {run_id!r} "
+                                 f"(is it older than the API? restart `aerosplat up`)")
+    return png, meta_json
+
+
 # ── schemas ──────────────────────────────────────────────────────────────
 class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -119,6 +159,15 @@ class FacadeOut(BaseModel):
     features: int = 0                       # authored access points on this facade
 
 
+class SemanticsRunOut(BaseModel):
+    """A run with semantics, for the facade list's run picker."""
+
+    id: str
+    epoch_id: str
+    finished_at: Any = None
+    scene: bool                             # it has its own splat to render facades from
+
+
 class SemanticsOut(BaseModel):
     """Everything the editor needs to pick a facade, minus the rasters."""
 
@@ -132,7 +181,10 @@ class SemanticsOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     features_by_facade: dict[str, int] = Field(default_factory=dict)
-    scene: Optional[str] = None             # None when there is nothing to render from
+    # The scene this run's facades render from (pinned to the run), None without a splat.
+    scene: Optional[str] = None
+    # Every run with semantics, newest first; facade ids differ between them.
+    runs: list[SemanticsRunOut] = Field(default_factory=list)
 
 
 class TaxonomyClassOut(BaseModel):
@@ -286,16 +338,25 @@ def _counts(store: AuthoredStore) -> dict[str, int]:
 @router.get("/sites/{project_id}/{site_id}/semantics", response_model=SemanticsOut)
 def site_semantics(project_id: str, site_id: str, run_id: Optional[str] = None,
                    cat: Catalog = Depends(get_catalog)) -> SemanticsOut:
-    """Terrain header, buildings and facades of the newest run that produced them."""
+    """Terrain header, buildings and facades of the newest run that produced them (or `run_id`)."""
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, run_id)
     r = product.result
+    runs = []
+    for run in semantics_runs(cat, site):
+        try:
+            run_scene_source(cat, site, run)
+            has_scene = True
+        except SceneLookupError:
+            has_scene = False
+        runs.append(SemanticsRunOut(id=run.id, epoch_id=run.epoch_id,
+                                    finished_at=run.finished_at, scene=has_scene))
     return SemanticsOut(
         run_id=product.run.id, epoch_id=product.run.epoch_id,
         finished_at=product.run.finished_at, frame=r.frame, terrain=r.terrain,
         buildings=r.buildings, facades=r.facades, warnings=r.warnings, params=r.params,
         features_by_facade=_counts(_store(cat, site)),
-        scene=api_v2._scene_name(cat, site))
+        scene=site.key if _run_has_scene(cat, site, product) else None, runs=runs)
 
 
 def _coverage_out(product: SemanticsProduct, facade: Facade) -> Optional[CoverageGrid]:
@@ -343,17 +404,14 @@ async def facade_ortho_render(project_id: str, site_id: str, facade_id: str,
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
-    scene = api_v2._scene_name(cat, site)
-    if scene is None:
-        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    scene = _run_scene(cat, site, product)
     spec = FacadeOrthoSpec(**body.model_dump(exclude={"run_id"}))
     try:
         request, grid = facade_ortho(facade, spec)
     except FacadeOrthoError as e:
         raise HTTPException(422, str(e)) from None
 
-    png, meta_json = await run_in_threadpool(
-        api_v2._render_call, scene, request.model_dump_json(exclude_none=True))
+    png, meta_json = await run_in_threadpool(_pinned_render, scene, request, product.run.id)
     try:
         meta = json.loads(meta_json)
     except ValueError:
@@ -500,9 +558,7 @@ async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
-    scene = api_v2._scene_name(cat, site)
-    if scene is None:
-        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    scene = _run_scene(cat, site, product)
     tax = _taxonomy(site)
     _check_class(tax, GRIDFIT_CLASS, {})
     spec = FacadeOrthoSpec(gsd_cm=body.gsd_cm)
@@ -514,8 +570,7 @@ async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
     layers: dict[str, tuple[bytes, str]] = {}
     for output in ("rgb", "alpha", "depth") if body.depth else ("rgb", "alpha"):
         one = request.model_copy(update={"output": output})
-        layers[output] = await run_in_threadpool(
-            api_v2._render_call, scene, one.model_dump_json(exclude_none=True))
+        layers[output] = await run_in_threadpool(_pinned_render, scene, one, product.run.id)
     return await run_in_threadpool(_run_gridfit, cat, site, product, facade, grid, spec,
                                    (request.height, request.width), layers, tax, body)
 

@@ -362,7 +362,17 @@ export interface SemanticsOut {
   warnings: string[];
   params: Record<string, unknown>;
   features_by_facade: Record<string, number>;
+  /** The scene this run's facades render from (pinned to the run); null without its own splat. */
   scene: string | null;
+  /** Every run with semantics, newest first. Facade ids differ between runs. */
+  runs: SemanticsRun[];
+}
+
+export interface SemanticsRun {
+  id: string;
+  epoch_id: string;
+  finished_at: string | null;
+  scene: boolean;
 }
 
 export interface TaxonomyAttribute {

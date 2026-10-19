@@ -1,4 +1,4 @@
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useSemantics } from "../api/hooks";
 import type { Coverage, Facade } from "../api/types";
@@ -53,7 +53,11 @@ function CoverageBar({ coverage }: { coverage: Coverage | null }) {
 export function FacadesPage() {
   const { project = "", site = "" } = useParams();
   const navigate = useNavigate();
-  const { data, isLoading, error } = useSemantics(project, site);
+  // `?run=<id>` lists that run's facades; default: the newest run with semantics. Facade
+  // ids are per run (the same wall is B08/SW3 in one run and B04/SW1 in the next).
+  const [params, setParams] = useSearchParams();
+  const runParam = params.get("run");
+  const { data, isLoading, error } = useSemantics(project, site, runParam);
 
   if (isLoading) return <div className="page faint">Завантаження семантики…</div>;
   if (error || !data)
@@ -86,7 +90,29 @@ export function FacadesPage() {
           </div>
           <h1>Фасади й точки доступу</h1>
           <div className="sub row" style={{ gap: 14 }}>
-            <span className="mono">run {data.run_id}</span>
+            {data.runs.length > 1 ? (
+              <label className="row" style={{ gap: 6 }} title="Фасади, їхні id і ортофото належать одному run-у">
+                <span>run</span>
+                <select
+                  className="mono"
+                  value={data.run_id}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setParams(next === data.runs[0]?.id ? {} : { run: next });
+                  }}
+                >
+                  {data.runs.map((r, i) => (
+                    <option key={r.id} value={r.id}>
+                      {r.id}
+                      {i === 0 ? " (найновіший)" : ""}
+                      {r.scene ? "" : " — без сцени"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <span className="mono">run {data.run_id}</span>
+            )}
             <span>{data.buildings.length} будівель · {data.facades.length} фасадів</span>
             <span>{features} точок доступу</span>
           </div>
@@ -102,8 +128,9 @@ export function FacadesPage() {
       )}
       {!data.scene && (
         <div className="error-box">
-          У цього run-а немає навченої сцени, тож ортофото фасаду не відрендерити. Фасади нижче можна
-          дивитися, але малювати по них — ні.
+          У цього run-а немає власної навченої сцени, тож ортофото його фасадів не відрендерити (сцену
+          іншого run-а не підставляємо: фасад належить своїй реконструкції). Фасади нижче можна дивитися,
+          але малювати по них — ні.
         </div>
       )}
 
@@ -154,7 +181,10 @@ export function FacadesPage() {
                         <button
                           className="btn sm"
                           disabled={!data.scene}
-                          onClick={() => navigate(`/facade/${project}/${site}/${f.id}`)}
+                          // Always pinned: the id means this wall only in this run.
+                          onClick={() =>
+                            navigate(`/facade/${project}/${site}/${f.id}?run=${encodeURIComponent(data.run_id)}`)
+                          }
                         >
                           <Icon name="camera" size={14} /> Редактор
                         </button>

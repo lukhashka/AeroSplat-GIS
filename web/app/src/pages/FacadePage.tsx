@@ -443,7 +443,7 @@ export function FacadePage() {
         <div style={{ minWidth: 0 }}>
           <div className="crumbs">
             <Link to="/">Ділянки</Link> / <Link to={`/sites/${project}/${site}`}>{project}/{site}</Link> /{" "}
-            <Link to={`/facades/${project}/${site}`}>Фасади</Link> / {f.id}
+            <Link to={`/facades/${project}/${site}?run=${encodeURIComponent(facade.data.run_id)}`}>Фасади</Link> / {f.id}
           </div>
           <h1>Редактор фасаду {f.id}</h1>
           <div className="sub row" style={{ gap: 14 }}>
