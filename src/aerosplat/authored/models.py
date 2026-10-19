@@ -26,6 +26,8 @@ from typing import Optional
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from aerosplat.auth.context import current_principal
+
 SCHEMA = 1
 # Crockford base32, as ULID uses: no I, L, O or U, so a read-aloud id has no ambiguity.
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -279,7 +281,15 @@ class AuditEntry(_Model):
 
 
 def actor(name: Optional[str] = None) -> str:
-    """Who is making a change. No accounts yet: the OS user, as `op:<login>` (§13 q. 5)."""
+    """Who is making a change.
+
+    A request authenticated with an API token is recorded as `token:<token name>`, and
+    a name the client claims (`by`) is then ignored: the token is what was verified.
+    Otherwise (this machine, CLI) as before — the claimed name or the OS user, as
+    `op:<login>` (§13 q. 5)."""
+    p = current_principal()
+    if p is not None and p.actor:
+        return p.actor
     if name:
         return name if ":" in name else f"op:{name}"
     login = os.environ.get("AEROSPLAT_OPERATOR") or os.environ.get("USERNAME") \

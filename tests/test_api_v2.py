@@ -83,12 +83,47 @@ def test_projects_and_sites(client, site):
     assert client.get("/api/v2/sites/demo/missing").status_code == 404
 
 
-def test_upload_handheld_capture_and_thumbnail(client, site):
+def _drain(root):
+    """Run the queued CPU jobs (ingests) in-process, as the CPU worker's job process would."""
+    from aerosplat.ingest.upload import run_ingest_job
+
+    cat = api_v2.get_catalog()
+    q = JobQueue(cat.engine)
+    done = []
+    while True:
+        job = q.claim("test:cpu:1", Resource.cpu)
+        if job is None:
+            return done
+        rc = run_ingest_job(q, job, cat)
+        done.append(q.finish(job.id, JobStatus.succeeded if rc == 0 else JobStatus.failed,
+                             error=None if rc == 0 else f"exit code {rc}"))
+
+
+def test_upload_handheld_capture_and_thumbnail(client, site, root):
     r = _upload(client)
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["images"] == 2 and body["with_prior"] == 0
-    assert body["capture"]["source"] == "handheld" and body["capture"]["license"] == "CC-BY-4.0"
+    assert r.status_code == 202, r.text
+    job = r.json()
+    assert job["kind"] == "ingest" and job["resource"] == "cpu" and job["status"] == "queued"
+    assert job["payload"]["capture_id"] == "phone-01" and job["payload"]["files"] == 2
+    # not a capture until the job has finished
+    assert client.get("/api/v2/sites/demo/pier").json()["captures"] == []
+    assert client.get("/api/v2/sites/demo/pier/captures/phone-01/images").status_code == 404
+    again = _upload(client)
+    assert again.status_code == 409 and "being ingested" in again.json()["detail"]
+
+    [done] = _drain(root)
+    assert done.status == JobStatus.succeeded and done.id == job["id"]
+    final = client.get(f"/api/v2/jobs/{job['id']}").json()
+    assert final["result"] == {"site": "demo/pier", "capture": "phone-01", "images": 2,
+                               "bytes": final["result"]["bytes"]}
+    stages = [(e["data"]["stage"], e["data"]["state"])
+              for e in client.get(f"/api/v2/jobs/{job['id']}/events").json() if e["type"] == "stage"]
+    assert ("hash", "done") in stages and stages[-1] == ("register", "done")
+
+    detail = client.get("/api/v2/sites/demo/pier").json()
+    [cap] = detail["captures"]
+    assert cap["capture"]["id"] == "phone-01" and cap["images"] == 2 and cap["with_prior"] == 0
+    assert cap["capture"]["source"] == "handheld" and cap["capture"]["license"] == "CC-BY-4.0"
     images = client.get("/api/v2/sites/demo/pier/captures/phone-01/images").json()
     assert [i["name"] for i in images] == ["img_0.jpg", "img_1.jpg"]
 
@@ -99,12 +134,12 @@ def test_upload_handheld_capture_and_thumbnail(client, site):
         assert client.get(f"/api/v2/sites/demo/pier/captures/phone-01/images/{bad}/thumb"
                           ).status_code == 404
     assert _upload(client).status_code == 409          # same capture id
-    # staging dirs never linger
-    detail = client.get("/api/v2/sites/demo/pier").json()
-    assert [c["capture"]["id"] for c in detail["captures"]] == ["phone-01"]
+    # the staging directory is gone once the capture is registered
+    captures_dir = root / "demo" / "sites" / "pier" / "captures"
+    assert sorted(p.name for p in captures_dir.iterdir()) == ["phone-01"]
 
 
-def test_upload_earthstudio_capture(client, site, tmp_path):
+def test_upload_earthstudio_capture(client, site, tmp_path, root):
     data = json.loads(ES_JSON.read_text())
     data["name"] = "orbit"
     files = [("files", ("orbit.json", json.dumps(data).encode(), "application/json"))]
@@ -113,18 +148,33 @@ def test_upload_earthstudio_capture(client, site, tmp_path):
         write_jpeg(p, shade=30 * i)
         files.append(("files", (p.name, p.read_bytes(), "image/jpeg")))
     r = _upload(client, capture_id="es-orbit", source="earthstudio", files=files)
-    assert r.status_code == 201, r.text
-    body = r.json()
-    assert body["images"] == 3 and body["with_prior"] == 3
-    assert body["capture"]["metadata_file"] == "source/orbit.json"
+    assert r.status_code == 202, r.text
+    assert [j.status for j in _drain(root)] == [JobStatus.succeeded]
+    [cap] = client.get("/api/v2/sites/demo/pier").json()["captures"]
+    assert cap["images"] == 3 and cap["with_prior"] == 3
+    assert cap["capture"]["metadata_file"] == "source/orbit.json"
 
+    # the cheap checks fail the request itself, and leave nothing behind
     no_json = _upload(client, capture_id="es-2", source="earthstudio", files=files[1:])
     assert no_json.status_code == 422
+    missing_frame = _upload(client, capture_id="es-3", source="earthstudio", files=files[:-1])
+    assert missing_frame.status_code == 422
+    no_images = _upload(client, capture_id="es-4", source="handheld", files=files[:1])
+    assert no_images.status_code == 422
+    bad_name = _upload(client, capture_id="es-5",
+                       files=[("files", ("ok.jpg", _jpeg_bytes(), "image/jpeg")),
+                              ("files", ("bad|name.jpg", _jpeg_bytes(), "image/jpeg"))])
+    assert bad_name.status_code == 422
+    captures_dir = root / "demo" / "sites" / "pier" / "captures"
+    assert sorted(p.name for p in captures_dir.iterdir()) == ["es-orbit"]
+    assert client.get("/api/v2/jobs", params={"site": "demo/pier"}).json()[0]["id"] == r.json()["id"]
 
 
-def test_start_run_validation_and_queue(client, site):
+def test_start_run_validation_and_queue(client, site, root):
     assert client.post("/api/v2/sites/demo/pier/runs", json={}).status_code == 409   # no capture
     _upload(client)
+    assert client.post("/api/v2/sites/demo/pier/runs", json={}).status_code == 409   # not ingested yet
+    _drain(root)
     r = client.post("/api/v2/sites/demo/pier/runs",
                     json={"from_stage": "sfm", "overrides": {"iterations": 500}})
     assert r.status_code == 202, r.text
@@ -137,12 +187,13 @@ def test_start_run_validation_and_queue(client, site):
                 {"stages": ["nope"]}, {"capture": "missing"}):
         assert client.post("/api/v2/sites/demo/pier/runs", json=bad).status_code in (404, 422)
     _upload(client, capture_id="phone-02")
+    _drain(root)
     assert client.post("/api/v2/sites/demo/pier/runs", json={}).status_code == 422  # ambiguous
 
     sites = client.get("/api/v2/sites").json()
     assert sites[0]["active_jobs"] == 1
     listed = client.get("/api/v2/jobs", params={"site": "demo/pier"}).json()
-    assert [j["id"] for j in listed] == [job["id"]]
+    assert [j["id"] for j in listed if j["kind"] == "pipeline"] == [job["id"]]
     assert client.get("/api/v2/jobs", params={"status": "running"}).json() == []
 
     cancelled = client.post(f"/api/v2/jobs/{job['id']}/cancel").json()

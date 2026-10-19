@@ -33,7 +33,10 @@ export function StageTimeline({
         const label = s?.label ?? labels.get(name) ?? name;
         let detail = "";
         if (s?.state === "done") detail = duration(s.seconds);
-        else if (s?.state === "started" && s.startedAt) detail = duration((now - new Date(s.startedAt).getTime()) / 1000);
+        else if (s?.state === "started" && s.startedAt) {
+          detail = duration((now - new Date(s.startedAt).getTime()) / 1000);
+          if (s.progress) detail = `${s.progress.done}/${s.progress.total} · ${detail}`;
+        }
         else if (s?.state === "skipped") detail = s.reason ?? "пропущено";
         else if (s?.state === "failed") detail = s.error ?? "помилка";
         return (

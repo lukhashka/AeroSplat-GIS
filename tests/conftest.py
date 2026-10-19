@@ -19,6 +19,18 @@ FIXTURES = Path(__file__).parent / "fixtures"
 ES_JSON = FIXTURES / "earthstudio_3frames.json"
 
 
+def local_client(app, **kw):
+    """A TestClient that looks like the owner's browser on this machine (loopback peer and Host).
+
+    Starlette's defaults ('testclient' peer, 'testserver' host) are not loopback, so the
+    auth middleware (aerosplat.server.auth) would rightly refuse them without a token."""
+    from fastapi.testclient import TestClient
+
+    kw.setdefault("base_url", "http://127.0.0.1:8000")
+    kw.setdefault("client", ("127.0.0.1", 50123))
+    return TestClient(app, **kw)
+
+
 # ── markers: `sitl` (opt-in) and `hazard("H-NNN")` (docs/HAZARDS.md) ─────────
 
 def pytest_addoption(parser):

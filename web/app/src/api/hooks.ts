@@ -9,7 +9,6 @@ import type {
   AuditEntry,
   GridfitOut,
   GridfitRequest,
-  CaptureOut,
   CaptureSource,
   ImageRec,
   Job,
@@ -157,11 +156,13 @@ export function useUploadCapture(project: string, site: string) {
       form.set("license", v.license);
       form.set("author", v.author);
       for (const f of v.files) form.append("files", f, f.name);
-      return upload<CaptureOut>(`/sites/${project}/${site}/captures`, form, v.onProgress);
+      // 202 + the ingest job: hashing and registration run on the CPU worker
+      return upload<Job>(`/sites/${project}/${site}/captures`, form, v.onProgress);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: keys.site(project, site) });
       qc.invalidateQueries({ queryKey: keys.sites });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
 }

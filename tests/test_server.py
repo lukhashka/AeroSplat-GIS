@@ -9,14 +9,13 @@ import sys
 import pytest
 import torch
 
-from conftest import write_pt
+from conftest import local_client, write_pt
 from aerosplat.geo.crs import GeoPoint
 from aerosplat.geo.sphere_enu import EARTH_MODEL
 from aerosplat.store import Capture, CaptureSource, Catalog, RunStatus, Site
 from aerosplat.store.scenes import CLOUD, REGISTRATION, SPLAT, SceneSource, legacy_scenes
 
 pytest.importorskip("httpx")
-from fastapi.testclient import TestClient  # noqa: E402
 
 N = 200
 ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
@@ -65,7 +64,7 @@ def server(env):
     mod = _load_server()
     assert mod.DEFAULT_DATASET == "demo/nosplat"     # first catalog scene, sorted
     mod.DEFAULT_DATASET = "demo/t"
-    return TestClient(mod.app), mod
+    return local_client(mod.app), mod
 
 
 def _add_scene(mod, tmp_path, name, xyz=None):
@@ -217,7 +216,7 @@ def test_legacy_outputs_are_still_served(env):
     write_pt(data / "old_dense.pt", "dense", N)
     write_pt(data / "old_splat.pt", "splat", N)
     mod = _load_server()
-    client = TestClient(mod.app)
+    client = local_client(mod.app)
     assert mod.DEFAULT_DATASET == "old" and mod.SCENES["old"].kind == "legacy"
     meta = client.get("/api/v1/scene-meta", params={"mode": "splat"}).json()
     assert meta["dataset"] == "old" and meta["metric"] is None   # no geo registration
@@ -236,7 +235,7 @@ def test_catalog_scene_shadows_legacy_only_while_its_files_exist(env, caplog, de
         shutil.rmtree(cat.site_dirs(cat.get_site("demo", "old")).root)
         cat.close()
     mod = _load_server()
-    client = TestClient(mod.app)
+    client = local_client(mod.app)
     meta = client.get("/api/v1/scene-meta", params={"dataset": "old"})
     assert meta.status_code == 200
     if deleted:
@@ -288,7 +287,7 @@ def test_scene_meta_metric_for_sphere_enu_run(env):
                    products={SPLAT: rd.gs / "splat_wgs84.pt", CLOUD: rd.gs / "dense_wgs84.pt",
                              REGISTRATION: rd.registration_report})
     cat.close()
-    client = TestClient(_load_server().app)
+    client = local_client(_load_server().app)
     m = client.get("/api/v1/scene-meta", params={"mode": "splat", "dataset": "es"}).json()["metric"]
     assert m["earth_model"] == EARTH_MODEL and m["frame_error_m"] == 0.0002
     assert m["datum"].startswith("WGS84") and m["origin"]["lat"] == ORIGIN.lat
@@ -325,7 +324,7 @@ def test_legacy_sphere_enu_dataset_is_metric_only_once_mapped(env):
 def test_no_scenes_is_404_and_creates_nothing(env):
     projects, _ = env
     mod = _load_server()
-    client = TestClient(mod.app)
+    client = local_client(mod.app)
     assert mod.DEFAULT_DATASET is None
     r = client.get("/api/v1/scene-meta")
     assert r.status_code == 404 and "No scenes" in r.text
@@ -457,3 +456,28 @@ def test_the_mission_viewer_page_is_served(server):
     r = client.get("/web/mission.html")
     assert r.status_code == 200 and "mission-overlay.js" in r.text
     assert client.get("/web/mission-overlay.js").status_code == 200
+
+
+def test_remote_requests_need_a_token_on_every_endpoint(server, env):
+    """The real app: scene data, API v2, docs and the job stream are all behind the same check."""
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    from aerosplat.auth.tokens import TokenStore
+
+    projects, _ = env
+    _, mod = server
+    remote = TestClient(mod.app, base_url="http://aerosplat.lan:8000", client=("192.168.1.20", 4000))
+    for path in ("/api/v1/scene-meta", "/api/v1/spatial-chunk", "/api/v1/status", "/api/v2/sites",
+                 "/api/v2/system", "/docs", "/openapi.json"):
+        assert remote.get(path).status_code == 401, path
+    assert remote.post("/api/v1/reload").status_code == 401
+    with pytest.raises(WebSocketDisconnect):
+        with remote.websocket_connect("ws://aerosplat.lan:8000/api/v2/jobs/x/stream") as ws:
+            ws.receive_json()
+    assert remote.get("/web/").status_code == 200            # static viewer code is public
+
+    _, secret = TokenStore.for_root(projects).create("lan-user")
+    remote.headers["Authorization"] = f"Bearer {secret}"
+    assert remote.get("/api/v1/scene-meta").status_code == 200
+    assert remote.get("/api/v2/sites").status_code == 200

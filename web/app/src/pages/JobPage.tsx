@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useCancelJob, usePipeline, useRunDetail } from "../api/hooks";
@@ -16,10 +17,17 @@ const ALL_STAGES = ["geo", "exif", "sfm", "dense", "parse", "train", "eval", "ge
 // aerosplat.export.run.KINDS: the order an export job reports its kinds in.
 const EXPORT_ORDER = ["ortho", "dsm", "dtm", "ndsm", "las", "ply"];
 
+const INGEST_STAGES: PlannedStage[] = [
+  { name: "check", label: "Перевірка завантаження" },
+  { name: "hash", label: "Хешування й розкладка кадрів" },
+  { name: "register", label: "Реєстрація в каталозі" },
+];
+
 /** Stages the job will go through, from its payload (pipeline) or spec (diagnostic). */
 function plannedStages(job: Job | null, pipeline: PipelineInfo | undefined): PlannedStage[] {
   if (!job) return [];
   const label = (name: string) => pipeline?.stages.find((s) => s.name === name)?.label ?? name;
+  if (job.kind === "ingest") return INGEST_STAGES;
   if (job.kind === "diagnostic") {
     const n = Number(job.payload["stages"] ?? 0);
     return Array.from({ length: n }, (_, i) => ({ name: `step${i + 1}`, label: `Diagnostic step ${i + 1}/${n}` }));
@@ -50,6 +58,15 @@ export function JobPage() {
   const now = useNow(active);
 
   const planned = useMemo(() => plannedStages(job, pipeline), [job, pipeline]);
+  // A finished ingest adds a capture to its site: refresh what shows it.
+  const qc = useQueryClient();
+  const ingestDone = job?.kind === "ingest" && job.status === "succeeded" ? job.site_key : null;
+  useEffect(() => {
+    if (!ingestDone) return;
+    const [p = "", s = ""] = ingestDone.split("/");
+    qc.invalidateQueries({ queryKey: ["site", p, s] });
+    qc.invalidateQueries({ queryKey: ["sites"] });
+  }, [ingestDone, qc]);
   // The run this job produced; only a run with splat/cloud products has a 3D scene.
   const res = (job?.result ?? {}) as { site?: string; epoch?: string; run_id?: string };
   const [resProject = "", resSite = ""] = (res.site ?? "").split("/");
@@ -166,6 +183,14 @@ export function JobPage() {
                     <dt>Run</dt>
                     <dd className="mono">
                       {result.epoch}/{result.run_id}
+                    </dd>
+                  </>
+                )}
+                {job.kind === "ingest" && (
+                  <>
+                    <dt>Захоплення</dt>
+                    <dd className="mono">
+                      {String(job.payload["capture_id"])} · {String(job.payload["files"])} файлів
                     </dd>
                   </>
                 )}

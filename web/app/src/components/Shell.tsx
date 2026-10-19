@@ -1,5 +1,7 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet } from "react-router-dom";
 
+import { auth } from "../api/client";
 import { useRenderStatus, useSystem } from "../api/hooks";
 import type { SystemInfo, WorkerInfo } from "../api/types";
 import { Icon } from "./Icon";
@@ -32,6 +34,27 @@ function RenderLine() {
   );
 }
 
+/** "Signed in as <token>" when the page is used from another machine; nothing on this one. */
+function SessionLine() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ["whoami"], queryFn: auth.whoami, staleTime: 60_000 });
+  if (data?.via !== "token") return null;
+  const logout = async () => {
+    await auth.logout().catch(() => undefined);
+    await qc.invalidateQueries();
+  };
+  return (
+    <div className="line" title="Запити підписуються іменем токена (журнал аудиту)">
+      <span className="grow faint">
+        токен <b className="mono">{data.name}</b>
+      </span>
+      <button className="btn ghost sm" onClick={logout}>
+        вийти
+      </button>
+    </div>
+  );
+}
+
 function SystemWidget({ sys }: { sys: SystemInfo | undefined }) {
   if (!sys) return <div className="sys faint">З'єднання з сервером…</div>;
   const gpu = sys.gpu?.[0];
@@ -58,6 +81,7 @@ function SystemWidget({ sys }: { sys: SystemInfo | undefined }) {
           </div>
         </div>
       )}
+      <SessionLine />
       <div className="faint" style={{ fontSize: 11 }}>
         v{sys.version}
         {sys.git_commit ? ` · ${sys.git_commit.slice(0, 7)}` : ""}

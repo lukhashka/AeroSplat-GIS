@@ -251,7 +251,37 @@ GPU-задачі за раз. Окремо: `aerosplat worker --resource gpu`, `
 перспективою чи ортографічно — сторінка «Вид із камери» в UI або
 `POST /api/v2/sites/<project>/<site>/render`.
 Для розробки UI з hot reload: `cd web/app && npm run dev` (проксіює API на :8000).
+Завантажені кадри обробляє CPU-воркер (задача `ingest`): захоплення з'являється на ділянці,
+коли задача завершилась.
 Архітектура — [docs/ARCHITECTURE.md §3.10–3.12](docs/ARCHITECTURE.md).
+
+### Доступ з інших машин (токени)
+
+З цієї машини (`127.0.0.1`) все працює без налаштувань, як і раніше. Щоб відкрити сервер
+у мережу, спершу створіть токен — без нього `aerosplat up` з не-loopback адресою не стартує:
+
+``` bash
+aerosplat token create alice      # токен показується один раз; зберігається лише його хеш
+aerosplat up --host 0.0.0.0       # запити не з цієї машини вимагають токен
+aerosplat token list              # хто має доступ
+aerosplat token revoke alice      # діє з наступного запиту
+```
+
+У браузері UI сам попросить токен (далі — HttpOnly-cookie сесії); скрипти шлють заголовок
+`Authorization: Bearer <токен>`. Зміни, зроблені з токеном, журнал аудиту підписує
+`token:<ім'я>`. Це HTTP без TLS: лише довірена мережа або reverse proxy з TLS. Запити через
+проксі чи тунель на цій машині (`X-Forwarded-For` тощо) теж вимагають токен;
+`aerosplat up --require-auth` вимагає його навіть з localhost (тунелі без таких заголовків).
+
+### E2E-тест UI (Playwright)
+
+``` bash
+cd web/app && npx playwright install chromium   # одноразово
+npm run e2e        # збирає UI і проганяє smoke на тимчасових серверах :18765/:18766
+```
+
+Python береться з `AEROSPLAT_PYTHON` або `venv/` репозиторію; дані — тимчасовий каталог у
+`%TEMP%/aerosplat-e2e`, не `projects/`. Без Chromium тест пропускається. У `npm test` не входить.
 
 #  Launch Visualization Server
 
