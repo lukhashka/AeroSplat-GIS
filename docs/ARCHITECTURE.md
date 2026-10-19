@@ -349,8 +349,26 @@ flowchart TD
   воркерів цього хоста (pid не живий) і їхні задачі.
 * **Процес задачі** (`jobs/child.py`): `pipeline` → `starter.main(spec.argv())` з колбеками
   `on_run(site, run_id)` (→ `result`) і `on_event` (→ `stage`-події від `run_stages`:
-  `started|skipped|done|failed`, index/total, секунди); `diagnostic` — фіктивні кроки для
-  перевірки воркера і стріму.
+  `started|skipped|done|failed`, index/total, секунди); `ingest` — завантажене захоплення
+  (нижче); `diagnostic` — фіктивні кроки для перевірки воркера і стріму.
+* **Ingest завантажень на CPU-воркері (2026-10-19)** (`ingest/upload.py`, задача `ingest`,
+  `IngestSpec`). Запит API лише стрімить файли в `captures/.upload-<job id>/files/` (на тому ж
+  диску, що й захоплення), робить дешеві перевірки (імена, є зображення; для Earth Studio —
+  один JSON і кадри 1:1 з ним), **запечатує** теку (`upload.json`, атомарно) і ставить задачу
+  (`202` + `Job`; id задачі генерується до печатки, бо воркер може забрати її одразу).
+  Задача: `check` → `hash` (sha256 і розміри кадрів, `stage`-події з `progress: {done,
+  total}` раз на секунду + рядки журналу) → `register`. Дерево захоплення будується **всередині
+  staging** (`capture/`, адаптери розділено на `prepare_*` — розкласти й описати — і
+  `import_*` = prepare + реєстрація), потім одним `os.rename` стає `captures/<id>/`, потім
+  одна транзакція `add_capture`. Захоплення існує лише після коміту, тож напівготове ніколи
+  не видно. Після вбивства в будь-якій точці (скасування, збій) повторний запуск тієї ж задачі
+  доводить справу: напівзібране дерево повертається у `files/`; перейменоване, але не
+  зареєстроване, реєструється з маркера `.ingest.json` (у ньому опис кадрів); готове —
+  no-op (маркер лишається як `{"job", "registered": true}`). Теку `captures/<id>/`, яку
+  створило не це завантаження, задача не чіпає — відмова з поясненням. Staging завершених
+  задач прибирається при наступних завантаженнях на ділянку через годину, «осиротілий» (API
+  впав посеред завантаження) — через 6 год без змін. Без CPU-воркера задача просто чекає в
+  черзі; UI про це попереджає.
 * **`PipelineSpec`** (`jobs/models.py`): site, epoch, capture, run_id, stages або
   from/to, resume, overrides (ключі `RunConfig`, повна валідація при постановці; `dataset`,
   `footage_dir`, `json_path` заборонені — їх визначає ділянка).
@@ -371,8 +389,8 @@ flowchart TD
 ### 3.11 API v2 і веб-UI — `aerosplat/server/api_v2.py`, `web/app/` (S2)
 
 * **API v2** (без torch): `projects`, `sites` (створення з origin, зведення, деталі),
-  `captures` (multipart-завантаження через ті самі адаптери ingest, що й CLI; мініатюри —
-  лише для каталогізованих імен), `runs` (`POST` → `gpu`-задача; деталі зі `manifest.json`,
+  `captures` (multipart-завантаження → `ingest`-задача на CPU-воркері, §3.10; ті самі адаптери,
+  що й CLI; мініатюри — лише для каталогізованих імен), `runs` (`POST` → `gpu`-задача; деталі зі `manifest.json`,
   `metrics.json`, звіт), `jobs` (список, деталі, скасування, події з курсора,
   **WebSocket** `/jobs/{id}/stream` — опитує `job_events` кожні 0.4 с і закривається після
   термінального статусу), `system` (воркери, черга, `nvidia-smi`), `pipeline` (стадії, схема
@@ -387,8 +405,55 @@ flowchart TD
   список задач, 3D — класичний в'ювер у рамці до Фази 4.2. Підкладки — лише безключові:
   OSM (у темній темі — інверсія яскравості растру) і супутник Esri World Imagery.
 * **`aerosplat up`** (`server/up.py`): сервер + GPU- і CPU-воркер + сервіс рендерингу (§3.12)
-  однією командою; процеси зупиняються разом із сервером. API слухає лише `127.0.0.1`
-  (автентифікації немає).
+  однією командою; процеси зупиняються разом із сервером. За замовчуванням слухає `127.0.0.1`.
+  `--host` з не-loopback адресою (напр. `0.0.0.0`) **не стартує без жодного токена** (нижче);
+  `--require-auth` вимагає токен навіть з цієї машини. Сервіс рендерингу автентифікації не має
+  і не-loopback адресу відхиляє.
+* **Автентифікація (2026-10-19)** — `aerosplat/auth/` (токени, контекст), `server/auth.py`
+  (middleware, `/api/v2/auth/*`). Один чистий ASGI-middleware перед **усім** застосунком —
+  REST, WebSocket, сцени v1, статика (`/web`, `/app`) — а не залежність на кожному маршруті.
+  * **Loopback відкритий без налаштувань**, але лише коли все разом: TCP-peer (`scope.client`,
+    із сокета, не з заголовка) — loopback; **немає** проксі-заголовків (`X-Forwarded-For`,
+    `Forwarded`, `X-Real-IP`, `CF-Connecting-IP`, `Via`, …) — проксі чи тунель на цій машині
+    робить віддалений трафік «локальним»; `Host` — loopback-ім'я (DNS rebinding); `Origin`,
+    якщо є, — локальний (інший сайт у браузері власника не керує API, хоч CORS і `*`).
+    Заголовки можуть лише **забрати** довіру, ніколи не дати.
+  * Інакше — **токен**: `Authorization: Bearer` (скрипти) або cookie `aerosplat_token`
+    (HttpOnly, SameSite=Strict, 30 діб), яку ставить `POST /api/v2/auth/login`. Cookie — бо
+    браузер не додає заголовок до `<img>` (мініатюри), iframe в'ювера і WebSocket, а токен в
+    URL потрапив би в журнали й історію. Для cookie небезпечні методи й WebSocket мають бути
+    same-origin (`Origin` = `Host`, не `Sec-Fetch-Site: cross-site`) — CSRF і cross-site
+    WebSocket. Відмова: HTTP 401 JSON (`auth: token-required`, `WWW-Authenticate: Bearer`),
+    WebSocket закривається до accept (403); 403 — cookie з чужого сайту.
+  * **Публічне без токена**: оболонка UI і статика (`/`, `/app/…`, `/web/…` — код, не дані) та
+    `/api/v2/auth/*` (`whoami`, `login`, `logout`), щоб UI міг попросити токен. Шлях із `..`
+    публічним не вважається.
+  * **Токени**: `aerosplat token create|list|revoke`; `<projects>/auth/tokens.json` — лише
+    SHA-256 від 256-бітних випадкових секретів (`asg_…`), id, ім'я, хто й коли створив,
+    відкликання. Порівняння `hmac.compare_digest` з усіма активними без раннього виходу. Сервер
+    файл лише читає (перечитує при зміні mtime/розміру — відкликання діє з наступного запиту);
+    пише CLI атомарно під файловим замком. Пошкоджений файл = жоден токен не дійсний (віддалені
+    запити відхиляються, loopback працює) і `up --host` не стартує. Не таблиця каталогу: нова
+    ревізія Alembic зробила б `catalog.db` нечитабельним для старших гілок, які власник запускає
+    на тих самих `projects/`.
+  * **Аудит**: middleware кладе принципала в `contextvar`; `authored.models.actor()` для запиту
+    з токеном повертає `token:<ім'я>` і ігнорує заявлене клієнтом `by`. Без токена — як раніше
+    (`by` або користувач ОС). Так підписуються точки доступу, цілі, місії, експорт.
+  * **UI**: будь-яка відповідь 401 (`ApiError`) піднімає подію, `AuthGate` показує діалог
+    токена, після входу перезапитує все; у сайдбарі — «токен <ім'я> · вийти». З цієї машини
+    діалог не з'являється ніколи.
+  * Токени логам не віддаються (uvicorn пише лише шлях; CLI друкує секрет один раз при
+    створенні). HTTP без TLS: токен іде відкритим текстом — лише довірена мережа або reverse
+    proxy з TLS (він додає `X-Forwarded-For`, тож токен потрібен і через нього).
+* **E2E-тест UI** (`web/app/e2e`, Playwright, `npm run e2e` — збирає UI; `npm run e2e:only` —
+  без збірки; у `npm test` не входить). `tools/e2e_server.py` піднімає `aerosplat up` (CPU-воркер,
+  без GPU-воркера й рендера; `AEROSPLAT_RENDER_URL` — на закритий порт, щоб не зачепити рендер
+  власника на :8001) на тимчасовому каталозі `%TEMP%/aerosplat-e2e/<port>` із синтетичними
+  фікстурами: ділянка з фасадами (`demo/pier`) і місія з прольотом (`demo/street`). Сценарії:
+  список ділянок; створення ділянки кліком на карті → завантаження кадрів → `ingest`-задача на
+  CPU-воркері до «готово» → захоплення на ділянці; список задач; Facade editor; сторінка
+  прольоту; другий сервер з `--require-auth` — діалог токена, хибний і правильний токен,
+  HttpOnly-cookie, вихід. Без Chromium (`npx playwright install chromium`) пропускається.
 
 ### 3.12 Сервіс рендерингу — `aerosplat/render/` (S2, ADR-0010 п. 2)
 
@@ -1236,21 +1301,22 @@ AeroSplat-GIS/
 │   ├── pipeline/                  # stages, runner, layout (RunLayout), manifest, site_run
 │   ├── geo/                       # crs (pyproj), earthstudio_to_colmap, exif_injector, compare_poses
 │   ├── store/                     # models, db, catalog, paths, scenes, legacy, cli, migrations/ (Alembic)
-│   ├── ingest/                    # earthstudio, folder, images
+│   ├── ingest/                    # earthstudio, folder, images, upload (ingest-задача)
 │   ├── sfm/                       # sfm_runner, dense_runner
 │   ├── io/                        # cloud_io, ply_parser, colmap_parser
 │   ├── gs/                        # trainer (активний), gsplat_backend, sh, evaluate, report
 │   ├── jobs/                      # models, queue, worker, child, proctree (черга задач, S2)
+│   ├── auth/                      # tokens, context, cli (`aerosplat token`; доступ не з localhost)
 │   ├── render/                    # models, camera, engine, app, service (сервіс рендерингу, S2)
 │   ├── semantics/                 # terrain, buildings, facades, coverage, ortho, gridfit (семантика, S3)
 │   ├── surface/                   # occupancy, esdf, stage, products (зайнятість + ESDF, 8.1a)
 │   ├── mission/                   # targets, planner, corridor, export, store (місії v0, 8.1b)
-│   └── server/                    # main.py (FastAPI, сцени v1), api_v2.py, api_semantics.py, api_mission.py, up.py
+│   └── server/                    # main.py (FastAPI, сцени v1), auth.py, api_v2.py, api_semantics.py, api_mission.py, up.py
 ├── web/                           # класичний в'ювер: index.html, appGLSL.js, depth-sort_worker.js, aero-debug.js
-│   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored)
+│   └── app/                       # веб-UI (Vite + React + TS); dist/ — збірка (ignored); e2e/ — Playwright
 ├── configs/                       # earthstudio.yaml, drone.yaml (пресети RunConfig)
 ├── tests/                         # CPU-тести + golden-фікстури Earth Studio
-├── tools/                         # дослідницькі скрипти, gsplat_env.bat, migrate_dataset.py
+├── tools/                         # дослідницькі скрипти, gsplat_env.bat, migrate_dataset.py, e2e_server.py
 ├── legacy/                        # optimization/, reconstruction/ (v2, TRIPS), scripts/, server/mainG.py, checker/
 ├── docs/                          # ARCHITECTURE, TARGET_ARCHITECTURE, ACCESS_POINTS, ROADMAP, decisions/
 ├── diff-gaussian-rasterization/   # сторонній репо (ignored, non-commercial)

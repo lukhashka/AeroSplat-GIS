@@ -39,3 +39,7 @@ node_modules/
 # Web UI build output (web/app: npm run build)
 web/app/dist/
 *.tsbuildinfo
+
+# Playwright e2e (web/app: npm run e2e)
+web/app/test-results/
+web/app/playwright-report/

@@ -357,7 +357,8 @@ def test_up_refuses_a_network_bind_without_tokens(root, monkeypatch, capsys):
     monkeypatch.setattr(up.WorkerSupervisor, "start_all", boom)
     assert up.main(["--host", "0.0.0.0", "--port", "1", "--projects-root", str(root)]) == 2
     assert "aerosplat token create" in capsys.readouterr().out
-    monkeypatch.delenv(auth.REQUIRE_AUTH_ENV, raising=False)
+    # `up --require-auth` sets the variable for its process; let monkeypatch undo it here
+    monkeypatch.setenv(auth.REQUIRE_AUTH_ENV, "")
     assert up.main(["--require-auth", "--port", "1", "--projects-root", str(root)]) == 2
 
 
@@ -366,3 +367,11 @@ def test_render_service_refuses_a_network_bind(capsys):
 
     assert service.main(["--host", "0.0.0.0", "--port", "1"]) == 2
     assert "127.0.0.1" in capsys.readouterr().out
+
+
+def test_an_odd_foreign_cookie_does_not_hide_ours(app, store):
+    _, secret = store.create("alice")
+    with remote(app) as c:
+        cookie = f'other="{{\\"json\\": 1}}"; broken; {auth.COOKIE}={secret}; x=1'
+        r = c.get("/api/v2/ping", headers={"Cookie": cookie})
+        assert r.status_code == 200 and r.json()["actor"] == "token:alice"

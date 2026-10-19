@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
@@ -40,6 +39,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
+from starlette.requests import cookie_parser
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from aerosplat.auth.context import Principal, reset_principal, set_principal
@@ -144,13 +144,8 @@ def _cookie(headers: Headers) -> Optional[str]:
     raw = headers.get("cookie")
     if not raw:
         return None
-    jar: SimpleCookie = SimpleCookie()
-    try:
-        jar.load(raw)
-    except Exception:
-        return None
-    morsel = jar.get(COOKIE)
-    return morsel.value if morsel and morsel.value else None
+    # Starlette's lenient parser: another app's odd cookie on the same host must not hide ours.
+    return cookie_parser(raw).get(COOKIE) or None
 
 
 # ── token stores (one per projects root, cached; re-read when the file changes) ──
