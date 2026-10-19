@@ -503,6 +503,7 @@ export interface AccessPoint {
 
 export interface AccessPointCreate {
   facade_id: string;
+  run_id?: string | null;
   class: string;
   polygon_uv: [number, number][];
   attributes?: Record<string, string>;

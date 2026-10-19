@@ -191,7 +191,8 @@ export const refreshScenes = () => api.post<{ scenes: string[]; changed: string[
 // ── semantics, taxonomy and authored access points (ACCESS_POINTS §3-§5) ──
 export const semanticKeys = {
   semantics: (p: string, s: string) => ["semantics", p, s] as const,
-  facade: (p: string, s: string, f: string) => ["facade", p, s, f] as const,
+  facade: (p: string, s: string, f: string, run: string | null = null) =>
+    ["facade", p, s, f, run ?? ""] as const,
   taxonomy: (p: string, s: string) => ["taxonomy", p, s] as const,
   features: (p: string, s: string, f: string | null) => ["access-points", p, s, f ?? ""] as const,
   audit: (p: string, s: string) => ["audit", p, s] as const,
@@ -205,10 +206,17 @@ export const useSemantics = (project: string, site: string) =>
     staleTime: 30_000,
   });
 
-export const useFacade = (project: string, site: string, facadeId: string | null) =>
+// `runId` null: the newest run with semantics. An older run keeps its own facade ids, which
+// is where features drawn before a newer run was computed still live.
+export const useFacade = (project: string, site: string, facadeId: string | null,
+                          runId: string | null = null) =>
   useQuery({
-    queryKey: semanticKeys.facade(project, site, facadeId ?? ""),
-    queryFn: () => api.get<FacadeDetail>(`/sites/${project}/${site}/facades/${facadeId}`),
+    queryKey: semanticKeys.facade(project, site, facadeId ?? "", runId),
+    queryFn: () =>
+      api.get<FacadeDetail>(
+        `/sites/${project}/${site}/facades/${facadeId}` +
+          (runId ? `?run_id=${encodeURIComponent(runId)}` : ""),
+      ),
     enabled: !!facadeId,
     staleTime: 30_000,
   });
@@ -262,7 +270,7 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
       onSuccess: refresh,
     }),
     address: useMutation({
-      mutationFn: (body: { floor_offset?: number; by?: string }) =>
+      mutationFn: (body: { floor_offset?: number; by?: string; run_id?: string | null }) =>
         api.post<AddressOut>(
           `/sites/${project}/${site}/facades/${facadeId}/address`,
           body,

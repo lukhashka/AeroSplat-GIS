@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError, renderFacadeOrtho } from "../api/client";
 import { useAccessPointEdits, useAccessPoints, useFacade, useTaxonomy } from "../api/hooks";
@@ -180,8 +180,11 @@ function ClassList({
 export function FacadePage() {
   // The facade id has a slash in it ("B01/N1"), so the route carries it as a splat.
   const { project = "", site = "", "*": facadeKey = "" } = useParams();
+  // `?run=<id>` pins the editor to one run (facade ids differ between runs); default: newest.
+  const [params] = useSearchParams();
+  const runId = params.get("run");
 
-  const facade = useFacade(project, site, facadeKey || null);
+  const facade = useFacade(project, site, facadeKey || null, runId);
   const taxonomy = useTaxonomy(project, site);
   const features = useAccessPoints(project, site, facadeKey || null);
   const edits = useAccessPointEdits(project, site, facadeKey || null);
@@ -224,7 +227,7 @@ export function FacadePage() {
     if (!facadeKey) return;
     const ctl = new AbortController();
     setBusy(true);
-    renderFacadeOrtho(project, site, facadeKey, { gsd_cm: gsd }, ctl.signal)
+    renderFacadeOrtho(project, site, facadeKey, { gsd_cm: gsd, run_id: runId }, ctl.signal)
       .then((r) => {
         setShot((old) => {
           if (old) URL.revokeObjectURL(old.url);
@@ -239,7 +242,7 @@ export function FacadePage() {
         if (!ctl.signal.aborted) setBusy(false);
       });
     return () => ctl.abort();
-  }, [project, site, facadeKey, gsd]);
+  }, [project, site, facadeKey, gsd, runId]);
 
   const grid = shot?.meta.facade_grid ?? null;
   const map = useMemo(() => (grid ? mapping(grid) : null), [grid]);
@@ -279,6 +282,7 @@ export function FacadePage() {
     edits.create.mutate(
       {
         facade_id: facadeKey,
+        run_id: runId,
         class: classId,
         polygon_uv: [
           [Math.min(draft.u0, draft.u1), Math.min(draft.v0, draft.v1)],
@@ -300,7 +304,7 @@ export function FacadePage() {
   const runAddress = () => {
     if (!list.length || edits.address.isPending) return;
     edits.address.mutate(
-      {},
+      { run_id: runId },
       {
         onSuccess: (a) =>
           setAddressNote(
@@ -322,7 +326,7 @@ export function FacadePage() {
   const runGridfit = () => {
     if (!facadeKey || edits.gridfit.isPending) return;
     edits.gridfit.mutate(
-      {},
+      { run_id: runId },
       {
         onSuccess: (g) => {
           setGridNote(gridfitSummary(g));

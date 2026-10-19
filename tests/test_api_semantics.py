@@ -381,6 +381,43 @@ def test_addressing_ignores_rejected_openings(client):
     assert next(f for f in body["features"] if f["id"] == a["id"])["address"] is None
 
 
+def _newer_run_without(tmp_path, facade_id: str = "B01/N1") -> None:
+    """A newer run whose semantics name the walls differently: `facade_id` is gone."""
+    cat = Catalog.open(tmp_path / "projects")
+    s = cat.get_site("demo", "pier")
+    cat.create_run(s, "baseline", "r2", capture_ids=[], config={}, earth_model="wgs84",
+                   georeferenced=True)
+    sem = cat.run_dirs(s, "baseline", "r2").root / "semantics"
+    sem.mkdir(parents=True)
+    other = _facade("B07/S1", (0.0, -1.0), (0.0, -12.0, 0.0))
+    assert other.id != facade_id
+    result = SemanticsResult(
+        terrain=TerrainModel(res_m=1.0, x0=-40.0, y0=-40.0, rows=80, cols=80,
+                             n_points=900_000, filled_cells=5400),
+        buildings=[], facades=[other], warnings=[])
+    (sem / SEMANTICS_JSON).write_text(result.model_dump_json(), encoding="utf-8")
+    cat.finish_run(s, "baseline", "r2", status=RunStatus.ok, products={"semantics": sem})
+    cat.close()
+
+
+def test_an_older_run_is_edited_and_addressed_through_its_run_id(client, tmp_path):
+    # Features drawn on an older run keep that run's facade frame. Once a newer run names
+    # the walls differently, the editor reaches the old facade only by asking for its run.
+    draw(client, -7.65, 0.45, -6.35, 1.95)
+    _newer_run_without(tmp_path)
+    assert client.get(f"{BASE}/facades/B01/N1").status_code == 404
+    assert client.post(f"{BASE}/facades/B01/N1/address", json={}).status_code == 404
+    assert draw(client, -2.4, 0.45, -1.1, 1.95).status_code == 404
+
+    detail = client.get(f"{BASE}/facades/B01/N1?run_id=r1")
+    assert detail.status_code == 200 and detail.json()["run_id"] == "r1"
+    assert draw(client, -2.4, 0.45, -1.1, 1.95, run_id="r1").status_code == 201
+    body = client.post(f"{BASE}/facades/B01/N1/address", json={"run_id": "r1"}).json()
+    assert len(body["column_centres"]) == 2 and [r["floor_index"] for r in body["rows"]] == [0]
+    assert client.post(f"{BASE}/facades/B01/N1/address",
+                       json={"run_id": "no-such-run"}).status_code == 404
+
+
 def test_addressing_an_empty_facade_changes_nothing(client):
     body = client.post(f"{BASE}/facades/B01/N1/address", json={}).json()
     assert body["rows"] == [] and body["features"] == [] and not body["ambiguous"]

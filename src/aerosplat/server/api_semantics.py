@@ -191,6 +191,7 @@ class AccessPointPatch(_In):
 
 class AddressRequest(_In):
     floor_offset: int = Field(0, ge=-5, le=5)
+    run_id: Optional[str] = None                # default: the newest run with semantics
     row_tol_m: float = Field(0.6, gt=0.01, le=5.0)
     column_tol_m: float = Field(0.6, gt=0.01, le=5.0)
     by: Optional[str] = None
@@ -382,7 +383,7 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
     reason to refuse the target rather than a detail.
     """
     site = _site(cat, project_id, site_id)
-    product = _semantics(cat, site)
+    product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
     store = _store(cat, site)
     features = [f for f in store.features(facade_id=facade_id)
