@@ -102,7 +102,8 @@ class RunLayout:
             dataset=ds,
             data_dir=data_dir,
             project_dir=project_dir,
-            footage=abs_path(cfg["footage_dir"], project_dir),
+            footage=(abs_path(cfg["footage_dir"], project_dir) if cfg["footage_dir"]
+                     else data_dir / ds / "footage"),
             geotagged=data_dir / f"raw_images_{ds}",
             colmap_out=colmap_out,
             sparse=sparse,

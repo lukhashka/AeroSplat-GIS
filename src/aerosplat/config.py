@@ -20,7 +20,9 @@ class RunConfig(BaseModel):
     dataset: str = "dataset_v6"
 
     # -- input source ------------------------------------------------------
-    footage_dir: str = "data/dataset_v6/footage"
+    # None: data/<dataset>/footage. A fixed default here once fed every --dataset the frames of
+    # dataset_v6 (the converter's 1:1 count check caught it, ROADMAP P0 sample run).
+    footage_dir: Optional[str] = None
     # "auto": Earth Studio JSON if present, otherwise synthetic.
     camera_source: Literal["auto", "synthetic", "earthstudio_json"] = "auto"
     json_path: Optional[str] = None

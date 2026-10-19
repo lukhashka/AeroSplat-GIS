@@ -8,6 +8,8 @@ doctor.py — діагностика даних пайплайну AeroSplat-GIS
 
     aerosplat doctor
     aerosplat doctor --dataset dataset_v6
+    aerosplat doctor --site default/dataset_v6           # останній run ділянки
+    aerosplat doctor --site default/dataset_1910 --run-id 20261019-101955
     aerosplat doctor --stage sparse      # лише один розділ
     aerosplat doctor --verbose           # + список кадрів/пар
 
@@ -114,13 +116,30 @@ def check_footage(footage_dir: Path, verbose=False) -> dict:
 # ══════════════════════════════════════════════════════════════════════
 # 2. INTRINSICS SANITY
 # ══════════════════════════════════════════════════════════════════════
-def check_intrinsics(info: dict, cfg_w, cfg_h, cfg_fov):
+def check_intrinsics(info: dict, cfg_w, cfg_h, cfg_fov, es_json: Path | None = None):
     header("2. INTRINSICS  —  що COLMAP отримає з --known-intrinsics")
     if "width" not in info:
         say(INFO, "немає даних про кадри — пропускаю")
         return
 
     w, h = info["width"], info["height"]
+    if es_json is not None and es_json.is_file():
+        # earthstudio_json: the converter takes width/height/fovVertical from the export, not
+        # from RunConfig, so only the export and the frames have to agree.
+        import json
+        d = json.loads(es_json.read_text(encoding="utf-8"))
+        jw, jh = d.get("width"), d.get("height")
+        fovs = {round(float(f.get("fovVertical", 0)), 6) for f in d.get("cameraFrames", [])}
+        say(INFO, f"реальні кадри: {w}×{h}; Earth Studio JSON: {jw}×{jh}, fovVertical {sorted(fovs)}")
+        if (w, h) != (jw, jh):
+            bad(f"НЕЗБІГ РОЗДІЛЬНОСТІ: кадри {w}×{h}, а в {es_json.name} {jw}×{jh} — "
+                f"focal length з JSON буде хибним")
+        else:
+            say(OK, "роздільність кадрів збігається з JSON (інтринсики беруться з нього)")
+        if len(fovs) > 1:
+            warn("fovVertical змінюється між кадрами: модель камери спільна (SIMPLE_PINHOLE) "
+                 "— пози з різним зумом будуть неточні")
+        return
     say(INFO, f"реальні кадри:  {w}×{h}")
     say(INFO, f"конфіг RunConfig: {cfg_w}×{cfg_h}, fov={cfg_fov}°")
 
@@ -485,10 +504,55 @@ def check_pt(paths: list[Path]):
 
 
 # ══════════════════════════════════════════════════════════════════════
+def _site_paths(args):
+    """Paths of a Site run, resolved read-only through the catalog (as `run --dry-run` does)."""
+    from aerosplat.config import RunConfig
+    from aerosplat.pipeline.site_run import SiteRun
+    from aerosplat.store.catalog import CatalogError
+
+    from aerosplat.store.catalog import Catalog
+
+    cfg = RunConfig().to_dict()
+    capture = args.capture
+    if capture is None:                      # a run knows its capture: take it from there
+        cat = Catalog.open(args.projects_root)
+        try:
+            runs = cat.list_runs(cat.find_site(args.site), args.epoch)
+            run = next((r for r in runs if r.id == args.run_id), None) if args.run_id else                 (runs[-1] if runs else None)
+            if run is not None and len(run.capture_ids) == 1:
+                capture = run.capture_ids[0]
+        except CatalogError as e:
+            raise SystemExit(f"❌ {e}") from None
+        finally:
+            cat.close()
+    try:
+        sr = SiteRun.prepare(cfg, site_ref=args.site, epoch_id=args.epoch, capture_id=capture,
+                             run_id=args.run_id, resume=True, projects_root=args.projects_root)
+    except CatalogError as e:
+        raise SystemExit(f"❌ {e}") from None
+    try:
+        if not sr.exists:
+            raise SystemExit(f"❌ у {sr.site.key} (епоха {args.epoch}) немає run-а "
+                             f"{args.run_id or '(жодного)'}")
+        L = sr.layout
+        print(f"run: {sr.site.key} / {args.epoch} / {sr.run_id}, захоплення {sr.capture.id}")
+        return (f"{sr.site.key}@{sr.run_id}", L.footage, L.geotagged, L.colmap_out, L.dense,
+                [L.cloud_pt, L.dense_pt, L.splat_pt, L.splat_wgs84],
+                L.json_path if cfg["camera_source"] == "earthstudio_json" else None)
+    finally:
+        sr.close()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Діагностика даних пайплайну AeroSplat-GIS")
-    ap.add_argument("--dataset", default="dataset_v6")
+    ap.add_argument("--dataset", default=None, help="legacy layout data/<ds> (dataset_v6, якщо "
+                                                       "не задано ні --dataset, ні --site)")
+    ap.add_argument("--site", default=None, help="ділянка з каталогу: project/site")
+    ap.add_argument("--epoch", default="baseline")
+    ap.add_argument("--capture", default=None)
+    ap.add_argument("--run-id", default=None, help="з --site; за замовчуванням останній run")
+    ap.add_argument("--projects-root", type=Path, default=None)
     ap.add_argument("--footage-dir", default=None,
                     help="за замовчуванням data/<dataset>/footage")
     ap.add_argument("--stage", default="all",
@@ -501,13 +565,20 @@ def main(argv=None):
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args(argv)
 
-    ds = args.dataset
-    footage = Path(args.footage_dir) if args.footage_dir \
-        else DATA_DIR / ds / "footage"
-    if not footage.is_absolute():
-        footage = PROJECT_DIR / footage
-    geotagged = DATA_DIR / f"raw_images_{ds}"
-    colmap_out = DATA_DIR / f"colmap_output_{ds}"
+    if args.site and args.dataset:
+        raise SystemExit("--site і --dataset взаємовиключні")
+    if args.site:
+        ds, footage, geotagged, colmap_out, dense_dir, pts, es_json = _site_paths(args)
+    else:
+        ds = args.dataset or "dataset_v6"
+        footage = Path(args.footage_dir) if args.footage_dir             else DATA_DIR / ds / "footage"
+        if not footage.is_absolute():
+            footage = PROJECT_DIR / footage
+        geotagged = DATA_DIR / f"raw_images_{ds}"
+        colmap_out = DATA_DIR / f"colmap_output_{ds}"
+        dense_dir = colmap_out / "dense"
+        es_json = DATA_DIR / ds / f"{ds}.json"
+        pts = [DATA_DIR / f"{ds}_cloud.pt", DATA_DIR / f"{ds}_dense.pt", DATA_DIR / f"{ds}_splat.pt"]
 
     print(f"AeroSplat-GIS doctor — датасет '{ds}'")
     print(f"проєкт: {PROJECT_DIR}")
@@ -520,7 +591,7 @@ def main(argv=None):
         info = check_footage(footage, args.verbose)
         n_frames = info.get("count")
     if want in ("all", "intrinsics"):
-        check_intrinsics(info, args.image_width, args.image_height, args.fov_deg)
+        check_intrinsics(info, args.image_width, args.image_height, args.fov_deg, es_json)
     if want in ("all", "exif"):
         check_exif(geotagged, args.verbose)
     if want in ("all", "database"):
@@ -528,11 +599,9 @@ def main(argv=None):
     if want in ("all", "sparse"):
         check_sparse(colmap_out / "sparse", n_frames)
     if want in ("all", "dense"):
-        check_dense(colmap_out / "dense")
+        check_dense(dense_dir)
     if want in ("all", "pt"):
-        check_pt([DATA_DIR / f"{ds}_cloud.pt",
-                  DATA_DIR / f"{ds}_dense.pt",
-                  DATA_DIR / f"{ds}_splat.pt"])
+        check_pt(pts)
 
     header("ПІДСУМОК")
     if not _problems:

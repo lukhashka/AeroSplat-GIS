@@ -39,6 +39,13 @@ def test_layout_paths(layout):
     assert L.cloud_in == L.dense_pt
     assert L.cloud_wgs84 == L.data_dir / "t_dense_wgs84.pt"
     assert L.splat_wgs84 == L.data_dir / "t_splat_wgs84.pt"
+    assert L.footage == L.data_dir / "t" / "footage"       # the dataset's own frames, not v6's
+
+
+def test_explicit_footage_dir_wins(tmp_path):
+    cfg = RunConfig(dataset="t", camera_source="synthetic", footage_dir="elsewhere/f").to_dict()
+    L = RunLayout.from_config(cfg, data_dir=tmp_path / "data", project_dir=tmp_path)
+    assert L.footage == tmp_path / "elsewhere" / "f"
 
 
 def test_georef_skipped_without_known_poses(layout, monkeypatch):
@@ -325,3 +332,21 @@ def test_site_and_dataset_are_exclusive(es_site):
                       "--projects-root", str(root)])
     with pytest.raises(SystemExit):
         starter.main(["--site", "demo/missing", "--dry-run", "--projects-root", str(root)])
+
+
+# ── doctor --site: resolved read-only through the catalog ────────────────
+def test_doctor_site_without_a_run_says_so(es_site):
+    from aerosplat import doctor
+
+    cat, site, cap, root = es_site
+    with pytest.raises(SystemExit, match="baseline"):          # no epoch, so no run
+        doctor.main(["--site", site.key, "--projects-root", str(root), "--stage", "sparse"])
+    assert cat.list_runs(site) == []                       # nothing was created
+
+
+def test_doctor_site_and_dataset_are_exclusive(es_site):
+    from aerosplat import doctor
+
+    _, site, _, root = es_site
+    with pytest.raises(SystemExit, match="взаємовиключні"):
+        doctor.main(["--site", site.key, "--dataset", "x", "--projects-root", str(root)])

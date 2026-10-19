@@ -208,6 +208,23 @@ aerosplat run --dataset dataset_v6 --dry-run  # показати команди
 aerosplat run --dataset dataset_v6 --from sfm
 ```
 
+Основний шлях — ділянки каталогу (кожен прогін — окремий незмінний run):
+
+``` bash
+aerosplat catalog --help                       # проєкти, ділянки, імпорт зйомок
+aerosplat run --site default/dataset_v6        # новий run ділянки
+aerosplat run --site default/dataset_v6 --resume --from semantics
+aerosplat doctor --site default/dataset_v6     # діагностика останнього run-а (лише читає)
+```
+
+**Перевірка встановлення на малому семплі** (16 кадрів із `dataset_v6`, ≈1 хв на RTX 4060):
+
+``` bash
+python tools/make_sample_dataset.py            # data/dataset_v6 → data/sample (оригінал не змінюється)
+aerosplat run --dataset sample --iterations 500
+aerosplat doctor --dataset sample              # без ❌
+```
+
 `camera_source` за замовчуванням `auto`: Earth Studio JSON, якщо він є, інакше
 synthetic-режим. Тренер без `--self-test` вимагає явні `--input/--colmap/--images`.
 
