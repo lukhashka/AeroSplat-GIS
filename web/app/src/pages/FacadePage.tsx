@@ -5,6 +5,8 @@ import { ApiError, renderFacadeOrtho } from "../api/client";
 import { useAccessPointEdits, useAccessPoints, useCarried, useFacade, useTaxonomy } from "../api/hooks";
 import type {
   AccessPoint,
+  ApGeometry,
+  ApHost,
   CarriedOut,
   CoverageGrid,
   FacadeGrid,
@@ -33,6 +35,8 @@ const LIFECYCLE_TONE: Record<Lifecycle, string> = {
 };
 
 type Draft = { u0: number; v0: number; u1: number; v1: number };
+/** An access point drawn on a facade (not a pad): it has a frame and a shape in it. */
+type OnFacade = AccessPoint & { host: ApHost; geometry: ApGeometry };
 
 const SKIPPED_LABEL: Record<Lifecycle, string> = {
   candidate: "вже кандидати",
@@ -256,7 +260,8 @@ export function FacadePage() {
   const grid = shot?.meta.facade_grid ?? null;
   const map = useMemo(() => (grid ? mapping(grid) : null), [grid]);
   const coverage = facade.data?.coverage_grid ?? null;
-  const list = features.data ?? [];
+  // Shapes on this facade (pads have no facade frame and never land here).
+  const list = (features.data ?? []).filter((f): f is OnFacade => !!f.geometry && !!f.host);
   const current = list.find((f) => f.id === selected) ?? null;
   // Features of other runs projected onto this wall: shown dashed, carried only on request.
   const foreign = carried.data ?? [];
@@ -934,7 +939,7 @@ function ApRow({
   on,
   onSelect,
 }: {
-  ap: AccessPoint;
+  ap: OnFacade;
   classes: TaxonomyClass[];
   on: boolean;
   onSelect: () => void;

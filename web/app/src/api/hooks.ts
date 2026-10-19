@@ -8,6 +8,7 @@ import type {
   AddressOut,
   AuditEntry,
   CarriedOut,
+  PadsOut,
   ReanchorOut,
   RegularizeOut,
   GridfitOut,
@@ -271,6 +272,20 @@ export const useAudit = (project: string, site: string, limit = 50) =>
     queryFn: () => api.get<AuditEntry[]>(`/sites/${project}/${site}/audit?limit=${limit}`),
     staleTime: 2000,
   });
+
+/** Pad zones on the roofs and in the yards of buildings (§5.7): candidates only, never verified. */
+export function usePadCandidates(project: string, site: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { building_ids: string[]; run_id: string | null; dry_run?: boolean; by?: string }) =>
+      api.post<PadsOut>(`/sites/${project}/${site}/pads/candidates`, body),
+    onSuccess: (r) => {
+      if (r.dry_run) return;
+      qc.invalidateQueries({ queryKey: ["access-points", project, site] });
+      qc.invalidateQueries({ queryKey: semanticKeys.audit(project, site) });
+    },
+  });
+}
 
 /** Create, change and delete authored features. Nothing here is ever automatic (ADR-0009). */
 export function useAccessPointEdits(project: string, site: string, facadeId: string | null) {

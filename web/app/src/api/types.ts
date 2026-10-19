@@ -501,8 +501,10 @@ export interface AccessPoint {
   class: string;
   kind: ApKind;
   taxonomy: string;
-  host: ApHost;
-  geometry: ApGeometry;
+  /** Drawn on a facade: host + geometry. A pad: `pad` alone (ACCESS_POINTS §3.2). */
+  host: ApHost | null;
+  geometry: ApGeometry | null;
+  pad: ApPad | null;
   attributes: Record<string, string>;
   address: ApAddress | null;
   confidence: number | null;
@@ -547,6 +549,53 @@ export interface AddressOut {
   ambiguous: boolean;
   reasons: string[];
   features: AccessPoint[];
+}
+
+/** A flat pad outline in Site ENU (§3.2): a roof (`building_id`) or the ground (null). */
+export interface ApPad {
+  frame: string;
+  polygon_enu: [number, number][];
+  z: number;
+  building_id: string | null;
+  center: [number, number, number];
+  area_m2: number;
+}
+
+// ── pad zones on roofs and in yards (§5.7; aerosplat.semantics.pads) ──
+export interface PadZone {
+  kind: "roof" | "ground";
+  building_id: string;
+  polygon_enu: [number, number][];
+  z: number;
+  centre: [number, number];
+  slope_deg: number;
+  rms_m: number;
+  free_area_m2: number;
+  usable_area_m2: number;
+  clearance_max_m: number;
+  sky_view: number;
+  notes: string[];
+  confidence: number;
+}
+
+export interface PadRejection {
+  kind: "roof" | "ground";
+  building_id: string;
+  reason: string;
+  code: string;
+  area_m2: number;
+  centre: [number, number] | null;
+}
+
+export interface PadsOut {
+  run_id: string;
+  model: string;
+  dry_run: boolean;
+  params: Record<string, number>;
+  zones: PadZone[];
+  rejected: PadRejection[];
+  candidates: AccessPoint[];
+  skipped: Partial<Record<Lifecycle, number>>;
 }
 
 // ── snapping openings to the facade's rows and columns (§5.6 item 3) ──

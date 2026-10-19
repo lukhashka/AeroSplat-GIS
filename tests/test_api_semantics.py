@@ -485,6 +485,63 @@ def test_addressing_an_empty_facade_changes_nothing(client):
     assert client.get(f"{BASE}/audit").json() == []
 
 
+# ── pad zones (§5.7) ─────────────────────────────────────────────────────
+def _write_terrain(run_id="r1"):
+    """terrain.npz for the fixture's raster (80 × 80 m from (-40, -40)): B01's 20 × 12 m flat
+    roof at 12 m, the ground at 0 everywhere else."""
+    cat = api_v2.get_catalog()
+    s = cat.get_site("demo", "pier")
+    dsm = np.zeros((80, 80))
+    labels = np.zeros((80, 80), np.int32)
+    dsm[28:40, 30:50] = 12.0                             # rows: north -12..0, cols: east -10..10
+    labels[28:40, 30:50] = 1
+    np.savez_compressed(cat.run_dirs(s, "baseline", run_id).root / "semantics" / "terrain.npz",
+                        dsm=dsm, dtm=np.zeros((80, 80)), count=np.full((80, 80), 9),
+                        roughness=np.zeros((80, 80)), labels=labels)
+
+
+def test_pad_candidates_from_the_roof_and_the_yard_are_candidates_only(client):
+    _write_terrain()
+    dry = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "dry_run": True}).json()
+    assert dry["model"].startswith("padzones@") and dry["dry_run"]
+    roof = [z for z in dry["zones"] if z["kind"] == "roof"]
+    assert len(roof) == 1 and roof[0]["z"] == pytest.approx(12.0)
+    assert roof[0]["usable_area_m2"] == 16 * 8                     # 20 × 12 eroded by 2 m
+    assert any(z["kind"] == "ground" for z in dry["zones"])
+    assert client.get(f"{BASE}/audit").json() == []                 # nothing stored
+
+    out = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "by": "tester"}).json()
+    cands = out["candidates"]
+    assert cands and {c["lifecycle"] for c in cands} == {"candidate"}
+    assert {c["provenance"]["origin"] for c in cands} == {"pipeline"}
+    by_class = {c["class"]: c for c in cands}
+    assert by_class["pad.roof_flat"]["pad"]["building_id"] == "B01"
+    assert by_class["pad.ground"]["pad"]["building_id"] is None and "дороги" in by_class["pad.ground"]["notes"]
+    assert by_class["pad.roof_flat"]["attributes"] == {"surface": "unknown", "hazard": "unknown"}
+    assert 0 < by_class["pad.roof_flat"]["confidence"] < 1
+    assert [e["op"] for e in client.get(f"{BASE}/audit").json()] == ["create"] * len(cands)
+
+    # A second press proposes nothing new; a rejected pad is not proposed again either.
+    again = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"]}).json()
+    assert again["candidates"] == [] and again["skipped"] == {"candidate": len(cands)}
+    roof_id = by_class["pad.roof_flat"]["id"]
+    client.patch(f"{BASE}/access-points/{roof_id}", json={"lifecycle": "rejected"})
+    third = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "dry_run": True}).json()
+    assert third["candidates"] == [] and third["skipped"].get("rejected") == 1
+
+
+def test_pad_candidates_say_why_not(client):
+    _write_terrain()
+    r = client.post(f"{BASE}/pads/candidates",
+                    json={"building_ids": ["B01"], "ground": False, "clearance_m": 7.0, "dry_run": True})
+    body = r.json()
+    assert body["zones"] == [] and body["rejected"][0]["code"] == "no_room"
+    assert client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B99"]}).status_code == 404
+    add_run("r2")                                                   # newer, without terrain.npz
+    r = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"]})
+    assert r.status_code == 404 and "terrain.npz" in r.json()["detail"]
+
+
 # ── snapping to the facade's frame (§5.6 item 3) ─────────────────────────
 def test_regularize_snaps_within_the_tolerance_and_audits_every_move(client):
     ids = [draw(client, -9.0 + 3 * i, 3.0 + dv0, -7.6 + 3 * i, 4.5 + dv1).json()["id"]

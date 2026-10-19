@@ -102,12 +102,13 @@ def make_pad_point(*, site_key: str, class_id: str, taxonomy: str,
                    origin: Origin = Origin.manual, created_by: str = "op:unknown",
                    run_id: Optional[str] = None, epoch_id: Optional[str] = None,
                    evidence: Optional[list[str]] = None, notes: str = "",
+                   confidence: Optional[float] = None,
                    feature_id: Optional[str] = None) -> AccessPoint:
     """A pad record (§3.2): a flat outline in Site ENU instead of a facade polygon."""
     return AccessPoint(
         id=feature_id or new_ap_id(), site_key=site_key, **{"class": class_id},
         kind=class_id.split(".", 1)[0], taxonomy=taxonomy,
         pad=pad_geometry(polygon_enu, z, building_id), attributes=dict(attributes or {}),
-        lifecycle=lifecycle, notes=notes,
+        lifecycle=lifecycle, notes=notes, confidence=confidence,
         provenance=Provenance(origin=origin, run_id=run_id, epoch_id=epoch_id,
                               created_by=created_by, evidence=list(evidence or [])))

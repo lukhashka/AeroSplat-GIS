@@ -30,7 +30,8 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
-from aerosplat.authored.candidates import Proposal, make_candidates, screen
+from aerosplat.authored.candidates import (PadProposal, Proposal, make_candidates, make_pad_candidates,
+                                          screen, screen_pads)
 from aerosplat.authored.carry import (PlacementStatus, foreign_on, is_native, native_features,
                                      reanchor)
 from aerosplat.authored.geometry import geometry_from_uv, make_access_point
@@ -42,6 +43,7 @@ from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitRe
 from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
                                           match_facades)
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
+from aerosplat.semantics.pads import PadParams, PadZone, find_pads
 from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
                                        facade_ortho)
 from aerosplat.semantics.products import (SemanticsMissing, SemanticsProduct, require_semantics,
@@ -851,6 +853,121 @@ def facade_detail(project_id: str, site_id: str, facade_id: str, run_id: Optiona
                      coverage_grid=_coverage_out(product, facade), run_id=product.run.id,
                      epoch_id=product.run.epoch_id,
                      features=_counts(_store(cat, site), [facade]).get(facade_id, 0))
+
+
+# ── pad zones on roofs and in yards (§5.7) ───────────────────────────────
+PAD_CLASS = {"roof": "pad.roof_flat", "ground": "pad.ground"}
+
+
+class PadsRequest(_In):
+    run_id: Optional[str] = None
+    building_ids: list[str] = Field(min_length=1, max_length=50)
+    roofs: bool = True
+    ground: bool = True
+    max_slope_deg: float = Field(PadParams.max_slope_deg, gt=0.0, le=15.0)
+    max_rms_m: float = Field(PadParams.max_rms_m, gt=0.0, le=0.5)
+    clearance_m: float = Field(PadParams.clearance_m, ge=0.5, le=10.0)
+    yard_radius_m: float = Field(PadParams.yard_radius_m, ge=0.0, le=100.0)
+    min_sky_view: float = Field(PadParams.min_sky_view, ge=0.0, le=1.0)
+    # Search and screen, store nothing.
+    dry_run: bool = False
+    by: Optional[str] = None
+
+
+class PadZoneOut(BaseModel):
+    kind: str
+    building_id: str
+    polygon_enu: list[tuple[float, float]]
+    z: float
+    centre: tuple[float, float]
+    slope_deg: float
+    rms_m: float
+    free_area_m2: float
+    usable_area_m2: float
+    clearance_max_m: float
+    sky_view: float
+    notes: list[str] = Field(default_factory=list)
+    confidence: float
+
+
+class PadRejectionOut(BaseModel):
+    kind: str
+    building_id: str
+    reason: str
+    code: str
+    area_m2: float = 0.0
+    centre: Optional[tuple[float, float]] = None
+
+
+class PadsOut(BaseModel):
+    run_id: str
+    model: str
+    dry_run: bool
+    params: dict[str, Any]
+    zones: list[PadZoneOut]
+    rejected: list[PadRejectionOut]
+    candidates: list[AccessPoint] = Field(default_factory=list)
+    skipped: dict[str, int] = Field(default_factory=dict)
+
+
+def _pad_note(model: str, z: PadZone) -> str:
+    where = f"дах {z.building_id}" if z.kind == "roof" else f"двір біля {z.building_id}"
+    text = (f"{model}, {where}: ухил {z.slope_deg:.1f}°, нерівність {100 * z.rms_m:.1f} см, "
+            f"центр може бути на {z.usable_area_m2:.0f} м² із {z.free_area_m2:.0f} м² вільних, "
+            f"найбільший запас {z.clearance_max_m:.1f} м, відкритість неба {z.sky_view:.2f}")
+    return "; ".join([text, *z.notes])
+
+
+@router.post("/sites/{project_id}/{site_id}/pads/candidates", response_model=PadsOut)
+def pad_candidates(project_id: str, site_id: str, body: PadsRequest,
+                   cat: Catalog = Depends(get_catalog)) -> PadsOut:
+    """Pad zones on the roofs and in the yards of the given buildings, as candidates (§5.7).
+
+    From the run's own terrain rasters (`semantics/terrain.npz`): flat (slope), smooth
+    (plane residual), clear of obstacles by `clearance_m`, and — on the ground — open to
+    the sky. Every region that is not a pad comes back in `rejected` with the reason.
+    Zones become `candidate` access points of class `pad.roof_flat` / `pad.ground`, never
+    verified (ADR-0009); one already covered by a pad of any lifecycle is skipped, so a
+    rejected pad is not proposed again (§3.4). Roads, water and cars are not recognised:
+    a ground zone says so in its notes.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    tax = _taxonomy(site)
+    for cid in PAD_CLASS.values():
+        _check_class(tax, cid, {"surface": "unknown", "hazard": "unknown"})
+    known = {b.id for b in product.result.buildings}
+    unknown = [b for b in body.building_ids if b not in known]
+    if unknown:
+        raise HTTPException(404, f"run {product.run.id} has no building {', '.join(unknown)}")
+    try:
+        rasters = product.rasters()
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from None
+    params = PadParams(max_slope_deg=body.max_slope_deg, max_rms_m=body.max_rms_m,
+                       clearance_m=body.clearance_m, yard_radius_m=body.yard_radius_m,
+                       min_sky_view=body.min_sky_view)
+    result = find_pads(rasters, product.result.buildings, building_ids=body.building_ids,
+                       roofs=body.roofs, ground=body.ground, params=params)
+    proposals = [PadProposal(class_id=PAD_CLASS[z.kind], polygon_enu=z.polygon_enu, z=z.z,
+                             building_id=z.building_id if z.kind == "roof" else None,
+                             confidence=z.confidence, notes=_pad_note(result.model, z),
+                             evidence=[f"terrain:{product.run.id}", f"pads:{z.building_id}"])
+                 for z in result.zones]
+    store = _store(cat, site)
+    with store.lock:
+        keep, skipped = screen_pads(proposals, store.features())
+        candidates = make_pad_candidates(
+            keep, site_key=site.key, taxonomy=tax.version_string, model=result.model,
+            created_by="pipeline:padzones", run_id=product.run.id, epoch_id=product.run.epoch_id)
+        if candidates and not body.dry_run:
+            store.create_many(candidates, by=body.by, what=f"{result.model} запропонував")
+    return PadsOut(
+        run_id=product.run.id, model=result.model, dry_run=body.dry_run,
+        params=dataclasses.asdict(params),
+        zones=[PadZoneOut(**dataclasses.asdict(z), confidence=z.confidence) for z in result.zones],
+        rejected=[PadRejectionOut(**dataclasses.asdict(x)) for x in result.rejected],
+        candidates=candidates, skipped=skipped)
 
 
 # ── authored access points ───────────────────────────────────────────────
