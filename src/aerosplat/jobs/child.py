@@ -14,7 +14,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional
 
-from aerosplat.jobs.models import DiagnosticSpec, EventType, Job, JobKind, PipelineSpec
+from aerosplat.jobs.models import (DiagnosticSpec, EventType, ExportSpec, Job, JobKind,
+                                   PipelineSpec)
 from aerosplat.jobs.queue import JobQueue
 from aerosplat.logging_utils import fix_console_encoding
 from aerosplat.store.catalog import Catalog
@@ -39,6 +40,27 @@ def run_pipeline(q: JobQueue, job: Job, projects_root: Path) -> int:
         if not isinstance(e.code, int):
             print(e.code, file=sys.stderr, flush=True)
         return 1
+
+
+def run_export(q: JobQueue, job: Job, projects_root: Path) -> int:
+    """`aerosplat export` for one run; each export kind is reported as a stage."""
+    from aerosplat.export import run as export_cli
+
+    spec = ExportSpec(**job.payload)
+    q.merge_result(job.id, {"site": spec.site, "epoch": spec.epoch, "run_id": spec.run_id})
+    order = [k for k in export_cli.KINDS if k in spec.kinds]
+    t0: dict[str, float] = {}
+
+    def on_event(kind: str, state: str, details: dict[str, Any]) -> None:
+        if state == "started":
+            t0[kind] = time.perf_counter()
+        ev: dict[str, Any] = {"stage": kind, "label": f"Експорт: {kind}", "state": state,
+                              "index": order.index(kind) + 1, "total": len(order), **details}
+        if state != "started":
+            ev["seconds"] = round(time.perf_counter() - t0.get(kind, time.perf_counter()), 2)
+        q.add_event(job.id, EventType.stage, ev)
+
+    return export_cli.main(spec.argv(str(projects_root)), on_event=on_event)
 
 
 def run_diagnostic(q: JobQueue, job: Job) -> int:
@@ -81,6 +103,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return run_pipeline(q, job, args.projects_root)
         if job.kind == JobKind.diagnostic:
             return run_diagnostic(q, job)
+        if job.kind == JobKind.export:
+            return run_export(q, job, args.projects_root)
         print(f"unknown job kind {job.kind}", file=sys.stderr)
         return 2
     except Exception:

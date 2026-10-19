@@ -38,6 +38,8 @@ import type {
   TakeoffQuery,
   TakeoffSearch,
   TaxonomyOut,
+  ExportListing,
+  ExportRequest,
 } from "./types";
 
 export const keys = {
@@ -47,6 +49,7 @@ export const keys = {
   site: (p: string, s: string) => ["site", p, s] as const,
   images: (p: string, s: string, c: string) => ["images", p, s, c] as const,
   run: (p: string, s: string, e: string, r: string) => ["run", p, s, e, r] as const,
+  exports: (p: string, s: string, e: string, r: string) => ["exports", p, s, e, r] as const,
   jobs: (params: object) => ["jobs", params] as const,
   job: (id: string) => ["job", id] as const,
   pipeline: ["pipeline"] as const,
@@ -84,6 +87,14 @@ export const useRunDetail = (project: string, site: string, epoch: string, run: 
     queryKey: keys.run(project, site, epoch, run ?? ""),
     queryFn: () => api.get<RunDetail>(`/sites/${project}/${site}/runs/${epoch}/${run}`),
     enabled: !!run,
+  });
+
+export const useRunExports = (project: string, site: string, epoch: string, run: string | null) =>
+  useQuery({
+    queryKey: keys.exports(project, site, epoch, run ?? ""),
+    queryFn: () => api.get<ExportListing>(`/sites/${project}/${site}/runs/${epoch}/${run}/exports`),
+    enabled: !!run,
+    refetchInterval: 5000,
   });
 
 export const useJobs = (params: { status?: JobStatus[]; site?: string; limit?: number } = {}) =>
@@ -161,6 +172,17 @@ export function useStartRun(project: string, site: string) {
     mutationFn: (body: RunRequest) => api.post<Job>(`/sites/${project}/${site}/runs`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: keys.site(project, site) });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+export function useStartExport(project: string, site: string, epoch: string, run: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ExportRequest) => api.post<Job>(`/sites/${project}/${site}/runs/${epoch}/${run}/exports`, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.exports(project, site, epoch, run) });
       qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });

@@ -27,6 +27,8 @@ train = ["torch>=2.2", "torchvision>=0.17"]
 dev = ["pytest", "ruff", "mypy", "httpx"]
 # ArduPilot SITL harness (aerosplat.sim, `pytest -m sitl`); SITL itself runs in WSL2 / Linux.
 sim = ["pymavlink==2.4.50"]
+# GIS export (aerosplat.export, `aerosplat export`): GeoTIFF/COG and LAS/LAZ.
+gis = ["rasterio>=1.3", "laspy>=2.4", "lazrs>=0.5"]
 
 [project.scripts]
 aerosplat = "aerosplat.starter:cli"
@@ -38,7 +40,7 @@ packages = ["aerosplat", "aerosplat.pipeline", "aerosplat.io", "aerosplat.geo",
             "aerosplat.store.migrations", "aerosplat.store.migrations.versions",
             "aerosplat.ingest", "aerosplat.jobs", "aerosplat.render", "aerosplat.semantics",
             "aerosplat.taxonomy", "aerosplat.authored", "aerosplat.surface", "aerosplat.mission",
-            "aerosplat.sim"]
+            "aerosplat.sim", "aerosplat.export"]
 
 [tool.setuptools.package-data]
 "aerosplat.store.migrations" = ["script.py.mako"]

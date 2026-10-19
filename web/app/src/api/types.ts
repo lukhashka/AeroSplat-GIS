@@ -5,7 +5,7 @@ export type SiteKind = "urban" | "depot" | "critical";
 export type CaptureSource = "earthstudio" | "drone" | "handheld" | "internet";
 export type RunStatus = "running" | "ok" | "failed";
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type JobKind = "pipeline" | "diagnostic";
+export type JobKind = "pipeline" | "diagnostic" | "export";
 export type Resource = "gpu" | "cpu";
 export type StageState = "started" | "skipped" | "done" | "failed";
 
@@ -115,6 +115,40 @@ export interface SiteSummary {
   latest_run: RunBrief | null;
   scene: string | null;
   active_jobs: number;
+}
+
+/** GIS export of a run (aerosplat.export, server/api_export.py). */
+export type ExportKind = "ortho" | "dsm" | "dtm" | "ndsm" | "las" | "ply";
+
+export interface ExportRequest {
+  kinds: ExportKind[];
+  crs?: string;
+  gsd_m?: number;
+  las_source?: "cloud" | "splat";
+}
+
+export interface ExportFile {
+  kind: ExportKind;
+  file: string;
+  bytes: number;
+  url: string;
+  crs: { name: string; epsg: number | null } | null;
+  created: string | null;
+}
+
+export interface ExportListing {
+  run: string;
+  epoch: string;
+  exportable: boolean;
+  refusal: string | null;
+  files: ExportFile[];
+  georeference: {
+    earth_model: string;
+    frame_error_m: number | null;
+    altitude_reference: string;
+    warnings: string[];
+    not_included: string[];
+  } | null;
 }
 
 export interface Job {

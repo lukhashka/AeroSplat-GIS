@@ -382,20 +382,39 @@ class Catalog:
             row.finished_at = utcnow()
             if georeferenced is not None:
                 row.georeferenced = georeferenced
-            for kind, path in (products or {}).items():
-                p = Path(path)
-                if not p.is_absolute():
-                    p = root / p
-                if not p.exists():
-                    continue
-                rel = p.resolve().relative_to(root.resolve()).as_posix()
-                existing = next((x for x in row.products if x.kind == kind), None)
-                if existing is None:
-                    row.products.append(ProductRow(kind=kind, path=rel))
-                else:
-                    existing.path = rel
+            self._upsert_products(row, root, products or {})
             s.flush()
             return _run(row, site.key)
+
+    def register_products(self, site: Site, epoch_id: str, run_id: str,
+                          products: Mapping[str, Path | str]) -> Run:
+        """Add or repoint products of a run, leaving its status and `finished_at` alone.
+
+        For products made after the run closed (GIS exports): re-finishing the run instead
+        would move its `finished_at`, and with it which run a Site serves (`latest_run`).
+        """
+        root = self.run_dirs(site, epoch_id, run_id).root
+        with self._tx() as s:
+            row = self._run_row(s, site, epoch_id, run_id)
+            self._upsert_products(row, root, products)
+            s.flush()
+            return _run(row, site.key)
+
+    @staticmethod
+    def _upsert_products(row: RunRow, root: Path, products: Mapping[str, Path | str]) -> None:
+        """Record the products that exist, as paths relative to the run directory."""
+        for kind, path in products.items():
+            p = Path(path)
+            if not p.is_absolute():
+                p = root / p
+            if not p.exists():
+                continue
+            rel = p.resolve().relative_to(root.resolve()).as_posix()
+            existing = next((x for x in row.products if x.kind == kind), None)
+            if existing is None:
+                row.products.append(ProductRow(kind=kind, path=rel))
+            else:
+                existing.path = rel
 
     def get_run(self, site: Site, epoch_id: str, run_id: str) -> Run:
         with self._tx() as s:
