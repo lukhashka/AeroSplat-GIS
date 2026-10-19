@@ -12,7 +12,10 @@ import math
 import pytest
 
 import mission_scenes as ms
-from aerosplat.mission.models import Code, MissionRefused, PlanningProfile, Severity
+from aerosplat.mission import planner
+from aerosplat.mission.corridor import check_leg
+from aerosplat.mission.models import (Code, HandoverOverride, MissionRefused, PlanningProfile,
+                                      Severity, Verdict)
 from aerosplat.mission.planner import plan_mission
 from aerosplat.mission.takeoff import corridor_radius, find_takeoff_spots, transit_point
 from aerosplat.surface.models import OCCUPIED, UNKNOWN
@@ -75,16 +78,26 @@ def test_spots_are_ground_open_ranked_and_apart(street, ground):
     assert res.best_open is None and "5 takeoff spot(s)" in res.message
 
 
+def plan_from(target, ap, grid, home, profile=QUIET):
+    return plan_mission(target=target, ap=ap, grid=grid, occupancy=ms.occupancy_ref(),
+                        origin=ms.ORIGIN, by="op:tester", profile=profile, home_enu=home,
+                        home_source="takeoff search")
+
+
+def search_for(target, ap, grid, ground, profile=QUIET, **kw):
+    """The search as the API runs it: towards where the planner's transit ends."""
+    end = transit_point(target, ap, grid, profile)
+    return search(grid, ground, end.point, profile=profile, approach_note=end.note, **kw)
+
+
 def test_every_proposed_home_passes_the_planners_checks(tmp_path, street, ground):
     """The point of the search: a proposed home never fails the plan's home or takeoff."""
     ap = ms.window_ap()
     target, _, _ = ms.confirmed(tmp_path, ap)
-    res = search(street, ground, transit_point(target, ap))
-    assert res.candidates
+    res = search_for(target, ap, street, ground)
+    assert res.candidates and res.approach_note == ""
     for c in res.candidates:
-        plan = plan_mission(target=target, ap=ap, grid=street, occupancy=ms.occupancy_ref(),
-                            origin=ms.ORIGIN, by="op:tester", profile=QUIET, home_enu=c.enu,
-                            home_source="takeoff search")
+        plan = plan_from(target, ap, street, c.enu)
         home_or_takeoff = [f for f in plan.findings
                            if f.leg == "takeoff" or f.code.value.startswith("home_")]
         assert home_or_takeoff == [], (c, home_or_takeoff)
@@ -92,13 +105,133 @@ def test_every_proposed_home_passes_the_planners_checks(tmp_path, street, ground
         assert plan.transit_z == pytest.approx(c.transit_z, abs=0.51)
 
 
-def test_transit_point_is_the_entry_point_or_the_pad(tmp_path):
+def test_transit_point_is_the_entry_point_or_the_pad(tmp_path, street):
     ap = ms.window_ap()
     target, _, _ = ms.confirmed(tmp_path, ap)
-    assert transit_point(target, ap) == pytest.approx(E)   # core: D_entry 12 m, no Δh
+    end = transit_point(target, ap, street, QUIET)
+    assert end.point == pytest.approx(E) and end.note == ""   # core: D_entry 12 m, no Δh
     pad = ms.roof_pad_ap()
     pad_target, _, _ = ms.confirmed(tmp_path / "pad", pad)
-    assert transit_point(pad_target, pad) == pytest.approx(pad.pad.center)
+    end = transit_point(pad_target, pad, street, QUIET)
+    assert end.point == pytest.approx(pad.pad.center) and end.note == ""
+
+
+# ── the transit ends where the planner's approach puts E ─────────────────
+ENTRY50 = {"override": HandoverOverride(entry_distance_m=50.0)}
+DIRECT50 = (0.0, -35.0, 9.0)            # 50 m in front of the window: 5 m from the grid's edge
+
+
+def test_near_the_edge_the_search_aims_at_the_tilted_entry_the_planner_flies(tmp_path, street,
+                                                                           ground):
+    # E 50 m in front of the window falls 5 m from the grid's edge; it needs r + 2 voxels =
+    # 6.56. The planner tilts 15° in the cone (E 6.70 m from the edge). The search aimed at
+    # the direct E, where every transit check reaches beyond the grid: "not confirmed, raise
+    # max_checks" whatever the budget. Now it aims where the planner's transit ends.
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path, ap, **ENTRY50)
+    old = search(street, ground, DIRECT50, max_checks=100)
+    assert old.candidates == [] and old.rejected["transit_blocked"] == old.checked == 100
+    assert "raise max_checks" in old.message
+
+    end = transit_point(target, ap, street, QUIET)
+    assert abs(end.point[0]) == pytest.approx(50 * math.sin(math.radians(15)))
+    assert end.point[1] == pytest.approx(15 - 50 * math.cos(math.radians(15)))
+    assert ("tilted 15.0° in the 30° cone: the direct approach comes closer to the grid's edge "
+            "than r + 2 voxels") in end.note
+    res = search_for(target, ap, street, ground, n=3)
+    assert len(res.candidates) == 3 and res.target == pytest.approx(end.point)
+    assert res.approach_note == end.note and res.message.endswith(
+        end.note[0].upper() + end.note[1:])
+    for c in res.candidates:
+        plan = plan_from(target, ap, street, c.enu)
+        assert plan.verdict is Verdict.feasible, (c, plan.findings)
+        assert plan.approach.entry == pytest.approx(res.target)
+        assert plan.transit_z == pytest.approx(c.transit_z, abs=0.51)
+
+
+def test_a_blocked_direct_approach_moves_the_transit_end_too(tmp_path, ground):
+    # Away from the edge: a lamp post on the direct approach. The planner tilts, so the
+    # transit ends at the tilted E, and the search measures and checks towards that one.
+    grid = with_boxes(((0.0, 0.5, 4.0, 4.5, 0.0, 20.0), OCCUPIED))
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path, ap)
+    end = transit_point(target, ap, grid, TIGHT)
+    assert end.point != pytest.approx(E)
+    assert "in the 30° cone: the direct approach is blocked" in end.note
+    res = search_for(target, ap, grid, ground, profile=TIGHT, n=3)
+    assert res.candidates
+    for c in res.candidates:
+        plan = plan_from(target, ap, grid, c.enu, profile=TIGHT)
+        assert plan.approach.entry == pytest.approx(end.point) and plan.approach.tilt_deg > 0
+        assert not [f for f in plan.findings if f.leg in ("takeoff", "transit")
+                    or f.code.value.startswith("home_")], (c, plan.findings)
+
+
+def test_with_no_clear_direction_the_search_says_every_plan_is_infeasible(tmp_path, ground):
+    # A wall blocks every direction of the cone that fits the grid. The planner shows the
+    # least tilted one (15°) and is infeasible from any home; the search checks the transit
+    # to that E, and says so rather than proposing homes as if a plan could fly.
+    grid = with_boxes(((-20.0, 20.0, 7.0, 7.5, 0.0, 15.0), OCCUPIED))
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path, ap, **ENTRY50)
+    end = transit_point(target, ap, grid, QUIET)
+    assert ("the approach is blocked in every direction of the 30° cone that fits the grid, so "
+            "a plan to this target is infeasible from any home") in end.note
+    assert "E of the least tilted (15.0°)" in end.note
+    res = search_for(target, ap, grid, ground, n=1)
+    assert end.note[1:] in res.message
+    for c in res.candidates:
+        plan = plan_from(target, ap, grid, c.enu)
+        assert plan.verdict is Verdict.infeasible
+        assert plan.approach.entry == pytest.approx(end.point)
+
+
+def test_when_no_direction_fits_the_grid_the_search_refuses_as_the_planner_does(
+        tmp_path, street, monkeypatch):
+    # E 45 m out with r_app 13.6 m: no direction of the cone keeps E inside the grid, so no
+    # home could be planned. Refused at once, with the planner's own reason and hint, before
+    # any corridor or home is checked.
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path, ap, override=HandoverOverride(entry_distance_m=45.0,
+                                                                         min_clearance_m=10.0))
+    calls = []
+    monkeypatch.setattr(planner, "check_leg", lambda *a, **k: calls.append(a) or check_leg(*a, **k))
+    with pytest.raises(MissionRefused) as e:
+        transit_point(target, ap, street, QUIET)
+    assert calls == [] and [f.code for f in e.value.findings] == [Code.outside_grid]
+    with pytest.raises(MissionRefused) as by_plan:
+        plan_from(target, ap, street, (0.0, 0.0, 0.0))
+    assert e.value.findings[0].detail == by_plan.value.findings[0].detail
+    assert "all 24 other directions" in e.value.findings[0].detail
+    assert "occupancy_bbox=" in e.value.findings[0].detail
+
+
+def test_a_target_off_the_grid_is_refused_before_the_search(tmp_path, street):
+    geom = ms.window_ap().geometry.model_copy(update={"center": (0.0, 45.0, 9.0)})
+    ap = ms.window_ap(geometry=geom)
+    target, _, _ = ms.confirmed(tmp_path, ap)
+    with pytest.raises(MissionRefused) as e:
+        transit_point(target, ap, street, QUIET)
+    assert [f.code for f in e.value.findings] == [Code.outside_grid]
+    assert "target (0.0, 45.0)" in e.value.findings[0].detail
+
+
+def test_a_pad_whose_direct_approach_falls_short_of_the_edge_is_refused_up_front(tmp_path,
+                                                                                 street):
+    # A transit margin wider than the pad's clearance: r_tr 23.6 m > r_app 5.6 m, so E and H
+    # above the pad (17.5 m from the edge) fall short while the pad itself does not. A tilted
+    # pad approach depends on each home's transit height, which the search does not model:
+    # it says so instead of failing every home's transit.
+    wide_transit = PlanningProfile(wire_height_m=5.0, transit_margin_m=20.0)
+    pad = ms.roof_pad_ap()
+    target, _, _ = ms.confirmed(tmp_path, pad)
+    with pytest.raises(MissionRefused) as e:
+        transit_point(target, pad, street, wide_transit)
+    assert [f.code for f in e.value.findings] == [Code.outside_grid]
+    detail = e.value.findings[0].detail
+    assert "entry E and hover H above the pad (0.0, 22.5) needs 24.6 m to the edge, has 17.5" in detail
+    assert "a tilted one depends on each home's transit height" in detail
+    assert "occupancy_bbox=" in detail
 
 
 # ── negative: what is not a takeoff spot ─────────────────────────────────

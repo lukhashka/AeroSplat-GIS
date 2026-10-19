@@ -806,6 +806,7 @@ export interface TakeoffCandidate {
 /** Every candidate found, or an honest account of why there is none (`message`). */
 export interface TakeoffSearch {
   target: Vec3; // where the transit ends (E, or the pad)
+  approach_note: string; // how the planner's approach put E there ("": the direct approach); also in `message`
   radius_m: number; // takeoff corridor r = r_drone + m + k·σ_transit
   relief_m: number;
   sigma_transit_m: number;

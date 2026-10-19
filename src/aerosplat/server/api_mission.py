@@ -198,15 +198,19 @@ SAME_SPOT_M = 0.01
 
 def _search_takeoff(cat: Catalog, site: Site, product: OccupancyProduct, target: MissionTarget,
                     ap, profile: Optional[PlanningProfile], params: TakeoffParams) -> TakeoffSearch:
-    """The search on the occupancy of one run and the semantics terrain of the same run."""
+    """The search on the occupancy of one run and the semantics terrain of the same run, towards
+    where the planner's transit ends. MissionRefused (outside_grid) where no home could help."""
     sem = find_semantics(cat, site, run_id=product.run.id)
     if sem is None:
         raise HTTPException(404, f"run {product.run.id} has occupancy but no semantics: the "
                                  f"takeoff search needs its DTM and building map")
-    return find_takeoff_spots(product.load_grid(), load_ground(sem.dir), transit_point(target, ap),
+    grid = product.load_grid()
+    end = transit_point(target, ap, grid, profile)
+    return find_takeoff_spots(grid, load_ground(sem.dir), end.point,
                               sigma_georef_m=target.sigma.georef.value_m, profile=profile,
                               max_distance_m=params.max_distance_m, n=params.n,
-                              ground_tol_m=params.ground_tol_m, max_checks=params.max_checks)
+                              ground_tol_m=params.ground_tol_m, max_checks=params.max_checks,
+                              approach_note=end.note)
 
 
 def _home_source(search: TakeoffSearch, spot: TakeoffCandidate, which: str) -> str:
@@ -239,7 +243,9 @@ def takeoff_spots(project_id: str, site_id: str, target_id: str,
                   cat: Catalog = Depends(get_catalog)) -> TakeoffSearch:
     """Ranked takeoff spots near a target, checked as a plan's home and takeoff would be.
 
-    An empty `candidates` with a `message` that says why is an answer, not an error."""
+    An empty `candidates` with a `message` that says why is an answer, not an error. 409 with
+    the planner's own reasons (outside_grid) when no home could be planned: the approach cone
+    leaves the occupancy grid."""
     site = _site(cat, project_id, site_id)
     targets = _targets(cat, site)
     try:
@@ -251,7 +257,10 @@ def takeoff_spots(project_id: str, site_id: str, target_id: str,
         product = require_occupancy(cat, site, run_id=body.run_id)
     except OccupancyMissing as e:
         raise HTTPException(404, str(e)) from None
-    return _search_takeoff(cat, site, product, target, ap, body.profile, body)
+    try:
+        return _search_takeoff(cat, site, product, target, ap, body.profile, body)
+    except MissionRefused as e:
+        raise _refused(e) from None
 
 
 # ── missions ─────────────────────────────────────────────────────────────

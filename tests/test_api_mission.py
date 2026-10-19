@@ -227,6 +227,9 @@ def test_a_site_without_occupancy_cannot_plan(env, tmp_path):
 
 # ── takeoff spots, and the grid's edge ───────────────────────────────────
 WIDE = {"wire_height_m": 5.0, "sigma_gnss_m": 15.0}         # r = 32.5 m: nothing fits the street
+# r = 12.5 m: E is 12 m from the wall, so no ground within 0.5 m of it has room (`max_distance_m`).
+NARROW = {"wire_height_m": 5.0, "sigma_gnss_m": 5.0}
+LOW_CEILING = {"wire_height_m": 5.0, "max_alt_rel_m": 1.0}  # E is 9 m up: every transit too high
 
 
 def test_takeoff_spots_for_a_target(env):
@@ -239,9 +242,15 @@ def test_takeoff_spots_for_a_target(env):
     assert len(res["candidates"]) == 3 and res["target"] == pytest.approx([0.0, 3.0, 9.0])
     assert res["radius_m"] == pytest.approx(5.559, abs=1e-3)
     assert res["candidates"][0]["distance_m"] < 1.0
-    none = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": WIDE}).json()
+    none = client.post(f"{BASE}/targets/{t['id']}/takeoff",
+                       json={"profile": NARROW, "max_distance_m": 0.5}).json()
     assert none["candidates"] == [] and none["message"].startswith("no takeoff spot")
     assert none["best_open"]["transit_z"] is None                 # JSON-safe, never NaN
+    # With r_app 32 m the target itself is refused by the planner, whatever the home: the
+    # search gives that refusal rather than a list no plan could use.
+    wide = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": WIDE})
+    assert wide.status_code == 409 and reasons(wide) == {"outside_grid"}
+    assert "target (0.0, 15.0) needs" in wide.json()["detail"]["reasons"][0]["detail"]
     assert client.post(f"{BASE}/targets/tgt_nope/takeoff", json={}).status_code == 404
 
 
@@ -292,8 +301,8 @@ def test_a_spot_the_search_no_longer_proposes_is_refused(env):
     assert r.status_code == 409 and reasons(r) == {"takeoff_spot_changed"}
     assert "takeoff spot #2 is now at" in r.json()["detail"]["reasons"][0]["detail"]
     # No spot under that rank at all: the search's own account comes with the refusal.
-    r = mission(client, t["id"], profile=WIDE, home_enu=spots[1]["enu"],
-                home_from_search={"rank": 2, "n": 3})
+    r = mission(client, t["id"], profile=NARROW, home_enu=spots[1]["enu"],
+                home_from_search={"rank": 2, "n": 3, "max_distance_m": 0.5})
     assert r.status_code == 409 and reasons(r) == {"takeoff_spot_changed"}
     assert "no spot #2 now (0 found): no takeoff spot" in r.json()["detail"]["reasons"][0]["detail"]
     assert not missions.exists() or not any(missions.iterdir())    # nothing stored
@@ -326,7 +335,7 @@ def test_home_search_refuses_when_there_is_no_spot(env):
     client, authored, missions = env
     ap = authored.create(ms.window_ap())
     t = target(client, ap.id).json()
-    r = client.post(f"{BASE}/missions", json={"target_id": t["id"], "profile": WIDE,
+    r = client.post(f"{BASE}/missions", json={"target_id": t["id"], "profile": LOW_CEILING,
                                               "home_search": True})
     assert r.status_code == 409 and reasons(r) == {"no_takeoff_spot"}
     assert "no takeoff spot" in r.json()["detail"]["reasons"][0]["detail"]
@@ -347,6 +356,42 @@ def test_takeoff_search_needs_the_semantics_of_the_same_run(env, tmp_path):
     shutil.rmtree(sem)
     r = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={})
     assert r.status_code == 404 and "semantics" in r.json()["detail"]
+
+
+def test_near_the_edge_the_search_and_the_plan_agree_on_the_tilted_entry(env):
+    # E 50 m in front of the window falls short of the grid's edge; the planner tilts 15°.
+    # The search aims at that E, so home_search gets a home whose plan flies.
+    client, authored, _ = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id, override={"entry_distance_m": 50.0}).json()
+    r = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": QUIET, "n": 1})
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert len(res["candidates"]) == 1 and res["checked"] == 1
+    assert "tilted 15.0° in the 30° cone" in res["approach_note"]
+    assert res["approach_note"][1:] in res["message"]
+    m = mission(client, t["id"], home_search=True)
+    assert m.status_code == 201, m.text
+    plan = m.json()
+    assert plan["verdict"] == "feasible", plan["findings"]
+    assert plan["approach"]["entry"] == pytest.approx(res["target"])
+    assert plan["home"]["enu"] == pytest.approx(res["candidates"][0]["enu"])
+
+
+def test_a_cone_that_leaves_the_grid_is_refused_by_the_search_as_by_the_plan(env):
+    # No direction of the cone keeps E inside the grid: no home can help, so the search gives
+    # the planner's refusal with its occupancy_bbox hint instead of checking homes.
+    client, authored, missions = env
+    ap = authored.create(ms.window_ap())
+    t = target(client, ap.id, override={"entry_distance_m": 45.0, "min_clearance_m": 10.0}).json()
+    r = client.post(f"{BASE}/targets/{t['id']}/takeoff", json={"profile": QUIET})
+    assert r.status_code == 409 and reasons(r) == {"outside_grid"}
+    detail = r.json()["detail"]["reasons"][0]["detail"]
+    assert "all 24 other directions" in detail and "occupancy_bbox=" in detail
+    m = mission(client, t["id"], home_search=True)
+    assert m.status_code == 409 and reasons(m) == {"outside_grid"}
+    assert m.json()["detail"]["reasons"][0]["detail"] == detail
+    assert not missions.exists() or not any(missions.iterdir())    # nothing stored
 
 
 def test_a_home_off_the_grid_is_refused_with_a_hint(env):

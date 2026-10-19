@@ -13,7 +13,11 @@ several scripts there. A spot qualifies when it is
 3. **a clear vertical column** when checked exactly the way the planner will check it: the home
    tests of `check_home`, the takeoff leg up to the transit height towards the target, and the
    transit itself, each with `check_leg` — so a proposed home never fails the plan's home or
-   takeoff checks.
+   takeoff checks. "The target" is where the planner's transit ends (`transit_point`): for an
+   opening, E of the direction the planner's own cone search takes, which depends on nothing
+   home-specific and so is found once — tilted when the direct approach is blocked or comes
+   too close to the grid's edge. Where no home could be planned (the cone leaves the grid),
+   `transit_point` refuses as the planner would, before any column is checked.
 
 (2) is evaluated for every column at once on the 2-D column tops; (3) only for the best
 candidates, nearest the target first, at least `spacing_m` apart, so the list names distinct
@@ -39,7 +43,8 @@ from aerosplat.authored.models import AccessPoint
 from aerosplat.mission.corridor import SQRT3, Plane, check_leg
 from aerosplat.mission.models import (MissionTarget, PlanningProfile, TakeoffCandidate,
                                       TakeoffSearch)
-from aerosplat.mission.planner import check_home, transit_altitude
+from aerosplat.mission.planner import (ConeChoice, check_home, corridor_radii, opening_approach,
+                                       require_inside_grid, transit_altitude)
 from aerosplat.semantics.models import SEMANTICS_JSON, TERRAIN_NPZ, SemanticsResult, TerrainModel
 from aerosplat.surface.models import FREE, ColumnSource
 from aerosplat.surface.occupancy import OccupancyGrid
@@ -116,25 +121,70 @@ def _verify(grid: OccupancyGrid, x: float, y: float, z: float, target: F64,
     return None, z_t, notes
 
 
-def transit_point(target: MissionTarget, ap: AccessPoint) -> F64:
-    """Where the transit to a target ends, as the planner flies it with the direct approach:
-    E, `entry_distance` in front of an opening (at the hover height), or the pad itself."""
-    spec = target.handover
+@dataclass(frozen=True)
+class TransitEnd:
+    """Where the transit to a target ends, as the planner flies it."""
+
+    point: F64
+    note: str = ""          # how the planner's approach put it there ("": the direct approach)
+
+
+def transit_point(target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
+                  profile: Optional[PlanningProfile] = None) -> TransitEnd:
+    """E of the approach the planner takes to an opening, or the pad itself.
+
+    For an opening that is the planner's own cone search (`planner.opening_approach`): it
+    depends on nothing home-specific, so it runs once here. E is `entry_distance` in front of
+    the opening when the direct approach is clear and fits the grid, else on the direction
+    the planner tilts to. Where the planner would refuse every home (the target, or E and H of
+    every direction, too close to the grid's edge), this refuses the same way, before any home
+    is checked: no home can help there, only a bigger grid.
+
+    A pad's E is above it, at the transit height; the planner tilts it only when the direct
+    approach is blocked or falls short of the grid's edge, and then by a transit height that
+    depends on home. The search does not model that tilt: it checks the transit to the pad
+    itself, and when the pad's direct approach falls short of the edge it refuses up front
+    (outside_grid, naming why) instead of failing every home's transit check.
+    """
+    prof = profile or PlanningProfile()
     if ap.geometry is not None:
-        n = np.asarray(ap.geometry.normal, float)
-        return (np.asarray(ap.geometry.center, float) + n / np.linalg.norm(n)
-                * float(spec.entry_distance_m or 0.0) + np.array([0.0, 0.0, spec.hover_dh_m]))
+        ch = opening_approach(target, ap, grid, prof)
+        return TransitEnd(ch.E, _approach_note(ch, target.handover.approach_cone_deg))
     if ap.pad is None:
         raise ValueError(f"access point {ap.id} has neither a geometry nor a pad")
-    return np.asarray(ap.pad.center, float)
+    c = np.asarray(ap.pad.center, float)
+    _, r_app, r_tr = corridor_radii(target, prof)
+    require_inside_grid(grid, [("target", c, r_app)])
+    require_inside_grid(grid, [("entry E and hover H above the pad", c, max(r_tr, r_app))], note=(
+        "; the takeoff search checks the transit to the pad's direct approach, since a tilted "
+        "one depends on each home's transit height (plan with a given home_enu to let the "
+        "planner try the cone)"))
+    return TransitEnd(c)
+
+
+def _approach_note(ch: ConeChoice, cone_deg: float) -> str:
+    cone = f"{cone_deg:g}° cone"
+    if not ch.clear:
+        shown = "the direct approach" if ch.tilt == 0.0 else f"the least tilted ({ch.tilt:.1f}°)"
+        return (f"the approach is blocked in every direction of the {cone} that fits the grid, "
+                f"so a plan to this target is infeasible from any home; the transit is checked "
+                f"to E of {shown}, the one the plan shows")
+    if ch.tilt == 0.0:
+        return ""
+    why = ("the direct approach is blocked" if ch.direct_fits else
+           "the direct approach comes closer to the grid's edge than r + 2 voxels")
+    return (f"the transit ends at E of the planner's approach, tilted {ch.tilt:.1f}° in the "
+            f"{cone}: {why}")
 
 
 def find_takeoff_spots(grid: OccupancyGrid, ground: Ground, target, *,
                        sigma_georef_m: float, profile: Optional[PlanningProfile] = None,
                        max_distance_m: float = 150.0, n: int = 5,
                        spacing_m: Optional[float] = None, ground_tol_m: float = 1.0,
-                       max_checks: int = 40) -> TakeoffSearch:
-    """Ranked takeoff spots within `max_distance_m` of `target` (see the module docstring)."""
+                       max_checks: int = 40, approach_note: str = "") -> TakeoffSearch:
+    """Ranked takeoff spots within `max_distance_m` of `target`, where the transit ends (see
+    the module docstring). `approach_note`: how the planner's approach put it there
+    (`transit_point`), carried into the result and its message."""
     prof = profile or PlanningProfile()
     tgt = np.asarray(target, float).reshape(-1)
     if tgt.shape not in ((2,), (3,)) or not np.isfinite(tgt).all():
@@ -166,11 +216,12 @@ def find_takeoff_spots(grid: OccupancyGrid, ground: Ground, target, *,
                     or ty - max_distance_m < s.y0 + edge or ty + max_distance_m > s.y1 - edge)
     base = dict(target=(tx, ty, float(target3[2])), radius_m=radius, relief_m=relief,
                 sigma_transit_m=sigma_t, max_distance_m=max_distance_m, spacing_m=spacing,
-                ground_tol_m=ground_tol_m, grid_limited=grid_limited)
+                ground_tol_m=ground_tol_m, grid_limited=grid_limited, approach_note=approach_note)
     if i0 >= i1 or j0 >= j1:
         return TakeoffSearch(**base, searched_columns=0, rejected=rejected, checked=0,
-                             candidates=[], message=f"the target ({tx:.1f}, {ty:.1f}) is not "
-                                                    f"within {max_distance_m:g} m of the grid")
+                             candidates=[], message=_with_note(
+                                 f"the target ({tx:.1f}, {ty:.1f}) is not within "
+                                 f"{max_distance_m:g} m of the grid", approach_note))
 
     ii, jj = np.meshgrid(np.arange(i0, i1), np.arange(j0, j1), indexing="ij")
     xc = s.x0 + (jj + 0.5) * r
@@ -280,8 +331,13 @@ def find_takeoff_spots(grid: OccupancyGrid, ground: Ground, target, *,
                 sigma_fit = math.sqrt(s_t ** 2 - sigma_georef_m ** 2)
     return TakeoffSearch(**base, searched_columns=searched, rejected=rejected, checked=checked,
                          candidates=found, best_open=best_open, sigma_gnss_would_fit_m=sigma_fit,
-                         message=_message(found, base, searched, rejected, prof, sigma_georef_m,
-                                          best_open, sigma_fit))
+                         message=_with_note(_message(found, base, searched, rejected, prof,
+                                                     sigma_georef_m, best_open, sigma_fit),
+                                            approach_note))
+
+
+def _with_note(text: str, note: str) -> str:
+    return f"{text}. {note[0].upper()}{note[1:]}" if note else text
 
 
 def _message(found, base, searched, rejected, prof, sigma_georef_m, best_open, sigma_fit) -> str:

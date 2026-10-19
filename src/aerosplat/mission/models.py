@@ -290,7 +290,9 @@ class TakeoffCandidate(_Model):
 class TakeoffSearch(_Model):
     """Every candidate found, or an honest account of why there is none."""
 
-    target: Vec3
+    target: Vec3                            # where the transit ends: E, or the pad
+    # How the planner's approach put `target` there ("" : the direct approach, or a given point).
+    approach_note: str = ""
     radius_m: float                         # takeoff corridor r = r_drone + m + k·σ_transit
     relief_m: float                         # ground bumps the takeoff leg ignores
     sigma_transit_m: float                  # hypot(σ_georef, σ_GNSS)
