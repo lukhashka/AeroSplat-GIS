@@ -369,7 +369,9 @@ def nav_parameters(nav: NavProfile) -> list[tuple[str, float, str]]:
         ("VISO_VEL_M_NSE", ext.vel_sigma_mps, "m/s: velocity noise (the firmware ignores the "
                                               "message's velocity covariance)"),
         ("EK3_SRC1_POSXY", EK3_POSXY_EXTNAV, "set 1 horizontal position: ExternalNav (VPS)"),
-        ("EK3_SRC1_VELXY", EK3_VELXY_EXTNAV, "set 1 horizontal velocity: ExternalNav"),
+        ("EK3_SRC1_VELXY", EK3_VELXY_EXTNAV, "set 1 horizontal velocity: ExternalNav") if ext.velocity
+        else ("EK3_SRC1_VELXY", 0, "set 1 horizontal velocity: none (a VPS fix is a pose only; "
+                                   "EKF3 gets velocity from position + IMU)"),
         ("EK3_SRC1_POSZ", EK3_POSZ_BARO, "set 1 height: barometer"),
         ("EK3_SRC1_VELZ", 0, "set 1 vertical velocity: none (barometer + IMU)"),
         ("EK3_SRC1_YAW", EK3_YAW_EXTNAV, "set 1 yaw: ExternalNav (compass unreliable at buildings)"),
@@ -450,7 +452,10 @@ def _manifest(plan: MissionPlan, origin: GeoPoint) -> dict:
             "altitude_frame": plan.altitude_frame.value, "home_enu": list(plan.home.enu),
             "home_amsl_verified": plan.home.amsl_verified, "home_altitude_note": HOME_ALT_NOTE,
             "occupancy_run": plan.occupancy.run_id, "taxonomy": plan.target.taxonomy,
-            "nav": plan.profile.nav.model_dump(mode="json")}
+            "nav": plan.profile.nav.model_dump(mode="json"),
+            # SIM-3: the VPS atlas the companion must hold (by content hash) and the anchor
+            **({"vps": {"atlas": plan.vps.atlas.model_dump(mode="json"),
+                        "anchor": plan.vps.anchor.model_dump(mode="json")}} if plan.vps else {})}
 
 
 def render(plan: MissionPlan, origin: GeoPoint, fmt: str,

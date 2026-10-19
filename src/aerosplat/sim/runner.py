@@ -32,6 +32,12 @@ with the vehicle's sensor drivers, the package's navigation section and a world 
 waits for the origin to read back as the Site origin. Arming is then tried even if pre-arm
 never passed: an autopilot that refuses is the expected outcome `arming_refused` of negative
 scenarios. Parameters are checked against the extnav snapshot of the pinned build.
+
+**VPS in the loop (SIM-3).** With `nav.vps` the companion is `aerosplat.sim.vpsloop.VpsCompanion`:
+the package must name its atlas (plan `vps`, file present) and take no velocity from ExternalNav,
+the vehicle must carry the camera the atlas was rendered for, and the run flies at speedup 1. A
+companion that refuses its atlas streams nothing; arming is still tried, and the autopilot's
+refusal makes the outcome `refused: atlas_mismatch` (arming anyway is a run error).
 """
 
 from __future__ import annotations
@@ -85,6 +91,7 @@ TAIL_S = 2.0                 # simulation seconds recorded after the disarm
 MSG_SYSTEM_TIME, MSG_MISSION_CURRENT, MSG_FENCE_STATUS = 2, 42, 162
 MSG_EKF_STATUS_REPORT, MSG_HOME_POSITION = 193, 242
 MSG_GPS_RAW_INT, MSG_GPS_GLOBAL_ORIGIN = 24, 49
+MSG_ATTITUDE, MSG_DISTANCE_SENSOR, MSG_EXTENDED_SYS_STATE = 30, 132, 245
 # GNSS-free runs (SIM-2n), wall-clock seconds unless named otherwise.
 ORIGIN_WAIT_S = 60.0         # for the EKF origin to read back after the companion sends it
 NAV_PREARM_S = 45.0          # for pre-arm; then arming is tried anyway (negative scenarios)
@@ -398,7 +405,10 @@ class Runner:
     def __init__(self, scenario: Scenario, package: MissionPackage, grid: OccupancyGrid, *,
                  provider: Optional[SitlProvider] = None, fw: Optional[FirmwareParams] = None,
                  speedup: Optional[float] = None, out_dir: Optional[Path] = None,
-                 log=print):
+                 log=print, world: Any = None, base: Optional[Path] = None):
+        """`world`: the renderer of the camera's world for VPS in the loop (default: the
+        scenario's `nav.vps.run_dir`, loaded when the run starts); `base`: the folder relative
+        scenario paths are resolved against (the scenario file's)."""
         self.sc = scenario
         self.pkg = package
         self.grid = grid
@@ -420,6 +430,13 @@ class Runner:
         self.out_dir = out_dir
         self.log = log
         self.companion: Optional[Companion] = None
+        # VPS in the loop (SIM-3)
+        self.vps = self.navsim.vps if self.navsim is not None else None
+        self.base = Path(base) if base is not None else Path.cwd()
+        self.world = world
+        if self.vps is not None and self.speedup != 1.0:
+            raise ScenarioError(f"VPS in the loop flies at speedup 1, not {self.speedup:g} (the "
+                                f"localizer's compute time is real time)")
 
     # -- step 1 -----------------------------------------------------------
     def preflight(self, seed: int = 0) -> dict[str, Any]:
@@ -483,6 +500,42 @@ class Runner:
                 raise Refusal("nav_config", f"the package falls back to optical flow; vehicle "
                                             f"{self.profile.vehicle} has no flow sensor and "
                                             f"downward rangefinder (FLOW_TYPE, RNGFND1_TYPE)")
+        if self.vps is not None:
+            self._vps_preflight()
+
+    def _vps_preflight(self) -> None:
+        """VPS in the loop: the package names its atlas and flies on poses only; the vehicle
+        carries the camera the atlas was rendered for; the world to render exists."""
+        b, ext = self.pkg.plan.vps, self.navp.extnav
+        if b is None:
+            raise Refusal("mission_mismatch", "VPS in the loop, but the package names no VPS atlas "
+                                              "(plan without aerosplat.vps.route)")
+        if ext is not None and ext.velocity:
+            raise Refusal("mission_mismatch", "the package takes horizontal velocity from "
+                                              "ExternalNav (EK3_SRC1_VELXY 6); a VPS fix is a pose only")
+        if not (self.pkg.dir / b.atlas.file).is_file():
+            raise Refusal("package_incomplete", f"the package names atlas {b.atlas.file}, which is "
+                                                f"not in {self.pkg.dir}")
+        mount = self.profile.airframe.vps_mount()
+        if mount is None or mount.vps is None:
+            raise ScenarioError(f"vehicle {self.profile.vehicle} has no VPS camera (cameras[].vps)")
+        if (mount.camera, float(mount.pitch_deg), float(mount.yaw_deg)) != \
+                (b.atlas.camera, b.atlas.mount_pitch_deg, b.atlas.mount_yaw_deg) \
+                or tuple(mount.vps.resolution) != tuple(b.atlas.resolution) \
+                or mount.vps.extractor != b.atlas.extractor:
+            raise Refusal("mission_mismatch", f"the atlas was rendered for {b.atlas.camera} at "
+                                              f"{b.atlas.mount_pitch_deg:g}° {b.atlas.resolution} "
+                                              f"{b.atlas.extractor}; vehicle {self.profile.vehicle} "
+                                              f"carries {mount.camera} at {mount.pitch_deg:g}° "
+                                              f"{mount.vps.resolution} {mount.vps.extractor}")
+        assert self.vps is not None
+        if self.world is None and not (self._resolve(self.vps.run_dir) / "gs").is_dir():
+            raise ScenarioError(f"nav.vps.run_dir {self._resolve(self.vps.run_dir)} is not a site "
+                                f"run with a splat")
+
+    def _resolve(self, ref: str) -> Path:
+        p = Path(ref).expanduser()
+        return p if p.is_absolute() else self.base / p
 
     def boot_params(self) -> dict[str, float]:
         """What SITL must boot with: the vehicle's sensor drivers, the package's reboot-only
@@ -607,10 +660,11 @@ class Runner:
             rec = Recording()
             if self.navsim is not None:
                 # At once: EKF3 keeps the first origin it gets, and must get the Site's.
-                self.companion = Companion(
-                    v, origin=pkg.origin, sim=self.navsim, spec=self._extnav_spec(),
-                    flow=self.navp.flow, grid=self.grid, speedup=self.speedup,
-                    event=rec.event, log=lambda s: self.log(f"[{sc.scenario}] {s}"))
+                kw = dict(origin=pkg.origin, sim=self.navsim, spec=self._extnav_spec(),
+                          flow=self.navp.flow, grid=self.grid, speedup=self.speedup,
+                          event=rec.event, log=lambda s: self.log(f"[{sc.scenario}] {s}"))
+                self.companion = self._vps_companion(v, kw) if self.vps is not None \
+                    else Companion(v, **kw)
                 self.companion.attach()
             try:
                 self._fly_vehicle(v, result, seed, rec)
@@ -618,6 +672,31 @@ class Runner:
                 if self.companion is not None:
                     self.companion.detach()
                     result.preflight.setdefault("nav", {})["companion"] = self.companion.summary()
+
+    def _vps_companion(self, v: Vehicle, kw: dict) -> Companion:
+        """The in-the-loop companion: the world renderer (loaded once per runner), the camera of
+        the vehicle profile, the atlas the companion holds (the package's, unless the scenario
+        gives another one)."""
+        from aerosplat.sim.camera import load_camera
+        from aerosplat.sim.vpsloop import VpsCompanion, make_world
+        from aerosplat.vps.route import CameraModel
+
+        assert self.vps is not None and self.pkg.plan.vps is not None
+        mount = self.profile.airframe.vps_mount()
+        assert mount is not None and mount.vps is not None
+        camera = load_camera(mount.camera)
+        if self.world is None:
+            t0 = time.monotonic()
+            self.world = make_world(self._resolve(self.vps.run_dir))
+            self.log(f"[{self.sc.scenario}] VPS world {self.vps.run_dir} loaded in "
+                     f"{time.monotonic() - t0:.1f} s")
+        atlas = self._resolve(self.vps.atlas) if self.vps.atlas else self.pkg.dir / self.pkg.plan.vps.atlas.file
+        readout = camera.readout_ms(self.vps.fps) / 1000.0 if self.vps.rolling_shutter else 0.0
+        land_seq = next((it.seq for it in self.pkg.items if it.command == 21), None)
+        return VpsCompanion(v, binding=self.pkg.plan.vps, atlas_path=atlas, world=self.world,
+                            cam=CameraModel.of(camera, mount, tuple(mount.vps.resolution)),
+                            readout_s=readout, rate_hz=self.vps.rate_hz or mount.vps.rate_hz,
+                            home_enu=tuple(self.pkg.plan.home.enu), land_seq=land_seq, **kw)
 
     def _extnav_spec(self) -> ExtNavSpec:
         return self.navp.extnav if self.navp.extnav is not None else ExtNavSpec()
@@ -631,6 +710,12 @@ class Runner:
         if self.nav_run:
             for msg_id, hz in ((MSG_GPS_GLOBAL_ORIGIN, 1.0), (MSG_GPS_RAW_INT, 5.0)):
                 v.set_message_interval(msg_id, hz)
+        if self.vps is not None:
+            # the localizer's prior (attitude) and the anchor's lift-off (landed state)
+            v.set_message_interval(MSG_ATTITUDE, 10.0)
+            v.set_message_interval(MSG_EXTENDED_SYS_STATE, 10.0)
+            # the downward rangefinder: the companion's wall guard ends near the ground
+            v.set_message_interval(MSG_DISTANCE_SENSOR, 10.0)
 
     def _fly_vehicle(self, v: Vehicle, result: RunResult, seed: int, rec: Recording) -> None:
         pkg, sc, fw, cfg = self.pkg, self.sc, self.fw, self.cfg
@@ -752,12 +837,21 @@ class Runner:
             # GUIDED needs a position estimate; arming is then tried in the mode it is in
             # (ARMING_NEED_LOC 1: a position estimate is required in every mode).
             result.preflight.setdefault("nav", {})["guided_refused"] = str(e)
+        refusal = getattr(self.companion, "refusal", None)
         try:
             v.arm(timeout=NAV_ARM_S)
         except VehicleTimeout:
             texts = [s for s in v.statustext[-12:] if "Arm" in s or "PreArm" in s]
-            raise Refusal("arming_refused", "the autopilot refused to arm: "
-                          + "; ".join(dict.fromkeys(texts or v.statustext[-4:]))) from None
+            said = "; ".join(dict.fromkeys(texts or v.statustext[-4:]))
+            if refusal:
+                # the companion refused first (another atlas than the package's): that is the
+                # cause; the autopilot's own refusal is the proof that it cannot fly without it
+                raise Refusal("atlas_mismatch", f"{refusal}; the autopilot did not arm: {said}") from None
+            raise Refusal("arming_refused", "the autopilot refused to arm: " + said) from None
+        if refusal:
+            v.disarm(force=True)
+            raise RunError(f"the vehicle ARMED although the companion refused ({refusal}): "
+                           f"arming without ExternalNav")
 
     def _mission(self, v: Vehicle, result: RunResult, injections: list[Injection],
                  resp: Optional[Response], values: dict[str, float], rec: Recording) -> None:
@@ -902,6 +996,12 @@ class Runner:
                                  spoof_injected_t=next((e.get("sent", e["on"]) for e in result.injected
                                                         if e["fault"] == "gps_spoof"), None),
                                  summary=comp.summary())
+            records = getattr(comp, "records", None)
+            if records is not None:
+                mount = self.profile.airframe.vps_mount()
+                nav_ctx.vps_records = list(records)
+                nav_ctx.vps_summary = comp.vps_summary(sc.expect.tolerances.false_fix_m)  # type: ignore[attr-defined]
+                nav_ctx.vps_min_rate_hz = mount.vps.min_rate_hz if mount is not None and mount.vps else None
         ctx = Context(plan=pkg.plan, items=pkg.items, planned_enu=pkg.planned_enu,
                       fence_enu=pkg.fence_enu,
                       params=values, grid=self.grid, expect=sc.expect, response=resp, trigger_t=trigger_t,
@@ -974,6 +1074,11 @@ class Runner:
             v.send_heartbeats = False
         if inj.vps is False and self.companion is not None:
             self.companion.vps_on = False
+        if inj.vps_effect is not None:
+            set_effect = getattr(self.companion, "set_effect", None)
+            if set_effect is None:
+                raise RunError(f"{inj.fault.fault.value} needs the in-the-loop companion (nav.vps)")
+            set_effect(inj.vps_effect)
         t_on = v.sim_now(self.speedup)
         result.injected[k]["on"] = t_on
         rec.event(t_on, "fault_on", inj.fault.fault.value, note=inj.note)
@@ -985,6 +1090,8 @@ class Runner:
             v.send_heartbeats = True
         if inj.vps is False and self.companion is not None:
             self.companion.vps_on = True
+        if inj.vps_effect is not None and hasattr(self.companion, "clear_effect"):
+            self.companion.clear_effect(inj.vps_effect)        # type: ignore[union-attr]
         for c in inj.clear:
             v.set_param(c.name, c.value)
         entry = next(e for e in result.injected if e["fault"] == inj.fault.fault.value
@@ -1025,8 +1132,10 @@ def resolve_inputs(sc: Scenario, base: Path, mission: Optional[Path] = None,
 def run_scenario(sc: Scenario, mission_dir: Path, grid: OccupancyGrid, *,
                  provider: Optional[SitlProvider], out_dir: Optional[Path] = None,
                  origin: Optional[GeoPoint] = None, seeds: Optional[int] = None,
-                 speedup: Optional[float] = None, log=print) -> list[RunResult]:
-    """Every seed of a scenario; a package that cannot even be read is one refused run."""
+                 speedup: Optional[float] = None, log=print, world: Any = None,
+                 base: Optional[Path] = None) -> list[RunResult]:
+    """Every seed of a scenario; a package that cannot even be read is one refused run.
+    `world`: the VPS world renderer to share between runs (else each run loads its own)."""
     if origin is None and sc.origin is not None:
         origin = GeoPoint(**sc.origin)
     out = out_dir if out_dir is not None else Path(mission_dir) / "sim" / sc.scenario
@@ -1042,10 +1151,19 @@ def run_scenario(sc: Scenario, mission_dir: Path, grid: OccupancyGrid, *,
         return [res]
     results = []
     n = seeds or sc.seeds
-    for seed in range(n):
-        runner = Runner(sc, pkg, grid, provider=provider, speedup=speedup,
-                        out_dir=out if n == 1 else out / f"seed-{seed}", log=log)
-        results.append(runner.run(seed))
+    owned = []
+    try:
+        for seed in range(n):
+            runner = Runner(sc, pkg, grid, provider=provider, speedup=speedup,
+                            out_dir=out if n == 1 else out / f"seed-{seed}", log=log, world=world,
+                            base=base)
+            results.append(runner.run(seed))
+            if world is None and runner.world is not None:
+                world = runner.world            # loaded by the first run: the others share it
+                owned.append(world)
+    finally:
+        for w in owned:
+            w.close()
     return results
 
 
@@ -1074,7 +1192,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     provider = None if args.preflight else SitlProvider(instance=args.instance, endpoint=args.endpoint)
     try:
         results = run_scenario(sc, mdir, grid, provider=provider, out_dir=args.out,
-                               seeds=args.seeds, speedup=args.speedup)
+                               seeds=args.seeds, speedup=args.speedup, base=args.scenario.parent)
     finally:
         if provider is not None:
             provider.close()

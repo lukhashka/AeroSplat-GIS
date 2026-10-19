@@ -84,6 +84,16 @@ class VpsSettings(_Model):
 
     extractor: Literal["orb", "akaze"] = "akaze"
     resolution: tuple[int, int] = (960, 540)
+    # Frames localized per second (SIM-3 ticks at this rate); below `min_rate_hz` in flight the
+    # `vps` oracle fails. 2-4 Hz is the Pi 5 estimate (ADR-0015 §6), not a measurement.
+    rate_hz: float = Field(3.0, gt=0, le=30)
+    min_rate_hz: float = Field(2.0, gt=0, le=30)
+
+    @model_validator(mode="after")
+    def _rates(self) -> "VpsSettings":
+        if self.min_rate_hz > self.rate_hz:
+            raise ValueError("vps min_rate_hz exceeds rate_hz")
+        return self
 
 
 class CameraMount(_Model):

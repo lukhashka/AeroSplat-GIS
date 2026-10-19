@@ -13,6 +13,8 @@ and against the live vehicle by the runner before anything is injected.
     motor_degraded  SIM_ENGINE_FAIL (mask) + SIM_ENGINE_MUL (thrust) -> none expected
     vps_loss        the companion's VPS stops (no ODOMETRY)       -> the companion's reaction
     gps_spoof       SIM_GPS1_GLTCH_X / _Y (degrees)               -> flagged by the GNSS monitor
+    vps_degrade     (SIM-3) the camera's frames degrade           -> refusals, then as vps_loss
+    vps_prior_offset (SIM-3) the localizer gets a wrong prior     -> refusals, never a false fix
 
 `gcs_loss` has no SIM_* parameter: ArduPilot counts heartbeats from MAV_GCS_SYSID only, so the
 runner makes itself the GCS (RUNNER_PARAMS) and the fault is the runner going silent.
@@ -84,6 +86,9 @@ class Injection:
     clear: tuple[ParamChange, ...]
     heartbeats: Optional[bool] = None      # gcs_loss: runner heartbeats off (inject) / on (clear)
     vps: Optional[bool] = None             # vps_loss: companion VPS fixes off (inject) / on (clear)
+    # SIM-3: what the in-the-loop companion changes on inject (undone on clear):
+    # {"level": "severe"} (frames degrade), {"prior_offset_m": (north, east)} (wrong prior)
+    vps_effect: Optional[dict] = None
     note: str = ""
 
     @property
@@ -199,6 +204,17 @@ def injection(fault: Fault, fw: FirmwareParams, vehicle: Mapping[str, float],
         if int(vehicle.get("VISO_TYPE", 0)) == 0:
             raise FaultUnavailable("vps_loss: the vehicle takes no ExternalNav (VISO_TYPE 0)")
         return Injection(fault, (), (), vps=False, note="companion VPS gives no fix (ODOMETRY stops)")
+    if k in (FaultKind.vps_degrade, FaultKind.vps_prior_offset):
+        if int(vehicle.get("VISO_TYPE", 0)) == 0:
+            raise FaultUnavailable(f"{k.value}: the vehicle takes no ExternalNav (VISO_TYPE 0)")
+        if k is FaultKind.vps_degrade:
+            return Injection(fault, (), (), vps_effect={"level": fault.level},
+                             note=f"camera frames degrade ({fault.level}: dark, defocused, noisy)")
+        assert fault.offset_m is not None
+        north, east = fault.offset_m
+        return Injection(fault, (), (), vps_effect={"prior_offset_m": (float(north), float(east))},
+                         note=f"the localizer's prior is {north:+g} m north, {east:+g} m east of the "
+                              f"autopilot's estimate")
     if k is FaultKind.gps_spoof:
         have("SIM_GPS1_GLTCH_X", "SIM_GPS1_GLTCH_Y")
         if int(vehicle.get("GPS1_TYPE", 1)) == 0:

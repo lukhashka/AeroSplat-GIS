@@ -2,11 +2,14 @@
 
 Photometric (gain, contrast, gamma), optics (Gaussian blur), sensor (Gaussian read noise) and
 the codec (JPEG). A *rough* stand-in for the domain gap: it does not model season, shadows that
-moved, parked cars, construction, a different time of day, lens distortion residuals, rolling
-shutter or motion blur from vibration. The bench says so wherever it prints these numbers.
+moved, parked cars, construction, a different time of day, lens distortion residuals or motion
+blur from vibration. The bench says so wherever it prints these numbers. `rolling_shutter` adds
+the skew of a turning rolling-shutter camera (small-angle, rotation only; SIM-3).
 
 Parameters are drawn once per query (`draw`) and stored with the query set, so the companion
-re-creates exactly the same frames from the clean images (`apply`).
+re-creates exactly the same frames from the clean images (`apply`). `severe` is not a camera in
+daylight: dusk, defocus, heavy noise — a level meant to make VPS refuse (SIM-3 fault
+`vps_degrade`).
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ LEVELS: dict[str, dict[str, tuple[float, float]]] = {
              "blur_sigma": (0.0, 0.8), "noise_sigma": (1.0, 3.0), "jpeg_quality": (80, 95)},
     "strong": {"gain": (0.6, 1.4), "contrast": (0.6, 1.3), "gamma": (0.75, 1.3),
                "blur_sigma": (0.6, 1.6), "noise_sigma": (3.0, 7.0), "jpeg_quality": (50, 75)},
+    "severe": {"gain": (0.15, 0.3), "contrast": (0.4, 0.6), "gamma": (1.3, 1.6),
+               "blur_sigma": (3.0, 4.5), "noise_sigma": (10.0, 16.0), "jpeg_quality": (25, 40)},
 }
 
 
@@ -63,3 +68,25 @@ def apply(img: np.ndarray, p: dict[str, Any]) -> np.ndarray:
             raise RuntimeError("JPEG encoding failed")
         out = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
     return out
+
+
+def rolling_shutter(img: np.ndarray, omega_cam: tuple[float, float, float], readout_s: float,
+                    K: tuple[float, float, float, float]) -> np.ndarray:
+    """A frame as a rolling shutter records it while the camera turns at `omega_cam` (rad/s,
+    camera axes: x right, y down, z optical), from the frame of a global shutter at the middle
+    row's time. Row v is read `readout_s * (v / (h - 1) - 1/2)` after the middle row; small-angle
+    model (pure rotation, no translation, no motion blur): a turn δ moves an image point by
+    du = fx (δz·y - δy), dv = fy (δx - δz·x) with x, y its normalised coordinates."""
+    if readout_s <= 0 or not any(abs(w) > 0 for w in omega_cam):
+        return img
+    cv2 = require_cv2()
+    h, w = img.shape[:2]
+    fx, fy, cx, cy = K
+    u, v = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    t = (readout_s * (v / max(h - 1, 1) - 0.5)).astype(np.float32)
+    dx, dy, dz = (float(o) * t for o in omega_cam)
+    xn, yn = (u - cx) / fx, (v - cy) / fy
+    du = fx * (dz * yn - dy)
+    dv = fy * (dx - dz * xn)
+    return cv2.remap(img, (u - du).astype(np.float32), (v - dv).astype(np.float32), cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REFLECT)

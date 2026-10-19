@@ -20,7 +20,10 @@ camera side is not (SIM-3 replaces the model by VPS on rendered IMX290 frames).
                   a wall within `wall_guard_m` -> GUIDED, back away along the wall's normal to
                   `retreat_m`, then LAND; else on flow for `drift_budget_s`, then GUIDED stop
                   (back away first if a wall is close by then), then LAND. A fix again for
-                  `regain_s` -> source set 1; the mission resumes only if it was not stopped
+                  `regain_s` -> source set 1; the mission resumes only if it was not stopped.
+                  `landing_on_flow` (SIM-3): lost on the mission's final LAND item -> flow, the
+                  landing goes on (no budget). The wall guard ends 1.5 m above the ground
+                  (downward rangefinder): lower, the beams see the ground itself
     GNSS monitor  (gnss: monitor) GPS_RAW_INT vs VPS: a disagreement above
                   `spoof_threshold_m` for SPOOF_CONFIRM samples -> GNSS flagged as spoofed; it
                   is never an EKF3 source in this profile, so it stays out of navigation
@@ -65,6 +68,8 @@ RANGEFINDER_MAX_M = 20.0
 COMMAND_PERIOD_S = 0.2      # GUIDED velocity setpoints (Copter times them out after 3 s)
 BRAKE_S = 1.0               # zero velocity after the back-off, before LAND
 ORIGIN_RESEND_S = 0.5       # wall clock
+MAV_SENSOR_ROTATION_PITCH_270 = 25      # a downward rangefinder
+LAND_WALL_GUARD_MIN_M = 1.5             # landing on flow: no wall guard below this (ground)
 
 
 # ── pure pieces (unit-tested) ────────────────────────────────────────────
@@ -180,6 +185,7 @@ class Companion:
         self.latency = (sim.latency_ms if sim.latency_ms is not None else spec.latency_ms) / 1000.0
         self.period = 1.0 / (sim.rate_hz if sim.rate_hz is not None else spec.rate_hz)
         self.bias = GaussMarkov(sim.bias_sigma_m, sim.bias_tau_s, self.rng)
+        self.loss_confirm = LOSS_CONFIRM_S      # no fix this long (capture clock) = VPS lost
         self.nav = NavLog()
         self.vps_on = True                      # vps_loss fault (runner) switches this
         self.buffer: list[Truth] = []
@@ -201,6 +207,7 @@ class Companion:
         self._origin_sent_wall = -math.inf
         self._spoof_run = 0
         self.last_vps_ned: Optional[tuple[float, float]] = None
+        self.down_range_m: Optional[float] = None     # downward rangefinder (DISTANCE_SENSOR)
 
     # ── wiring ───────────────────────────────────────────────────────────
     def attach(self) -> None:
@@ -223,6 +230,8 @@ class Companion:
             self._origin_readback(msg)
         elif kind == "GPS_RAW_INT":
             self._gnss(msg)
+        elif kind == "DISTANCE_SENSOR" and int(msg.orientation) == MAV_SENSOR_ROTATION_PITCH_270:
+            self.down_range_m = float(msg.current_distance) / 100.0
 
     # ── origin ───────────────────────────────────────────────────────────
     def origin_target(self) -> tuple[int, int, int]:
@@ -382,6 +391,16 @@ class Companion:
     def wall(self) -> Optional[tuple[float, tuple[float, float]]]:
         return wall_from_ranges(RANGEFINDER_BEARINGS_DEG, self.rangefinders())
 
+    def guard_wall(self) -> Optional[tuple[float, tuple[float, float]]]:
+        """A wall inside the guard distance, to back away from — not near the ground: below
+        LAND_WALL_GUARD_MIN_M (downward rangefinder) the horizontal beams reach the ground itself,
+        and a back-off at touchdown or lift-off could no longer help. Without a downward reading
+        (SIM-2n streams none) the guard is always on, as before."""
+        if self.down_range_m is not None and self.down_range_m < LAND_WALL_GUARD_MIN_M:
+            return None
+        w = self.wall()
+        return w if w is not None and w[0] < self.sim.reaction.wall_guard_m else None
+
     def set_source(self, t: float, n: int) -> None:
         result = self.v.command(CMD_SET_EKF_SOURCE_SET, float(n))
         self.nav.source_sets.append((t, n, result))
@@ -410,7 +429,7 @@ class Companion:
         last_cap = self.last_capture if math.isfinite(self.last_capture) else self.armed_since
         stalled = t - max(last_cap, self.armed_since) > STALL_S + self.latency
         nofix = self.has_fix is False and self.fix_since is not None \
-            and last_cap - self.fix_since >= LOSS_CONFIRM_S
+            and last_cap - self.fix_since >= self.loss_confirm
         lost = nofix or stalled
         regained = (self.has_fix is True and self.fix_since is not None and not stalled
                     and last_cap - self.fix_since >= r.regain_s)
@@ -423,9 +442,11 @@ class Companion:
                 self.set_source(t, 2)
             if self.phase not in ("nominal", "flow"):
                 return                  # already stopping: the reaction under way goes on
-            w = self.wall()
-            if w is not None and w[0] < r.wall_guard_m:
+            w = self.guard_wall()
+            if w is not None:
                 self._start_backoff(t, w)
+            elif self.phase == "nominal" and self.flow and self._landing_on_flow():
+                self._land_on_flow(t)
             elif self.phase == "nominal":
                 self.phase, self.phase_t = ("flow", t) if self.flow else ("brake", t)
                 if not self.flow:
@@ -436,15 +457,21 @@ class Companion:
                 self.set_source(t, 1)
             self._react(t, "VPS regained", f"after {t - self.lost_t:.1f} s")
             self.lost_t = None
-            if self.phase == "flow":
+            if self.phase in ("flow", "land_flow"):
                 self.phase = "nominal"
             return
         if self.phase == "flow":
-            w = self.wall()
-            if w is not None and w[0] < r.wall_guard_m:
+            w = self.guard_wall()
+            if w is not None:
                 self._start_backoff(t, w)
+            elif self._landing_on_flow():
+                self._land_on_flow(t)
             elif t - self.phase_t >= r.drift_budget_s:
                 self._stop(t, f"drift budget {r.drift_budget_s:g} s on optical flow spent")
+        elif self.phase == "land_flow":
+            w = self.guard_wall()
+            if w is not None:
+                self._start_backoff(t, w)
         elif self.phase == "backoff":
             self._backoff(t)
         elif self.phase == "brake":
@@ -457,6 +484,18 @@ class Companion:
                     self._start_backoff(t, w)
                 else:
                     self._land(t)
+
+    def landing(self) -> bool:
+        """The vehicle is on its final landing (the mission's LAND item, or LAND). The error-model
+        companion does not follow the mission: never."""
+        return False
+
+    def _landing_on_flow(self) -> bool:
+        return bool(self.sim.landing_on_flow) and self.flow and self.landing()
+
+    def _land_on_flow(self, t: float) -> None:
+        self._react(t, "landing on optical flow", "VPS lost on the final descent (planned)")
+        self.phase, self.phase_t = "land_flow", t
 
     def _guided(self) -> None:
         if self.v.mode != "GUIDED":

@@ -50,6 +50,52 @@ def wrap_deg(a: float) -> float:
     return (a + 180.0) % 360.0 - 180.0
 
 
+# ── the camera on the vehicle ────────────────────────────────────────────
+# Vehicle attitude: aerospace 3-2-1 Euler angles of the body (x forward, y right, z down)
+# relative to NED, in radians, as MAVLink ATTITUDE / SIM_STATE give them. A camera mount: pitch
+# above the body's horizontal plane (-90 = straight down) and yaw relative to the nose
+# (positive = right), as in a vehicle profile (aerosplat.sim.airframe.CameraMount).
+_ENU_FROM_NED = np.array([[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]])
+
+
+def body_to_ned(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Body (FRD) -> NED rotation of 3-2-1 Euler angles (radians)."""
+    cr, sr, cp, sp, cy, sy = (math.cos(roll), math.sin(roll), math.cos(pitch), math.sin(pitch),
+                              math.cos(yaw), math.sin(yaw))
+    return np.array([[cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy],
+                     [cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy],
+                     [-sp, sr * cp, cr * cp]])
+
+
+def mount_axes(mount_pitch_deg: float, mount_yaw_deg: float = 0.0) -> np.ndarray:
+    """Body (FRD) -> camera (OpenCV) rotation: rows are the camera's right, down and optical
+    axes in the body frame."""
+    p, y = math.radians(mount_pitch_deg), math.radians(mount_yaw_deg)
+    fwd = np.array([math.cos(y), math.sin(y), 0.0])
+    right = np.array([-math.sin(y), math.cos(y), 0.0])
+    z = math.cos(p) * fwd - math.sin(p) * np.array([0.0, 0.0, 1.0])
+    return np.stack([right, np.cross(z, right), z])
+
+
+def camera_rotation(roll: float, pitch: float, yaw: float, mount_pitch_deg: float,
+                    mount_yaw_deg: float = 0.0) -> np.ndarray:
+    """World (Site ENU) -> camera rotation of a camera on a vehicle with this attitude."""
+    R_enu_from_body = _ENU_FROM_NED @ body_to_ned(roll, pitch, yaw)
+    return mount_axes(mount_pitch_deg, mount_yaw_deg) @ R_enu_from_body.T
+
+
+def body_attitude(R_cam: np.ndarray, mount_pitch_deg: float, mount_yaw_deg: float = 0.0
+                  ) -> tuple[float, float, float]:
+    """(roll, pitch, yaw) in radians (3-2-1, NED) of the vehicle whose camera has the world ->
+    camera rotation `R_cam` — the inverse of `camera_rotation`."""
+    R_body_from_enu = mount_axes(mount_pitch_deg, mount_yaw_deg).T @ np.asarray(R_cam, float)
+    Rbn = _ENU_FROM_NED.T @ R_body_from_enu.T          # body -> NED (_ENU_FROM_NED is its own inverse)
+    yaw = math.atan2(Rbn[1, 0], Rbn[0, 0])
+    pitch = -math.asin(max(-1.0, min(1.0, float(Rbn[2, 0]))))
+    roll = math.atan2(Rbn[2, 1], Rbn[2, 2])
+    return roll, pitch, yaw
+
+
 def project(R: np.ndarray, C: np.ndarray, K: Intrinsics, X: np.ndarray
             ) -> tuple[np.ndarray, np.ndarray]:
     """Pixels (N, 2) and depths (N,) of world points X (N, 3)."""

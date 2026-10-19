@@ -27,6 +27,9 @@ sentence, and numbers. None of them reads the EKF estimate.
                      origin is the Site origin, the EKF estimate stays on the truth while VPS has
                      a fix (on optical flow: reported), a GNSS spoof is flagged in time. This one
                      reads the estimate — to compare it with the truth.
+    vps              VPS in the loop (SIM-3) only: no fix sent with a true error above
+                     `false_fix_m` (2 m), frames localized in the air at least at the vehicle
+                     profile's minimum rate; fix rate, refusals, latency reported.
 """
 
 from __future__ import annotations
@@ -83,6 +86,11 @@ class NavContext:
     origin_ok: bool = False
     origin_required: bool = True
     summary: dict[str, Any] = field(default_factory=dict)
+    # VPS in the loop (SIM-3): every localized frame (capture time, ok, sent, true error ...),
+    # the companion's summary, and the profile's minimum rate
+    vps_records: Optional[list[dict[str, Any]]] = None
+    vps_summary: dict[str, Any] = field(default_factory=dict)
+    vps_min_rate_hz: Optional[float] = None
 
     def has_fix(self, t: F64) -> NDArray[np.bool_]:
         out = np.zeros(len(t), bool)
@@ -771,6 +779,52 @@ def check_navigation(rec: Recording, ctx: Context) -> Verdict:
     return Verdict(Invariant.navigation.value, PASS, "; ".join(parts), m)
 
 
+# ── VPS in the loop (SIM-3) ──────────────────────────────────────────────
+def check_vps(rec: Recording, ctx: Context) -> Verdict:
+    """No fix was SENT with a true error above `false_fix_m` (a refusal is never a fault; a false
+    fix always is), and frames were localized while airborne at least at the profile's minimum
+    rate. Fix rate, refusals, latency and errors are reported."""
+    n = ctx.nav
+    if n is None or n.vps_records is None:
+        return Verdict(Invariant.vps.value, NA, "no VPS in the loop")
+    tol = ctx.tol
+    s = n.vps_summary
+    air = [r for r in n.vps_records if r.get("airborne")]
+    sent = [r for r in air if r.get("sent")]
+    false = [r for r in sent if float(r.get("err_m", 0.0)) > tol.false_fix_m]
+    span = (air[-1]["t"] - air[0]["t"]) if len(air) > 1 else 0.0
+    rate = (len(air) - 1) / span if span > 0 else 0.0
+    want = tol.vps_min_rate_hz if tol.vps_min_rate_hz is not None else n.vps_min_rate_hz
+    m: dict[str, Any] = {k: s.get(k) for k in (
+        "refusals", "err_m_p50", "err_m_p95", "err_m_max", "sigma_h_m_p50", "latency_s_p50",
+        "latency_s_p95", "localize_ms_p50", "localize_ms_p95", "render_ms_p50", "skipped_busy",
+        "prior_err_m_max", "anchor_sent", "anchor_err_m_max", "errors")}
+    m.update(frames_airborne=len(air), sent=len(sent), false_fixes=len(false),
+             fix_rate=round(len(sent) / len(air), 3) if air else None, rate_hz=round(rate, 2),
+             min_rate_hz=want, false_fix_m=tol.false_fix_m)
+    if false:
+        m["false_fix_t"] = [r["t"] for r in false[:10]]
+    problems = []
+    if false:
+        worst = max(float(r["err_m"]) for r in false)
+        problems.append(f"{len(false)} false fixes sent (true error up to {worst:.2f} m > "
+                        f"{tol.false_fix_m:g} m)")
+    if not air:
+        problems.append("no frame localized in the air")
+    elif want is not None and rate < want:
+        problems.append(f"{rate:.2f} frames/s localized in the air, below the profile's "
+                        f"{want:g}/s")
+    if s.get("errors"):
+        problems.append(f"the VPS worker failed: {s['errors'][0]}")
+    if problems:
+        return Verdict(Invariant.vps.value, FAIL, "; ".join(problems), m)
+    return Verdict(Invariant.vps.value, PASS,
+                   f"{len(air)} frames at {rate:.2f}/s, {len(sent)} fixes sent "
+                   f"({m['fix_rate']:.0%}), 0 false; error p95 "
+                   f"{'—' if s.get('err_m_p95') is None else format(s['err_m_p95'], '.2f')} m, "
+                   f"latency p50 {s.get('latency_s_p50')} s", m)
+
+
 # ── all of them ──────────────────────────────────────────────────────────
 def actual_outcome(rec: Recording, ctx: Context) -> str:
     start = ctx.mission_start_t
@@ -793,6 +847,9 @@ def judge(rec: Recording, ctx: Context, preflight: Optional[dict] = None) -> lis
     checked = list(ctx.expect.checked)
     if ctx.nav is not None and ctx.expect.invariants is None and Invariant.navigation not in checked:
         checked.append(Invariant.navigation)
+    if ctx.nav is not None and ctx.nav.vps_records is not None and ctx.expect.invariants is None \
+            and Invariant.vps not in checked:
+        checked.append(Invariant.vps)
     for inv in checked:
         if inv is Invariant.clearance:
             series = clearance_series(rec, ctx)
@@ -813,6 +870,8 @@ def judge(rec: Recording, ctx: Context, preflight: Optional[dict] = None) -> lis
             out.append(check_wall_descent(rec, ctx))
         elif inv is Invariant.navigation:
             out.append(check_navigation(rec, ctx))
+        elif inv is Invariant.vps:
+            out.append(check_vps(rec, ctx))
     return out
 
 

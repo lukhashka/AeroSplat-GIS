@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
@@ -67,6 +67,9 @@ class Code(str, Enum):
     home_unknown = "home_unknown"
     home_blocked = "home_blocked"
     home_not_on_surface = "home_not_on_surface"
+    # GNSS-free (ADR-0015 §2.4): a stretch of the route without a VPS fix longer than the drift
+    # budget of layer B (where, how long: `detail`, `at`)
+    vps_gap = "vps_gap"
 
 
 class Severity(str, Enum):
@@ -236,6 +239,9 @@ class ExtNavSpec(_Model):
     rate_hz: float = Field(10.0, ge=1, le=50)
     latency_ms: float = Field(50.0, ge=0, le=250)       # VISO_DELAY_MS's documented range
     camera: str = "imx290:4mm"                          # configs/sim/cameras/<name>.yaml : lens
+    # The source measures velocity too. A VPS fix is a pose only (SIM-3: the localizer on camera
+    # frames): then EKF3 takes no horizontal velocity from ExternalNav (EK3_SRC1_VELXY 0).
+    velocity: bool = True
 
 
 class NavProfile(_Model):
@@ -435,6 +441,47 @@ class Fence(_Model):
     margin_m: float
 
 
+class VpsAtlasRef(_Model):
+    """The VPS atlas of a mission's corridor (aerosplat.vps.route), named by its content hash:
+    the companion loads it from `file` (relative to the mission folder) and refuses to stream —
+    so the vehicle cannot arm — when the hash differs (ADR-0015 §4: the twin is a navigation map
+    whose version and integrity are audited)."""
+
+    file: str
+    content_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    extractor: str
+    resolution: tuple[int, int]
+    camera: str                             # "<camera>:<lens>"
+    mount_pitch_deg: float
+    mount_yaw_deg: float = 0.0
+    keyframes: int = Field(ge=1)
+    features: int = Field(ge=1)
+    run_id: str                             # the site run whose splat was rendered
+    splat_sha256: Optional[str] = None
+
+
+class TakeoffAnchor(_Model):
+    """The pose the vehicle is put down in before take-off (ADR-0015 §2.3, corrected in §8): a
+    camera tilted down-forward sees only the ground at arm's length while on it, so the first
+    pose cannot come from VPS. The companion streams this pose until lift-off; the first VPS fix
+    comes in the take-off column (the localizability's take-off gap)."""
+
+    enu: Vec3
+    heading_deg: float = Field(ge=0, lt=360)
+    sigma_m: float = Field(gt=0, le=10)     # how well the vehicle is placed on the spot
+    sigma_yaw_deg: float = Field(gt=0, le=45)
+
+
+class VpsBinding(_Model):
+    """What a GNSS-free mission flies with on layer A: the atlas, the predicted localizability
+    of its route (per segment, gaps; `aerosplat.vps.route.Localizability.summary`) and the
+    take-off anchor."""
+
+    atlas: VpsAtlasRef
+    anchor: TakeoffAnchor
+    localizability: dict[str, Any] = Field(default_factory=dict)
+
+
 class MissionPlan(_Model):
     """`missions/<id>/mission.json`: everything needed to rebuild, review and export a mission."""
 
@@ -458,6 +505,8 @@ class MissionPlan(_Model):
     rally_enu: list[Vec3]
     verdict: Verdict
     findings: list[Finding]
+    # GNSS-free missions flown on VPS (SIM-3): the atlas, localizability and take-off anchor.
+    vps: Optional[VpsBinding] = None
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 

@@ -33,6 +33,18 @@ planned with the same navigation profile (mission.json `profile.nav`):
     faults:
       - {fault: vps_loss, after: hover, at_s: 12}    # duration_s: a gap; none: for good
 
+VPS in the loop (SIM-3) replaces the error model by the localizer on rendered camera frames; the
+package must carry its atlas (aerosplat.vps.route) and the run flies at speedup 1:
+
+    vehicle: x500-pi5-imx290
+    speedup: 1
+    nav:
+      gnss: none
+      vps: {run_dir: <site run>, level: mild}     # atlas: another file than the package's
+    faults:
+      - {fault: vps_degrade, after: hover, at_s: 5, level: severe}
+      - {fault: vps_prior_offset, after: over_entry, at_s: 0, duration_s: 3, offset_m: [15, 0]}
+
 Faults are abstract; `aerosplat.sim.faults` turns them into SIM_* parameters of the pinned
 build. Times are simulation seconds (the autopilot's clock), counted from mission start or
 from the moment the vehicle starts flying to the mission item named in `after`.
@@ -69,6 +81,10 @@ class FaultKind(str, Enum):
     # SIM-2n (ADR-0015): the companion's VPS stops giving fixes; the GNSS receiver is spoofed.
     vps_loss = "vps_loss"
     gps_spoof = "gps_spoof"
+    # SIM-3 (VPS in the loop): the camera's frames degrade (`level` of aerosplat.vps.perturb);
+    # the localizer is handed a prior `offset_m` (north, east) off the autopilot's estimate.
+    vps_degrade = "vps_degrade"
+    vps_prior_offset = "vps_prior_offset"
 
 
 class Outcome(str, Enum):
@@ -88,6 +104,7 @@ class Invariant(str, Enum):
     completion = "completion"           # mission completed, or aborted as expected; came down
     wall_descent = "wall_descent"       # never descending with a wall closer than X (H-011)
     navigation = "navigation"           # GNSS-free runs: no GNSS, origin, estimate vs truth
+    vps = "vps"                         # VPS in the loop: no false fix sent, rate >= the minimum
 
 
 # Why a run ends the way it does: the reasons each outcome may name.
@@ -98,9 +115,15 @@ REFUSAL_REASONS = {"unknown_parameter", "parameter_value", "altitude_frame", "mi
                    "upload_mismatch", "fault_unavailable", "home_mismatch",
                    # SIM-2n: the vehicle's navigation is not what the package needs (boot
                    # parameters, EKF origin); the AUTOPILOT refused to arm (its own checks).
-                   "nav_config", "arming_refused"}
+                   "nav_config", "arming_refused",
+                   # SIM-3: the companion holds another atlas than the package names, refuses to
+                   # stream, and the autopilot cannot arm
+                   "atlas_mismatch"}
 FAULT_REASONS = {FaultKind.gps_loss: "gps_loss", FaultKind.rc_loss: "rc_loss",
-                 FaultKind.gcs_loss: "gcs_loss", FaultKind.vps_loss: "vps_loss"}
+                 FaultKind.gcs_loss: "gcs_loss", FaultKind.vps_loss: "vps_loss",
+                 FaultKind.vps_degrade: "vps_loss"}
+VPS_FAULTS = (FaultKind.vps_degrade, FaultKind.vps_prior_offset)
+VPS_DEGRADE_LEVELS = ("strong", "severe")
 TURBULENCE_MPS = {"none": 0.0, "light": 1.0, "moderate": 2.0, "severe": 4.0}
 DEFAULT_INVARIANTS = {
     Outcome.complete: (Invariant.clearance, Invariant.fence, Invariant.hover, Invariant.heading,
@@ -139,7 +162,9 @@ class Fault(_Model):
         allowed = {FaultKind.battery_sag: {"level", "voltage_v"},
                    FaultKind.wind_gust: {"speed_mps", "dir_deg", "turbulence_mps"},
                    FaultKind.motor_degraded: {"motor", "thrust"},
-                   FaultKind.gps_spoof: {"offset_m"}}.get(self.fault, set())
+                   FaultKind.gps_spoof: {"offset_m"},
+                   FaultKind.vps_degrade: {"level"},
+                   FaultKind.vps_prior_offset: {"offset_m"}}.get(self.fault, set())
         given = {k for k in ("level", "voltage_v", "speed_mps", "dir_deg", "turbulence_mps",
                              "motor", "thrust", "offset_m") if getattr(self, k) is not None}
         extra = given - allowed
@@ -154,10 +179,13 @@ class Fault(_Model):
             raise ValueError("wind_gust needs speed_mps")
         if self.fault is FaultKind.motor_degraded and (self.motor is None or self.thrust is None):
             raise ValueError("motor_degraded needs motor and thrust")
-        if self.fault is FaultKind.gps_spoof:
+        if self.fault in (FaultKind.gps_spoof, FaultKind.vps_prior_offset):
             if self.offset_m is None or not 0 < (self.offset_m[0] ** 2 + self.offset_m[1] ** 2) \
                     ** 0.5 <= 5000:
-                raise ValueError("gps_spoof needs offset_m: [north, east], 0 < |offset| <= 5 km")
+                raise ValueError(f"{self.fault.value} needs offset_m: [north, east], "
+                                 f"0 < |offset| <= 5 km")
+        if self.fault is FaultKind.vps_degrade and self.level not in VPS_DEGRADE_LEVELS:
+            raise ValueError(f"vps_degrade needs level: one of {', '.join(VPS_DEGRADE_LEVELS)}")
         role, _, when = self.after.partition(":")
         if not role or any(c.isspace() for c in self.after) or when not in ("", "reached")                 or (role == "start" and when):
             raise ValueError(f"after '{self.after}' must be 'start', a waypoint role, or "
@@ -223,6 +251,41 @@ class Reaction(_Model):
     backoff_speed_mps: float = Field(0.5, gt=0, le=3)
     backoff_timeout_s: float = Field(30.0, gt=0, le=300)   # then land wherever it is
     regain_s: float = Field(1.0, ge=0, le=60)           # fixes this long: back to source set 1
+    # VPS lost on the mission's own final LAND item: switch to flow and let the landing finish
+    # instead of stopping it (a camera tilted down loses the ground's texture near touchdown —
+    # the localizability's landing gap; a wall in the guard distance still makes it back off).
+    # None: on with VPS in the loop (SIM-3), off with the error model (SIM-2n, unchanged).
+    landing_on_flow: Optional[bool] = None
+
+
+class VpsSim(_Model):
+    """VPS in the loop (SIM-3): the companion localizes camera frames rendered from the TRUE
+    pose against the package's atlas, with the autopilot's estimate as the prior, instead of an
+    error model. Truth places the camera (and drives its rolling shutter); nothing else."""
+
+    # The site run whose splat is the world the camera sees (read-only); relative to the YAML.
+    run_dir: str
+    # What the companion holds (default: the package's own file); relative to the YAML.
+    atlas: Optional[str] = None
+    level: str = "mild"                 # camera effects every frame (aerosplat.vps.perturb)
+    rolling_shutter: bool = True        # skew from the TRUE angular rate (camera profile readout)
+    fps: int = Field(30, ge=1, le=120)  # sensor mode, for the readout time
+    rate_hz: Optional[float] = Field(None, gt=0, le=30)    # default: the vehicle profile's
+    # Each result is held until at least this long after its capture (a slower companion than
+    # this PC: the Pi 5 is not measured yet). The real compute time is always on top.
+    min_latency_ms: float = Field(0.0, ge=0, le=2000)
+    prior_sigma_m: float = Field(3.0, gt=0, le=50)      # the prior's σ with a recent fix
+    prior_growth_mps: float = Field(0.5, ge=0, le=10)   # ... growing this fast without one
+    prior_yaw_deg: float = Field(5.0, gt=0, le=45)
+    # No fix this long = lost (default: max(0.5 s, 2.5 frame periods)).
+    loss_confirm_s: Optional[float] = Field(None, gt=0, le=10)
+
+    @field_validator("level")
+    @classmethod
+    def _level(cls, v: str) -> str:
+        if v not in ("clean", "mild", "strong"):
+            raise ValueError(f"vps level '{v}' is not clean / mild / strong (severe is a fault)")
+        return v
 
 
 class NavSim(_Model):
@@ -245,6 +308,7 @@ class NavSim(_Model):
     spoof_threshold_m: float = Field(8.0, gt=0, le=1000)        # monitor: GNSS vs VPS
     reaction: Reaction = Reaction()
     seed: int = Field(0, ge=0)
+    vps: Optional[VpsSim] = None        # SIM-3: the real VPS on rendered frames, not the model
 
     @field_validator("gnss")
     @classmethod
@@ -253,6 +317,25 @@ class NavSim(_Model):
             raise ValueError("nav describes a GNSS-free run (gnss none / monitor); a GNSS run "
                              "has no nav block")
         return v
+
+    @model_validator(mode="after")
+    def _model_or_loop(self) -> "NavSim":
+        if self.vps is not None:
+            model = [k for k in ("sigma_m", "sigma_z_m", "yaw_sigma_deg", "vel_sigma_mps",
+                                 "latency_ms", "rate_hz") if getattr(self, k) is not None]
+            if self.bias_sigma_m:
+                model.append("bias_sigma_m")
+            if self.zones:
+                model.append("zones")
+            if model:
+                raise ValueError(f"VPS in the loop has no error model: drop {', '.join(model)} "
+                                 f"(the rate is vps.rate_hz)")
+        return self
+
+    @property
+    def landing_on_flow(self) -> bool:
+        lf = self.reaction.landing_on_flow
+        return (self.vps is not None) if lf is None else lf
 
 
 class ArduPilotSpec(_Model):
@@ -277,6 +360,11 @@ class Tolerances(_Model):
     # GNSS-free runs: EKF estimate vs truth, horizontally, while VPS has a fix.
     nav_error_m: float = Field(1.5, gt=0, le=50)
     spoof_detect_s: float = Field(3.0, gt=0, le=60)    # GNSS spoof flagged within this
+    # VPS in the loop: a fix sent with a true error above this is a false fix (none allowed);
+    # frames localized per second while airborne at least `vps_min_rate_hz` (default: the
+    # vehicle profile's minimum).
+    false_fix_m: float = Field(2.0, gt=0, le=50)
+    vps_min_rate_hz: Optional[float] = Field(None, gt=0, le=30)
 
 
 class Expect(_Model):
@@ -375,9 +463,17 @@ class Scenario(_Model):
             if not zones and not any(f.reason == e.reason for f in self.faults):
                 raise ValueError(f"abort '{e.reason}' expected, but no fault causes it")
         nav_faults = [f.fault.value for f in self.faults
-                      if f.fault in (FaultKind.vps_loss, FaultKind.gps_spoof)]
+                      if f.fault in (FaultKind.vps_loss, FaultKind.gps_spoof, *VPS_FAULTS)]
         if nav_faults and self.nav is None:
             raise ValueError(f"{', '.join(nav_faults)} need a GNSS-free run: give `nav`")
+        loop = [f.fault.value for f in self.faults if f.fault in VPS_FAULTS]
+        if loop and (self.nav is None or self.nav.vps is None):
+            raise ValueError(f"{', '.join(loop)} need VPS in the loop: give `nav.vps`")
+        if self.nav is not None and self.nav.vps is not None and self.speedup not in (None, 1):
+            # SITL's built-in physics cannot be paused per frame: the camera, the renderer and the
+            # localizer run in wall-clock time, so simulation time must be wall-clock time too.
+            raise ValueError("VPS in the loop flies at speedup 1 (the localizer's compute time is "
+                             "real time)")
         if self.nav is not None:
             if any(f.fault is FaultKind.gps_spoof for f in self.faults) \
                     and self.nav.gnss is not GnssUse.monitor:
