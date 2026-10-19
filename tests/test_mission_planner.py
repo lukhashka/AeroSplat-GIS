@@ -17,6 +17,7 @@ from aerosplat.authored.models import Lifecycle
 from aerosplat.mission.corridor import Plane, check_leg
 from aerosplat.mission.models import (AltitudeFrame, AltitudeFrameError, Code, HandoverOverride,
                                       MissionRefused, PlanningProfile, Severity, Verdict)
+from aerosplat.mission import planner
 from aerosplat.mission.planner import cone_directions, convex_hull, heading_deg, plan_mission
 from aerosplat.surface.models import OCCUPIED, UNKNOWN
 
@@ -156,6 +157,56 @@ def test_an_entry_point_pushed_off_the_grid_is_refused(tmp_path, street):
 def test_a_mission_well_inside_the_grid_is_not_refused(tmp_path, street):
     p = plan(tmp_path, street, home_enu=(0.0, -30.0, 0.0))    # 10 m from the edge
     assert Code.outside_grid not in codes(p)
+
+
+def test_a_cone_that_cannot_stay_inside_the_grid_is_refused_before_any_corridor_check(
+        tmp_path, street, monkeypatch):
+    # E 45 m in front of the window with an approach corridor of r = 13.6 m: E is 10 m from
+    # the edge and needs 14.6, and no direction of the 30° cone brings it closer than 11.5.
+    # Checking those wide corridors, which reach beyond the grid, took about two minutes.
+    calls = []
+    monkeypatch.setattr(planner, "check_leg", lambda *a, **k: calls.append(a) or check_leg(*a, **k))
+    with pytest.raises(MissionRefused) as e:
+        plan(tmp_path, street, target_kw={
+            "override": HandoverOverride(entry_distance_m=45.0, min_clearance_m=10.0)})
+    assert refused_codes(e) == [Code.outside_grid] and calls == []
+    detail = e.value.findings[0].detail
+    assert "entry E (0.0, -30.0) needs 14.6 m to the edge, has 10.0" in detail
+    assert "all 24 other directions of the 30° approach cone fall short too" in detail
+    assert "occupancy_bbox=" in detail
+
+
+SQ = math.sqrt(0.5)
+
+
+def window_at(center, normal=(0.0, -1.0, 0.0)):
+    geom = ms.window_ap().geometry.model_copy(update={"center": center, "normal": normal})
+    return ms.window_ap(geometry=geom)
+
+
+@pytest.mark.parametrize("ap, early", [
+    (window_at((0.0, -26.0, 9.0)), True),          # E pushed off the grid in every direction
+    (window_at((-28.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), True),
+    (window_at((-26.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), False),   # direct E short, tilted ones not
+    (window_at((-27.0, 0.0, 9.0), (-SQ, -SQ, 0.0)), False),
+    (ms.window_ap(), False),
+    (ms.roof_pad_ap(), False),
+], ids=["entry-pushed-off", "diagonal-28", "diagonal-26", "diagonal-27", "window", "roof-pad"])
+def test_the_early_refusal_changes_no_outcome(tmp_path, street, monkeypatch, ap, early):
+    """The cone check before the cone search only refuses what the check after it would."""
+    def outcome(sub):
+        try:
+            p = plan(tmp_path / sub, street, ap)
+        except MissionRefused as e:
+            return [f.code for f in e.findings]
+        return p.verdict, p.approach.direction, p.approach.hover, p.approach.entry, codes(p)
+
+    calls = []
+    monkeypatch.setattr(planner, "check_leg", lambda *a, **k: calls.append(a) or check_leg(*a, **k))
+    now = outcome("now")
+    assert (calls == []) is early
+    monkeypatch.setattr(planner, "require_cone_inside_grid", lambda *a, **k: None)
+    assert outcome("without") == now
 
 
 def test_wider_radius_is_what_catches_unknown_space_beside_the_corridor(tmp_path):

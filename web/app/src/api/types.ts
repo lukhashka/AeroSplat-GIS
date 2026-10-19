@@ -773,12 +773,22 @@ export interface PlanningProfile {
   surface_relief_m?: number;
 }
 
-export interface TakeoffQuery {
-  run_id?: string;
-  profile?: PlanningProfile;
+/** How far and how hard the takeoff search looks; unset = the server's default. */
+export interface TakeoffParams {
   max_distance_m?: number; // default 150
   n?: number; // default 5
   ground_tol_m?: number; // default 1
+  max_checks?: number; // default 40, 1..400: exact checks before "not confirmed, raise max_checks"
+}
+
+export interface TakeoffQuery extends TakeoffParams {
+  run_id?: string;
+  profile?: PlanningProfile;
+}
+
+/** `home_enu` is candidate #rank of the search with these parameters (on the plan's run and profile). */
+export interface HomeFromSearch extends TakeoffParams {
+  rank: number;
 }
 
 /** A place to arm and take off from, checked as a plan's home and takeoff would be. */
@@ -817,6 +827,8 @@ export interface MissionCreate {
   run_id?: string;
   home_enu?: Vec3; // default: the Site origin, on the surface
   home_search?: boolean; // instead of home_enu: the nearest spot of the takeoff search
+  // with home_enu: the server runs the search again; 409 takeoff_spot_changed when #rank is no longer there
+  home_from_search?: HomeFromSearch;
   profile?: PlanningProfile;
   altitude_frame?: "relative_home";
   by?: string;

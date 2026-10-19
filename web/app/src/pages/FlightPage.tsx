@@ -61,7 +61,13 @@ export function FlightPage() {
   const missions = useMissions(project, site);
   const sims = useSiteSims(project, site);
   const [planning, setPlanning] = useState(false);
-  const showPlanner = planning || (!!missions.data && !missions.data.length);
+  // Open by default while the site has no missions, and kept open once shown so: planning the
+  // first mission refetches the list, which must not unmount the panel before it shows the verdict.
+  const noMissions = !!missions.data && !missions.data.length;
+  useEffect(() => {
+    if (noMissions) setPlanning(true);
+  }, [noMissions]);
+  const showPlanner = planning || noMissions;
 
   // mission and run: from the URL, else the newest mission that has flown, else the first one
   const flown = useMemo(() => new Set((sims.data ?? []).map((r) => r.mission_id)), [sims.data]);
@@ -137,10 +143,7 @@ export function FlightPage() {
         <MissionPlanner
           project={project}
           site={site}
-          onPlanned={(id) => {
-            setPlanning(true); // stays open with the verdict when this was the site's first mission
-            select(id);
-          }}
+          onPlanned={(id) => select(id)}
         />
       )}
       {missions.data && !missions.data.length && (

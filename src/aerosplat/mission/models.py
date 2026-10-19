@@ -51,6 +51,8 @@ class Code(str, Enum):
     ap_missing = "ap_missing"
     outside_grid = "outside_grid"               # the mission leaves the occupancy grid: no check
     no_takeoff_spot = "no_takeoff_spot"         # home search found no spot for this profile
+    # the takeoff search, run again, no longer proposes the spot the operator chose from it
+    takeoff_spot_changed = "takeoff_spot_changed"
     target_not_confirmed = "target_not_confirmed"
     target_revoked = "target_revoked"
     target_changed = "target_changed"           # the access point was edited after confirmation

@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import {
   circleEnu,
+  parseCount,
   planBody,
   profileFromForm,
   refusalOf,
@@ -18,10 +19,25 @@ const OUTSIDE_GRID =
   "edge, has -60.0. Outside the grid nothing is known, so the corridor cannot be checked. Rebuild occupancy with " +
   "an extent that holds it, e.g. --set occupancy_bbox=-40,-30,120,120 (or a larger occupancy_radius, or a Site bbox)";
 
-test("a chosen candidate goes as home_enu, never with home_search", () => {
-  const body = planBody("tgt_1", { kind: "candidate", enu: [-5.2, -37.8, -166.7] }, { run_id: "r1", profile: { sigma_gnss_m: 0.1 } });
-  assert.deepEqual(body, { target_id: "tgt_1", run_id: "r1", profile: { sigma_gnss_m: 0.1 }, home_enu: [-5.2, -37.8, -166.7] });
+test("a chosen candidate goes as home_enu with the search it came from, never with home_search", () => {
+  // The query the result was found with: run and profile go with the plan, the rest says which search.
+  const query = { run_id: "r1", profile: { sigma_gnss_m: 0.1 }, max_distance_m: 60, max_checks: 120 };
+  const body = planBody(
+    "tgt_1",
+    { kind: "candidate", rank: 2, enu: [-5.2, -37.8, -166.7], search: query },
+    { run_id: query.run_id, profile: query.profile },
+  );
+  assert.deepEqual(body, {
+    target_id: "tgt_1",
+    run_id: "r1",
+    profile: { sigma_gnss_m: 0.1 },
+    home_enu: [-5.2, -37.8, -166.7],
+    home_from_search: { rank: 2, max_distance_m: 60, max_checks: 120 }, // the server forbids other fields here
+  });
   assert.equal("home_search" in body, false);
+
+  const plain = planBody("tgt_1", { kind: "candidate", rank: 1, enu: [1, 2, 3], search: {} });
+  assert.deepEqual(plain.home_from_search, { rank: 1 }); // a search with the server's defaults
 });
 
 test("the server's own search goes as home_search, without home_enu", () => {
@@ -85,6 +101,14 @@ test("a search is identified by its parameters", () => {
   assert.notEqual(a, searchKey("tgt_1", { profile: { sigma_gnss_m: 0.1 } }));
   assert.notEqual(a, searchKey("tgt_2", { profile: { sigma_gnss_m: 1.5 } }));
   assert.notEqual(a, searchKey("tgt_1", { profile: { sigma_gnss_m: 1.5 }, run_id: "r2" }));
+  assert.equal(a, searchKey("tgt_1", { profile: { sigma_gnss_m: 1.5 }, max_checks: 40 }));
+  assert.notEqual(a, searchKey("tgt_1", { profile: { sigma_gnss_m: 1.5 }, max_checks: 200 }));
+});
+
+test("max_checks is a whole number within the server's bounds, or blank for its default", () => {
+  assert.deepEqual(parseCount(" ", 400), { value: undefined });
+  assert.deepEqual(parseCount("200", 400), { value: 200 });
+  for (const bad of ["0", "401", "12.5", "багато"]) assert.ok("error" in parseCount(bad, 400), bad);
 });
 
 test("circles are closed rings at the radius", () => {

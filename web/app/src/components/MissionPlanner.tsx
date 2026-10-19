@@ -5,6 +5,8 @@ import type { GeoPoint, MissionFinding, MissionPlan, MissionRefusal, MissionTarg
 import {
   fmtEnu,
   type HomeChoice,
+  MAX_CHECKS_LIMIT,
+  parseCount,
   parseOptional,
   planBody,
   profileFromForm,
@@ -43,6 +45,7 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
   const [runId, setRunId] = useState("");
   const [form, setForm] = useState({ sigma_gnss_m: "", r_drone_m: "" });
   const [reach, setReach] = useState("");
+  const [checks, setChecks] = useState("");
   const [found, setFound] = useState<Found | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [planned, setPlanned] = useState<MissionPlan | null>(null);
@@ -55,7 +58,15 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
 
   const prof = profileFromForm(form);
   const dist = parseOptional(reach);
-  const formError = "error" in prof ? prof.error : "error" in dist ? `max_distance_m: ${dist.error}` : null;
+  const budget = parseCount(checks, MAX_CHECKS_LIMIT);
+  const formError =
+    "error" in prof
+      ? prof.error
+      : "error" in dist
+        ? `max_distance_m: ${dist.error}`
+        : "error" in budget
+          ? `max_checks: ${budget.error}`
+          : null;
   const profile = "profile" in prof ? prof.profile : undefined;
   const query: TakeoffQuery | null = formError
     ? null
@@ -63,6 +74,7 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
         ...(runId ? { run_id: runId } : {}),
         ...(profile ? { profile } : {}),
         ...("value" in dist && dist.value !== undefined ? { max_distance_m: dist.value } : {}),
+        ...("value" in budget && budget.value !== undefined ? { max_checks: budget.value } : {}),
       };
   const key = query && tid ? searchKey(tid, query) : null;
   const stale = found !== null && found.key !== key;
@@ -135,6 +147,13 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
           <NumberField label="σ_GNSS, м" hint="типово сервера: 1.5" value={form.sigma_gnss_m} onChange={(v) => setForm((f) => ({ ...f, sigma_gnss_m: v }))} />
           <NumberField label="r_drone, м" hint="типово: 0.5" value={form.r_drone_m} onChange={(v) => setForm((f) => ({ ...f, r_drone_m: v }))} />
           <NumberField label="Пошук до, м" hint={`типово: ${SEARCH_DEFAULTS.max_distance_m}`} value={reach} onChange={setReach} />
+          <NumberField
+            label="Точних перевірок"
+            hint={`типово: ${SEARCH_DEFAULTS.max_checks}`}
+            title={`max_checks, 1…${MAX_CHECKS_LIMIT}: скільки місць пошук перевіряє точно, перш ніж сказати «не підтверджено»`}
+            value={checks}
+            onChange={setChecks}
+          />
           <button className="btn primary" disabled={!tid || !query || busy} onClick={find}>
             <Icon name="pin" /> {search.isPending ? "Шукаю…" : "Знайти місце зльоту"}
           </button>
@@ -161,8 +180,12 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
           <button
             className="btn primary"
             disabled={!chosen || busy}
-            title={chosen ? `Дім = місце #${chosen.rank} (E/N ${fmtEnu(chosen.enu)} м)` : "Спершу знайдіть і виберіть місце зльоту"}
-            onClick={() => chosen && planWith({ kind: "candidate", enu: chosen.enu })}
+            title={
+              chosen
+                ? `Дім = місце #${chosen.rank} (E/N ${fmtEnu(chosen.enu)} м). Сервер повторить пошук з тими самими параметрами; якщо #${chosen.rank} вже інше місце — 409 takeoff_spot_changed`
+                : "Спершу знайдіть і виберіть місце зльоту"
+            }
+            onClick={() => chosen && found && planWith({ kind: "candidate", rank: chosen.rank, enu: chosen.enu, search: found.query })}
           >
             <Icon name="play" />{" "}
             {plan.isPending && !pendingSearchHome
@@ -192,9 +215,21 @@ export function MissionPlanner({ project, site, onPlanned }: { project: string; 
   );
 }
 
-function NumberField({ label, hint, value, onChange }: { label: string; hint: string; value: string; onChange: (v: string) => void }) {
+function NumberField({
+  label,
+  hint,
+  title,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  title?: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
-    <label className="field planner-num">
+    <label className="field planner-num" title={title}>
       <span>{label}</span>
       <input type="text" inputMode="decimal" value={value} placeholder={hint} onChange={(e) => onChange(e.target.value)} />
     </label>
@@ -288,6 +323,13 @@ function TakeoffResult({
             </table>
           </div>
         )}
+
+        {s.rejected.not_checked ? (
+          <div className="note warn">
+            Пошук зупинився на ліміті точних перевірок ({s.checked}): {s.rejected.not_checked} колонок не перевірено. Збільште «Точних перевірок» (до{" "}
+            {MAX_CHECKS_LIMIT}) і шукайте знову.
+          </div>
+        ) : null}
 
         {s.best_open && (
           <div className="note warn">

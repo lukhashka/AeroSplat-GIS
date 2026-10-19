@@ -16,19 +16,20 @@ accepts them by name (ADR-0009, SIMULATION §3.1 PREFLIGHT).
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from aerosplat.authored.models import actor
 from aerosplat.authored.store import AuthoredError, NotFound
 from aerosplat.mission.export import ExportRefused
 from aerosplat.mission.models import (AltitudeFrame, AltitudeFrameError, Code, Finding,
                                       HandoverOverride, MissionPlan, MissionRefused, MissionTarget,
-                                      OccupancyRef, PlanningProfile, Severity, TakeoffSearch, Vec3,
-                                      Verdict)
+                                      OccupancyRef, PlanningProfile, Severity, TakeoffCandidate,
+                                      TakeoffSearch, Vec3, Verdict)
 from aerosplat.mission.planner import plan_mission
 from aerosplat.mission.store import MissionStore
 from aerosplat.mission.takeoff import find_takeoff_spots, load_ground, transit_point
@@ -86,23 +87,47 @@ class TargetConfirm(_In):
     by: Optional[str] = None
 
 
+class TakeoffParams(_In):
+    """How far and how hard the takeoff search looks (aerosplat.mission.takeoff)."""
+
+    max_distance_m: float = Field(150.0, gt=0, le=1000)
+    n: int = Field(5, ge=1, le=20)
+    ground_tol_m: float = Field(1.0, ge=0, le=5)
+    # Exact checks before the search stops with "not confirmed" (near the grid's edge many
+    # columns fail them); each costs a home, takeoff and transit check.
+    max_checks: int = Field(40, ge=1, le=400)
+
+
+class TakeoffQuery(TakeoffParams):
+    run_id: Optional[str] = None                        # default: the newest run with occupancy
+    profile: Optional[PlanningProfile] = None           # σ_GNSS, r_drone, margins
+
+
+class HomeFromSearch(TakeoffParams):
+    """`home_enu` is candidate #rank of the takeoff search with these parameters, on the
+    plan's run and profile."""
+
+    rank: int = Field(ge=1, le=20)
+
+    @model_validator(mode="after")
+    def _rank_within_n(self) -> "HomeFromSearch":
+        if self.rank > self.n:
+            raise ValueError(f"rank {self.rank} is beyond the n = {self.n} spots searched for")
+        return self
+
+
 class MissionCreate(_In):
     target_id: str
     run_id: Optional[str] = None                        # default: the newest run with occupancy
     home_enu: Optional[Vec3] = None                     # default: the Site origin, on the surface
     # Instead of home_enu: the nearest spot the takeoff search proposes (409 when there is none).
     home_search: bool = False
+    # With home_enu: where it came from. The search runs again and must still propose that
+    # spot under that rank (409 takeoff_spot_changed otherwise); home.source records it.
+    home_from_search: Optional[HomeFromSearch] = None
     profile: Optional[PlanningProfile] = None
     altitude_frame: AltitudeFrame = AltitudeFrame.relative_home
     by: Optional[str] = None
-
-
-class TakeoffQuery(_In):
-    run_id: Optional[str] = None                        # default: the newest run with occupancy
-    profile: Optional[PlanningProfile] = None           # σ_GNSS, r_drone, margins
-    max_distance_m: float = Field(150.0, gt=0, le=1000)
-    n: int = Field(5, ge=1, le=20)
-    ground_tol_m: float = Field(1.0, ge=0, le=5)
 
 
 class MissionExport(_In):
@@ -167,9 +192,12 @@ def confirm_target(project_id: str, site_id: str, target_id: str, body: TargetCo
 
 
 # ── takeoff spots ────────────────────────────────────────────────────────
+# A home within this of the candidate it names is that candidate (JSON keeps floats exact).
+SAME_SPOT_M = 0.01
+
+
 def _search_takeoff(cat: Catalog, site: Site, product: OccupancyProduct, target: MissionTarget,
-                    ap, profile: Optional[PlanningProfile], *, max_distance_m: float = 150.0,
-                    n: int = 5, ground_tol_m: float = 1.0) -> TakeoffSearch:
+                    ap, profile: Optional[PlanningProfile], params: TakeoffParams) -> TakeoffSearch:
     """The search on the occupancy of one run and the semantics terrain of the same run."""
     sem = find_semantics(cat, site, run_id=product.run.id)
     if sem is None:
@@ -177,7 +205,31 @@ def _search_takeoff(cat: Catalog, site: Site, product: OccupancyProduct, target:
                                  f"takeoff search needs its DTM and building map")
     return find_takeoff_spots(product.load_grid(), load_ground(sem.dir), transit_point(target, ap),
                               sigma_georef_m=target.sigma.georef.value_m, profile=profile,
-                              max_distance_m=max_distance_m, n=n, ground_tol_m=ground_tol_m)
+                              max_distance_m=params.max_distance_m, n=params.n,
+                              ground_tol_m=params.ground_tol_m, max_checks=params.max_checks)
+
+
+def _home_source(search: TakeoffSearch, spot: TakeoffCandidate, which: str) -> str:
+    return (f"takeoff search: {which} of {len(search.candidates)} spots within "
+            f"{search.max_distance_m:g} m, {spot.distance_m:.0f} m from the target, "
+            f"≈{spot.open_radius_m:.1f} m of open ground (r {search.radius_m:.2f} m)")
+
+
+def _chosen_spot(search: TakeoffSearch, rank: int, home_enu: Vec3) -> TakeoffCandidate:
+    """Candidate #rank of a search run again, if it is still the spot at `home_enu`."""
+    spot = next((c for c in search.candidates if c.rank == rank), None)
+    if spot is None:
+        detail = (f"the takeoff search, run again, has no spot #{rank} now "
+                  f"({len(search.candidates)} found): {search.message}")
+    elif math.dist(spot.enu, home_enu) > SAME_SPOT_M:
+        detail = (f"takeoff spot #{rank} is now at ({spot.enu[0]:.2f}, {spot.enu[1]:.2f}, "
+                  f"{spot.enu[2]:.2f}), {math.dist(spot.enu, home_enu):.2f} m from home_enu "
+                  f"({home_enu[0]:.2f}, {home_enu[1]:.2f}, {home_enu[2]:.2f}): the search's answer "
+                  f"changed (another run, profile or search parameters?). Search again")
+    else:
+        return spot
+    raise MissionRefused([Finding(code=Code.takeoff_spot_changed, severity=Severity.blocking,
+                                  detail=detail, at=home_enu)])
 
 
 @router.post("/sites/{project_id}/{site_id}/targets/{target_id}/takeoff",
@@ -199,9 +251,7 @@ def takeoff_spots(project_id: str, site_id: str, target_id: str,
         product = require_occupancy(cat, site, run_id=body.run_id)
     except OccupancyMissing as e:
         raise HTTPException(404, str(e)) from None
-    return _search_takeoff(cat, site, product, target, ap, body.profile,
-                           max_distance_m=body.max_distance_m, n=body.n,
-                           ground_tol_m=body.ground_tol_m)
+    return _search_takeoff(cat, site, product, target, ap, body.profile, body)
 
 
 # ── missions ─────────────────────────────────────────────────────────────
@@ -215,6 +265,8 @@ def create_mission(project_id: str, site_id: str, body: MissionCreate,
     """
     if body.home_search and body.home_enu is not None:
         raise HTTPException(422, "home_enu and home_search exclude each other")
+    if body.home_from_search is not None and body.home_enu is None:
+        raise HTTPException(422, "home_from_search says where home_enu came from: send both")
     site = _site(cat, project_id, site_id)
     targets = _targets(cat, site)
     try:
@@ -238,15 +290,18 @@ def create_mission(project_id: str, site_id: str, body: MissionCreate,
             raise MissionRefused(planning_findings(target, None))
         home_enu, home_source = body.home_enu, None
         if body.home_search:
-            search = _search_takeoff(cat, site, product, target, ap, body.profile)
+            search = _search_takeoff(cat, site, product, target, ap, body.profile, TakeoffParams())
             if not search.candidates:
                 raise MissionRefused([Finding(code=Code.no_takeoff_spot,
                                               severity=Severity.blocking, detail=search.message)])
-            best = search.candidates[0]
-            home_enu = best.enu
-            home_source = (f"takeoff search: nearest of {len(search.candidates)} spots, "
-                           f"{best.distance_m:.0f} m from the target, ≈{best.open_radius_m:.1f} m "
-                           f"of open ground (r {search.radius_m:.2f} m)")
+            home_enu = search.candidates[0].enu
+            home_source = _home_source(search, search.candidates[0], "nearest")
+        elif body.home_from_search is not None and body.home_enu is not None:
+            q = body.home_from_search
+            search = _search_takeoff(cat, site, product, target, ap, body.profile, q)
+            spot = _chosen_spot(search, q.rank, body.home_enu)
+            home_enu = spot.enu                     # the spot as the search checked it
+            home_source = _home_source(search, spot, f"#{q.rank} (the operator's choice)")
         plan = plan_mission(target=target, ap=ap, grid=product.load_grid(), occupancy=ref,
                             origin=site.origin, by=actor(body.by), profile=body.profile,
                             home_enu=home_enu, altitude_frame=body.altitude_frame,
