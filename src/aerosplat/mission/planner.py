@@ -223,8 +223,10 @@ def directions_inside_grid(grid: OccupancyGrid, directions: list[Direction], rad
 # ── the approach ─────────────────────────────────────────────────────────
 def corridor_radii(target: MissionTarget, prof: PlanningProfile) -> tuple[SigmaUsed, float, float]:
     """(σ used, r_app, r_tr): the corridor radius near the target and in transit (§7.2)."""
-    s_ap, s_geo, s_gnss = target.sigma.ap.value_m, target.sigma.georef.value_m, prof.sigma_gnss_m
-    sigma = SigmaUsed(ap_m=s_ap, georef_m=s_geo, gnss_m=s_gnss, target_m=math.hypot(s_ap, s_geo),
+    # σ of the position source: GNSS, or the declared ExternalNav of a GNSS-free profile (ADR-0015).
+    s_ap, s_geo, s_gnss = target.sigma.ap.value_m, target.sigma.georef.value_m, prof.sigma_nav_m
+    sigma = SigmaUsed(ap_m=s_ap, georef_m=s_geo, gnss_m=s_gnss, nav_source=prof.nav_source,
+                      target_m=math.hypot(s_ap, s_geo),
                       approach_m=math.sqrt(s_ap ** 2 + s_geo ** 2 + s_gnss ** 2),
                       transit_m=math.hypot(s_geo, s_gnss))
     r_app = prof.r_drone_m + target.handover.min_clearance_m + prof.k_sigma * sigma.approach_m

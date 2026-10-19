@@ -25,8 +25,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from aerosplat.geo.crs import EnuFrame, GeoPoint
-from aerosplat.mission.models import (AltitudeFrameError, MissionPlan, Vec3, Verdict,
-                                      require_relative)
+from aerosplat.mission.models import (AltitudeFrameError, GnssUse, MissionPlan, NavProfile, Vec3,
+                                      Verdict, require_relative)
 
 WPL_HEADER = "QGC WPL 110"
 MAV_FRAME_GLOBAL = 0                    # altitude above mean sea level
@@ -331,7 +331,84 @@ def parameters(plan: MissionPlan) -> list[tuple[str, float, str]]:
         ("AVOID_ENABLE", 3, "avoid fence + proximity sensors"),
         ("AVOID_MARGIN", margin, "m: the class's minimum clearance, held on board "
                                  f"(clamped to the documented {lo:g}..{hi:g} m)"),
+    ] + nav_parameters(p.nav)
+
+
+# Navigation (ADR-0015 §2.2, SIM-2n). EK3_SRCx values of PARAMS_FIRMWARE:
+EK3_POSXY_EXTNAV, EK3_VELXY_FLOW, EK3_VELXY_EXTNAV, EK3_POSZ_BARO, EK3_YAW_EXTNAV, EK3_YAW_COMPASS = \
+    6, 5, 6, 1, 6, 1
+# Parameters that act only after a reboot (@RebootRequired in the firmware, or the driver is
+# chosen at boot): a vehicle must be power-cycled with them set; a simulator boots with them.
+BOOT_PARAMS = frozenset({"GPS1_TYPE", "VISO_TYPE", "FLOW_TYPE", "RNGFND1_TYPE"})
+# VISO_*_M_NSE are floors (the firmware takes max(floor, the message's covariance)); their
+# documented ranges in PARAMS_FIRMWARE:
+VISO_YAW_NSE_RANGE_RAD = (0.05, 1.0)
+VISO_POS_NSE_RANGE_M = (0.1, 10.0)
+
+
+def nav_parameters(nav: NavProfile) -> list[tuple[str, float, str]]:
+    """The navigation section of the package: nothing for GNSS (the SIM-1 package as it was);
+    for a GNSS-free profile, EKF3 source sets on ExternalNav (+ optical flow) and nothing that
+    lets GNSS in. The sensors themselves (flow, rangefinder drivers) belong to the vehicle."""
+    if not nav.gnss_free:
+        return []
+    ext = nav.extnav
+    assert ext is not None
+    ylo, yhi = VISO_YAW_NSE_RANGE_RAD
+    plo, phi = VISO_POS_NSE_RANGE_M
+    out: list[tuple[str, float, str]] = [
+        ("GPS1_TYPE", 0 if nav.gnss is GnssUse.none else 1,
+         "no GNSS receiver in use from power-on (reboot)" if nav.gnss is GnssUse.none else
+         "GNSS receiver on as a MONITOR only: no EKF3 source below uses it (reboot)"),
+        ("VISO_TYPE", 1, "ExternalNav over MAVLink (ODOMETRY from the companion; reboot)"),
+        ("VISO_DELAY_MS", round(ext.latency_ms), "ms: VPS latency, declared"),
+        ("VISO_POS_M_NSE", min(max(ext.sigma_m, plo), phi),
+         "m: floor of the position noise; the message's covariance governs above it"),
+        ("VISO_YAW_M_NSE", round(min(max(math.radians(ext.yaw_sigma_deg), ylo), yhi), 4),
+         "rad: floor of the yaw noise"),
+        ("VISO_VEL_M_NSE", ext.vel_sigma_mps, "m/s: velocity noise (the firmware ignores the "
+                                              "message's velocity covariance)"),
+        ("EK3_SRC1_POSXY", EK3_POSXY_EXTNAV, "set 1 horizontal position: ExternalNav (VPS)"),
+        ("EK3_SRC1_VELXY", EK3_VELXY_EXTNAV, "set 1 horizontal velocity: ExternalNav"),
+        ("EK3_SRC1_POSZ", EK3_POSZ_BARO, "set 1 height: barometer"),
+        ("EK3_SRC1_VELZ", 0, "set 1 vertical velocity: none (barometer + IMU)"),
+        ("EK3_SRC1_YAW", EK3_YAW_EXTNAV, "set 1 yaw: ExternalNav (compass unreliable at buildings)"),
+        ("EK3_SRC_OPTIONS", 0, "only the active set is fused"),
+        ("ARMING_NEED_LOC", 1, "no arming without a position estimate in any mode"),
     ]
+    if nav.flow:
+        out += [
+            ("EK3_SRC2_POSXY", 0, "set 2 (VPS lost): no absolute position"),
+            ("EK3_SRC2_VELXY", EK3_VELXY_FLOW, "set 2 horizontal velocity: optical flow"),
+            ("EK3_SRC2_POSZ", EK3_POSZ_BARO, "set 2 height: barometer"),
+            ("EK3_SRC2_VELZ", 0, "set 2 vertical velocity: none"),
+            ("EK3_SRC2_YAW", EK3_YAW_COMPASS, "set 2 yaw: compass (the only yaw left without VPS)"),
+        ]
+    return out
+
+
+# EK3_SRCn_* values that take something from GNSS (PARAMS_FIRMWARE): GPS for position /
+# velocity, GPS / GPS-with-compass-fallback / GSF for yaw.
+GNSS_SOURCES = {"POSXY": {3}, "VELXY": {3}, "POSZ": {3}, "VELZ": {3}, "YAW": {2, 3, 8}}
+
+
+def nav_problems(nav: NavProfile, parm: dict[str, float]) -> list[str]:
+    """Why `parm` does not implement `nav`. For a GNSS-free profile every navigation parameter
+    must be there with its value, and no EKF3 source set may take anything from GNSS: a package
+    that would quietly fly on GNSS is refused, not exported (and not flown)."""
+    out = []
+    for name, value, _ in nav_parameters(nav):
+        if name not in parm:
+            out.append(f"{name} missing (navigation profile gnss {nav.gnss.value})")
+        elif not math.isclose(float(parm[name]), float(value), rel_tol=1e-6, abs_tol=1e-6):
+            out.append(f"{name} = {parm[name]:g}, the navigation profile needs {value:g}")
+    if nav.gnss_free:
+        for name, value in parm.items():
+            if name.startswith("EK3_SRC") and name[7:8].isdigit():
+                kind = name.split("_", 2)[2]
+                if int(value) in GNSS_SOURCES.get(kind, set()):
+                    out.append(f"{name} = {value:g} takes it from GNSS (profile gnss {nav.gnss.value})")
+    return out
 
 
 def format_parm(plan: MissionPlan) -> str:
@@ -340,6 +417,11 @@ def format_parm(plan: MissionPlan) -> str:
              f"{plan.target.handover.mode.value}), verdict {plan.verdict.value}",
              "# altitudes relative to home; " + HOME_ALT_NOTE.split(";")[0],
              f"# names, units and values for {PARAMS_FIRMWARE} (checked against its parameter table)"]
+    if plan.profile.nav.gnss_free:
+        lines.append(f"# navigation: gnss {plan.profile.nav.gnss.value}, ExternalNav (VPS)"
+                     + (" + optical flow" if plan.profile.nav.flow else "") + "; "
+                     + ", ".join(sorted(n for n, _, _ in nav_parameters(plan.profile.nav)
+                                        if n in BOOT_PARAMS)) + " act after a reboot")
     for name, value, why in parameters(plan):
         v = f"{value:g}" if isinstance(value, float) else str(value)
         lines.append(f"{name} {v}  # {why}")
@@ -367,7 +449,8 @@ def _manifest(plan: MissionPlan, origin: GeoPoint) -> dict:
             "risks": [f.code.value for f in plan.risks],
             "altitude_frame": plan.altitude_frame.value, "home_enu": list(plan.home.enu),
             "home_amsl_verified": plan.home.amsl_verified, "home_altitude_note": HOME_ALT_NOTE,
-            "occupancy_run": plan.occupancy.run_id, "taxonomy": plan.target.taxonomy}
+            "occupancy_run": plan.occupancy.run_id, "taxonomy": plan.target.taxonomy,
+            "nav": plan.profile.nav.model_dump(mode="json")}
 
 
 def render(plan: MissionPlan, origin: GeoPoint, fmt: str,
@@ -391,6 +474,10 @@ def render(plan: MissionPlan, origin: GeoPoint, fmt: str,
         check_wire(plan, origin, read_plan(text))
     else:
         text = format_parm(plan)
+        bad = nav_problems(plan.profile.nav, read_parm(text))
+        if bad:
+            raise ExportRefused("the package does not implement the navigation profile: "
+                                + "; ".join(bad))
     return name, media, text
 
 

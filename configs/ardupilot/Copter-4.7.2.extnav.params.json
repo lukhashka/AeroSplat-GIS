@@ -1,0 +1,6094 @@
+{
+ "tag": "Copter-4.7.2",
+ "commit": "fb773567896014da007bca58358704d4a0d8516f",
+ "source": "PARAM_REQUEST_LIST on SITL (-w, copter.parm defaults + boot VISO_TYPE 1, FLOW_TYPE 10, SIM_FLOW_ENABLE 1, RNGFND1_TYPE 100) + Tools/autotest/param_metadata/param_parse.py",
+ "generated": "2026-10-19T16:27:56Z",
+ "count": 1403,
+ "metadata_prefixes": [
+  "FENCE_",
+  "RTL_",
+  "WP_",
+  "FS_",
+  "BATT_",
+  "AVOID_",
+  "RALLY_",
+  "LAND_",
+  "SRTL_",
+  "MAV_GCS_",
+  "SIM_GPS1_",
+  "SIM_RC_",
+  "SIM_BATT_",
+  "SIM_WIND_",
+  "SIM_ENGINE_",
+  "SIM_SPEEDUP",
+  "RC_FS_",
+  "DISARM_",
+  "AUTO_OPTIONS",
+  "ARMING_",
+  "EK3_SRC1_",
+  "EK3_SRC",
+  "VISO_",
+  "FLOW_",
+  "RNGFND1_",
+  "GPS1_",
+  "SIM_FLOW_",
+  "SIM_SONAR_",
+  "COMPASS_",
+  "AHRS_",
+  "SIM_TERRAIN"
+ ],
+ "params": {
+  "ACRO_BAL_PITCH": {
+   "default": 1.0
+  },
+  "ACRO_BAL_ROLL": {
+   "default": 1.0
+  },
+  "ACRO_OPTIONS": {
+   "default": 0.0
+  },
+  "ACRO_RP_EXPO": {
+   "default": 0.30000001192092896
+  },
+  "ACRO_RP_RATE": {
+   "default": 360.0
+  },
+  "ACRO_RP_RATE_TC": {
+   "default": 0.0
+  },
+  "ACRO_THR_MID": {
+   "default": 0.0
+  },
+  "ACRO_TRAINER": {
+   "default": 2.0
+  },
+  "ACRO_Y_EXPO": {
+   "default": 0.0
+  },
+  "ACRO_Y_RATE": {
+   "default": 202.5
+  },
+  "ACRO_Y_RATE_TC": {
+   "default": 0.0
+  },
+  "ADSB_TYPE": {
+   "default": 0.0
+  },
+  "AHRS_COMP_BETA": {
+   "default": 0.10000000149011612,
+   "display": "AHRS Velocity Complementary Filter Beta Coefficient",
+   "range": [
+    0.001,
+    0.5
+   ]
+  },
+  "AHRS_EKF_TYPE": {
+   "default": 3.0,
+   "display": "Use NavEKF Kalman filter for attitude and position estimation",
+   "values": {
+    "0": "Disabled",
+    "10": "Sim",
+    "11": "ExternalAHRS",
+    "2": "Enable EKF2",
+    "3": "Enable EKF3"
+   }
+  },
+  "AHRS_GPS_GAIN": {
+   "default": 1.0,
+   "display": "AHRS GPS gain",
+   "range": [
+    0.0,
+    1.0
+   ]
+  },
+  "AHRS_GPS_MINSATS": {
+   "default": 6.0,
+   "display": "AHRS GPS Minimum satellites",
+   "range": [
+    0.0,
+    10.0
+   ]
+  },
+  "AHRS_GPS_USE": {
+   "default": 1.0,
+   "display": "AHRS use GPS for DCM navigation and position-down",
+   "values": {
+    "0": "Disabled",
+    "1": "Use GPS for DCM position",
+    "2": "Use GPS for DCM position and height"
+   }
+  },
+  "AHRS_OPTIONS": {
+   "default": 0.0,
+   "display": "Optional AHRS behaviour",
+   "bitmask": {
+    "0": "DisableDCMFallbackFW",
+    "1": "DisableDCMFallbackVTOL",
+    "2": "DontDisableAirspeedUsingEKF",
+    "3": "RecordOrigin",
+    "4": "UseRecordedOriginForNonGPS"
+   }
+  },
+  "AHRS_ORIENTATION": {
+   "default": 0.0,
+   "display": "Board Orientation",
+   "values": {
+    "0": "None",
+    "1": "Yaw45",
+    "10": "Yaw90Roll180",
+    "100": "Custom 4.1 and older",
+    "101": "Custom 1",
+    "102": "Custom 2",
+    "11": "Yaw135Roll180",
+    "12": "Pitch180",
+    "13": "Yaw225Roll180",
+    "14": "Yaw270Roll180",
+    "15": "Yaw315Roll180",
+    "16": "Roll90",
+    "17": "Yaw45Roll90",
+    "18": "Yaw90Roll90",
+    "19": "Yaw135Roll90",
+    "2": "Yaw90",
+    "20": "Roll270",
+    "21": "Yaw45Roll270",
+    "22": "Yaw90Roll270",
+    "23": "Yaw135Roll270",
+    "24": "Pitch90",
+    "25": "Pitch270",
+    "26": "Yaw90Pitch180",
+    "27": "Yaw270Pitch180",
+    "28": "Pitch90Roll90",
+    "29": "Pitch90Roll180",
+    "3": "Yaw135",
+    "30": "Pitch90Roll270",
+    "31": "Pitch180Roll90",
+    "32": "Pitch180Roll270",
+    "33": "Pitch270Roll90",
+    "34": "Pitch270Roll180",
+    "35": "Pitch270Roll270",
+    "36": "Yaw90Pitch180Roll90",
+    "37": "Yaw270Roll90",
+    "38": "Yaw293Pitch68Roll180",
+    "39": "Pitch315",
+    "4": "Yaw180",
+    "40": "Pitch315Roll90",
+    "42": "Roll45",
+    "43": "Roll315",
+    "5": "Yaw225",
+    "6": "Yaw270",
+    "7": "Yaw315",
+    "8": "Roll180",
+    "9": "Yaw45Roll180"
+   }
+  },
+  "AHRS_ORIGIN_ALT": {
+   "default": 0.0,
+   "display": "AHRS last origin altitude",
+   "range": [
+    -200.0,
+    5000.0
+   ]
+  },
+  "AHRS_ORIGIN_LAT": {
+   "default": 0.0,
+   "display": "AHRS last origin latitude",
+   "range": [
+    -180.0,
+    180.0
+   ]
+  },
+  "AHRS_ORIGIN_LON": {
+   "default": 0.0,
+   "display": "AHRS last origin longitude",
+   "range": [
+    -180.0,
+    180.0
+   ]
+  },
+  "AHRS_RP_P": {
+   "default": 0.20000000298023224,
+   "display": "AHRS RP_P",
+   "range": [
+    0.1,
+    0.4
+   ]
+  },
+  "AHRS_TRIM_X": {
+   "default": 0.0,
+   "units": "rad",
+   "display": "AHRS Trim Roll",
+   "range": [
+    -0.1745,
+    0.1745
+   ]
+  },
+  "AHRS_TRIM_Y": {
+   "default": 0.0,
+   "units": "rad",
+   "display": "AHRS Trim Pitch",
+   "range": [
+    -0.1745,
+    0.1745
+   ]
+  },
+  "AHRS_TRIM_Z": {
+   "default": 0.0,
+   "units": "rad",
+   "display": "AHRS Trim Yaw",
+   "range": [
+    -0.1745,
+    0.1745
+   ]
+  },
+  "AHRS_WIND_MAX": {
+   "default": 0.0,
+   "units": "m/s",
+   "display": "Maximum wind",
+   "range": [
+    0.0,
+    127.0
+   ]
+  },
+  "AHRS_YAW_P": {
+   "default": 0.20000000298023224,
+   "display": "Yaw P",
+   "range": [
+    0.1,
+    0.4
+   ]
+  },
+  "ARMING_ACCTHRESH": {
+   "default": 0.75,
+   "units": "m/s/s",
+   "display": "Accelerometer error threshold",
+   "range": [
+    0.25,
+    3.0
+   ]
+  },
+  "ARMING_MAGTHRESH": {
+   "default": 100.0,
+   "units": "mGauss",
+   "display": "Compass magnetic field strength error threshold vs earth magnetic model",
+   "range": [
+    0.0,
+    500.0
+   ]
+  },
+  "ARMING_MIS_ITEMS": {
+   "default": 0.0,
+   "display": "Required mission items",
+   "bitmask": {
+    "0": "Land",
+    "1": "VTOL Land",
+    "2": "DO_LAND_START",
+    "3": "Takeoff",
+    "4": "VTOL Takeoff",
+    "5": "Rallypoint",
+    "6": "RTL"
+   }
+  },
+  "ARMING_NEED_LOC": {
+   "default": 0.0,
+   "display": "Require vehicle location",
+   "values": {
+    "0": "Do not require location",
+    "1": "Require Location"
+   }
+  },
+  "ARMING_OPTIONS": {
+   "default": 0.0,
+   "display": "Arming options",
+   "bitmask": {
+    "0": "Disable prearm display",
+    "1": "Do not send status text on state change",
+    "2": "Skip IMU consistency checks when ICE motor running"
+   }
+  },
+  "ARMING_RUDDER": {
+   "default": 2.0,
+   "display": "Arming with Rudder enable/disable",
+   "values": {
+    "0": "Disabled",
+    "1": "ArmingOnly",
+    "2": "ArmOrDisarm"
+   }
+  },
+  "ARMING_SKIPCHK": {
+   "default": 0.0,
+   "display": "Arm Checks to Skip (bitmask)",
+   "bitmask": {
+    "1": "Barometer",
+    "10": "Logging Available",
+    "11": "Hardware safety switch",
+    "12": "GPS Configuration",
+    "13": "System",
+    "14": "Mission",
+    "15": "Rangefinder",
+    "16": "Camera",
+    "17": "AuxAuth",
+    "18": "VisualOdometry",
+    "19": "FFT",
+    "2": "Compass",
+    "3": "GPS lock",
+    "4": "INS",
+    "5": "Parameters",
+    "6": "RC Channels",
+    "7": "Board voltage",
+    "8": "Battery Level"
+   }
+  },
+  "ARSPD_ENABLE": {
+   "default": 0.0
+  },
+  "ATC_ACC_P_MAX": {
+   "default": 1100.0
+  },
+  "ATC_ACC_R_MAX": {
+   "default": 1100.0
+  },
+  "ATC_ACC_Y_MAX": {
+   "default": 270.0
+  },
+  "ATC_ANGLE_BOOST": {
+   "default": 1.0
+  },
+  "ATC_ANGLE_MAX": {
+   "default": 30.0
+  },
+  "ATC_ANG_LIM_TC": {
+   "default": 1.0
+  },
+  "ATC_ANG_PIT_P": {
+   "default": 4.5
+  },
+  "ATC_ANG_RLL_P": {
+   "default": 4.5
+  },
+  "ATC_ANG_YAW_P": {
+   "default": 4.5
+  },
+  "ATC_INPUT_TC": {
+   "default": 0.10000000149011612
+  },
+  "ATC_LAND_P_MULT": {
+   "default": 1.0
+  },
+  "ATC_LAND_R_MULT": {
+   "default": 1.0
+  },
+  "ATC_LAND_Y_MULT": {
+   "default": 1.0
+  },
+  "ATC_RATE_FF_ENAB": {
+   "default": 1.0
+  },
+  "ATC_RATE_P_MAX": {
+   "default": 0.0
+  },
+  "ATC_RATE_R_MAX": {
+   "default": 0.0
+  },
+  "ATC_RATE_WPY_MAX": {
+   "default": 60.0
+  },
+  "ATC_RATE_Y_MAX": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_D": {
+   "default": 0.003599999938160181
+  },
+  "ATC_RAT_PIT_D_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_FLTD": {
+   "default": 20.0
+  },
+  "ATC_RAT_PIT_FLTE": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_FLTT": {
+   "default": 20.0
+  },
+  "ATC_RAT_PIT_I": {
+   "default": 0.13500000536441803
+  },
+  "ATC_RAT_PIT_IMAX": {
+   "default": 0.5
+  },
+  "ATC_RAT_PIT_NEF": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_NTF": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_P": {
+   "default": 0.13500000536441803
+  },
+  "ATC_RAT_PIT_PDMX": {
+   "default": 0.0
+  },
+  "ATC_RAT_PIT_SMAX": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_D": {
+   "default": 0.003599999938160181
+  },
+  "ATC_RAT_RLL_D_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_FLTD": {
+   "default": 20.0
+  },
+  "ATC_RAT_RLL_FLTE": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_FLTT": {
+   "default": 20.0
+  },
+  "ATC_RAT_RLL_I": {
+   "default": 0.13500000536441803
+  },
+  "ATC_RAT_RLL_IMAX": {
+   "default": 0.5
+  },
+  "ATC_RAT_RLL_NEF": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_NTF": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_P": {
+   "default": 0.13500000536441803
+  },
+  "ATC_RAT_RLL_PDMX": {
+   "default": 0.0
+  },
+  "ATC_RAT_RLL_SMAX": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_D": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_D_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_FF": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_FLTD": {
+   "default": 20.0
+  },
+  "ATC_RAT_YAW_FLTE": {
+   "default": 2.5
+  },
+  "ATC_RAT_YAW_FLTT": {
+   "default": 20.0
+  },
+  "ATC_RAT_YAW_I": {
+   "default": 0.019999999552965164
+  },
+  "ATC_RAT_YAW_IMAX": {
+   "default": 0.5
+  },
+  "ATC_RAT_YAW_NEF": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_NTF": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_P": {
+   "default": 0.30000001192092896
+  },
+  "ATC_RAT_YAW_PDMX": {
+   "default": 0.0
+  },
+  "ATC_RAT_YAW_SMAX": {
+   "default": 0.0
+  },
+  "ATC_THR_G_BOOST": {
+   "default": 0.0
+  },
+  "ATC_THR_MIX_MAN": {
+   "default": 0.10000000149011612
+  },
+  "ATC_THR_MIX_MAX": {
+   "default": 0.5
+  },
+  "ATC_THR_MIX_MIN": {
+   "default": 0.10000000149011612
+  },
+  "AUTOTUNE_AGGR": {
+   "default": 0.07500000298023224
+  },
+  "AUTOTUNE_AXES": {
+   "default": 7.0
+  },
+  "AUTOTUNE_GMBK": {
+   "default": 0.25
+  },
+  "AUTOTUNE_MIN_D": {
+   "default": 0.0005000000237487257
+  },
+  "AUTO_OPTIONS": {
+   "default": 0.0,
+   "display": "Auto mode options",
+   "bitmask": {
+    "0": "Allow Arming",
+    "1": "Allow Takeoff Without Raising Throttle",
+    "2": "Ignore pilot yaw",
+    "7": "Allow weathervaning"
+   }
+  },
+  "AVD_ENABLE": {
+   "default": 0.0
+  },
+  "AVOID_ACCEL_MAX": {
+   "default": 3.0,
+   "units": "m/s/s",
+   "display": "Avoidance maximum acceleration",
+   "range": [
+    0.0,
+    9.0
+   ]
+  },
+  "AVOID_ALT_MIN": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Avoidance minimum altitude",
+   "range": [
+    0.0,
+    6.0
+   ]
+  },
+  "AVOID_BACKUP_DZ": {
+   "default": 0.10000000149011612,
+   "units": "m",
+   "display": "Avoidance deadzone between stopping and backing away from obstacle",
+   "range": [
+    0.0,
+    2.0
+   ]
+  },
+  "AVOID_BACKUP_SPD": {
+   "default": 0.75,
+   "units": "m/s",
+   "display": "Avoidance maximum horizontal backup speed",
+   "range": [
+    0.0,
+    2.0
+   ]
+  },
+  "AVOID_BACKZ_SPD": {
+   "default": 0.75,
+   "units": "m/s",
+   "display": "Avoidance maximum vertical backup speed",
+   "range": [
+    0.0,
+    2.0
+   ]
+  },
+  "AVOID_BEHAVE": {
+   "default": 0.0,
+   "display": "Avoidance behaviour",
+   "values": {
+    "0": "Slide",
+    "1": "Stop"
+   }
+  },
+  "AVOID_DIST_MAX": {
+   "default": 5.0,
+   "units": "m",
+   "display": "Avoidance distance maximum in non-GPS flight modes",
+   "range": [
+    1.0,
+    30.0
+   ]
+  },
+  "AVOID_ENABLE": {
+   "default": 3.0,
+   "display": "Avoidance control enable/disable",
+   "bitmask": {
+    "0": "UseFence",
+    "1": "UseProximitySensor",
+    "2": "UseBeaconFence"
+   }
+  },
+  "AVOID_MARGIN": {
+   "default": 2.0,
+   "units": "m",
+   "display": "Avoidance distance margin in GPS modes",
+   "range": [
+    1.0,
+    10.0
+   ]
+  },
+  "BARO1_DEVID": {
+   "default": 65540.0
+  },
+  "BARO1_GND_PRESS": {
+   "default": 98555.9921875
+  },
+  "BARO1_WCF_ENABLE": {
+   "default": 0.0
+  },
+  "BARO2_DEVID": {
+   "default": 65796.0
+  },
+  "BARO2_GND_PRESS": {
+   "default": 98557.3046875
+  },
+  "BARO2_WCF_ENABLE": {
+   "default": 0.0
+  },
+  "BARO3_DEVID": {
+   "default": 0.0
+  },
+  "BARO3_GND_PRESS": {
+   "default": 0.0
+  },
+  "BARO3_WCF_ENABLE": {
+   "default": 0.0
+  },
+  "BARO_ALTERR_MAX": {
+   "default": 2000.0
+  },
+  "BARO_ALT_OFFSET": {
+   "default": 0.0
+  },
+  "BARO_EXT_BUS": {
+   "default": -1.0
+  },
+  "BARO_FIELD_ELV": {
+   "default": 0.0
+  },
+  "BARO_FLTR_RNG": {
+   "default": 0.0
+  },
+  "BARO_GND_TEMP": {
+   "default": 0.0
+  },
+  "BARO_OPTIONS": {
+   "default": 0.0
+  },
+  "BARO_PRIMARY": {
+   "default": 0.0
+  },
+  "BARO_PROBE_EXT": {
+   "default": 0.0
+  },
+  "BATT2_MONITOR": {
+   "default": 0.0
+  },
+  "BATT3_MONITOR": {
+   "default": 0.0
+  },
+  "BATT4_MONITOR": {
+   "default": 0.0
+  },
+  "BATT5_MONITOR": {
+   "default": 0.0
+  },
+  "BATT6_MONITOR": {
+   "default": 0.0
+  },
+  "BATT7_MONITOR": {
+   "default": 0.0
+  },
+  "BATT8_MONITOR": {
+   "default": 0.0
+  },
+  "BATT9_MONITOR": {
+   "default": 0.0
+  },
+  "BATT_AMP_OFFSET": {
+   "default": 0.0,
+   "units": "V",
+   "display": "AMP offset"
+  },
+  "BATT_AMP_PERVLT": {
+   "default": 17.0,
+   "units": "A/V",
+   "display": "Amps per volt"
+  },
+  "BATT_ARM_MAH": {
+   "default": 0.0,
+   "units": "mAh",
+   "display": "Required arming remaining capacity"
+  },
+  "BATT_ARM_VOLT": {
+   "default": 0.0,
+   "units": "V",
+   "display": "Required arming voltage"
+  },
+  "BATT_CAPACITY": {
+   "default": 3300.0,
+   "units": "mAh",
+   "display": "Battery capacity"
+  },
+  "BATT_CRT_MAH": {
+   "default": 0.0,
+   "units": "mAh",
+   "display": "Battery critical capacity"
+  },
+  "BATT_CRT_VOLT": {
+   "default": 0.0,
+   "units": "V",
+   "display": "Critical battery voltage"
+  },
+  "BATT_CURR_PIN": {
+   "default": 12.0,
+   "display": "Battery Current sensing pin",
+   "range": [
+    -1.0,
+    127.0
+   ],
+   "values": {
+    "-1": "Disabled"
+   }
+  },
+  "BATT_FS_CRT_ACT": {
+   "default": 0.0,
+   "display": "Critical battery failsafe action",
+   "values": {
+    "0": "Warn only",
+    "1": "Land",
+    "2": "RTL",
+    "3": "SmartRTL or RTL",
+    "4": "SmartRTL or Land",
+    "5": "Terminate",
+    "6": "Auto DO_LAND_START/DO_RETURN_PATH_START or RTL",
+    "7": "Brake or Land"
+   }
+  },
+  "BATT_FS_LOW_ACT": {
+   "default": 0.0,
+   "display": "Low battery failsafe action",
+   "values": {
+    "0": "Warn only",
+    "1": "Land",
+    "2": "RTL",
+    "3": "SmartRTL or RTL",
+    "4": "SmartRTL or Land",
+    "5": "Terminate",
+    "6": "Auto DO_LAND_START/DO_RETURN_PATH_START or RTL",
+    "7": "Brake or Land"
+   }
+  },
+  "BATT_FS_VOLTSRC": {
+   "default": 0.0,
+   "display": "Failsafe voltage source",
+   "values": {
+    "0": "Raw Voltage",
+    "1": "Sag Compensated Voltage"
+   }
+  },
+  "BATT_LOW_MAH": {
+   "default": 0.0,
+   "units": "mAh",
+   "display": "Low battery capacity"
+  },
+  "BATT_LOW_TIMER": {
+   "default": 10.0,
+   "units": "s",
+   "display": "Low voltage timeout",
+   "range": [
+    0.0,
+    120.0
+   ]
+  },
+  "BATT_LOW_VOLT": {
+   "default": 10.5,
+   "units": "V",
+   "display": "Low battery voltage"
+  },
+  "BATT_MONITOR": {
+   "default": 4.0,
+   "display": "Battery monitoring",
+   "values": {
+    "0": "Disabled",
+    "10": "Sum Of Selected Monitors",
+    "11": "FuelFlow",
+    "12": "FuelLevelPWM",
+    "13": "SMBUS-SUI3",
+    "14": "SMBUS-SUI6",
+    "15": "NeoDesign",
+    "16": "SMBus-Maxell",
+    "17": "Generator-Elec",
+    "18": "Generator-Fuel",
+    "19": "Rotoye",
+    "20": "MPPT",
+    "21": "INA2XX (INA226 INA228 INA238 INA231 INA260)",
+    "22": "LTC2946",
+    "23": "Torqeedo",
+    "24": "FuelLevelAnalog",
+    "25": "Synthetic Current and Analog Voltage",
+    "26": "INA239_SPI",
+    "27": "EFI",
+    "28": "AD7091R5",
+    "29": "Scripting",
+    "3": "Analog Voltage Only",
+    "30": "INA3221",
+    "31": "Analog Current Only",
+    "32": "TIBQ76952-I2C (Periph only)",
+    "4": "Analog Voltage and Current",
+    "5": "Solo",
+    "6": "Bebop",
+    "7": "SMBus-Generic",
+    "8": "DroneCAN-BatteryInfo",
+    "9": "ESC"
+   }
+  },
+  "BATT_OPTIONS": {
+   "default": 0.0,
+   "display": "Battery monitor options",
+   "bitmask": {
+    "0": "Ignore DroneCAN SoC",
+    "1": "MPPT reports input voltage and current",
+    "10": "Allow DroneCAN dynamic node update on hot-swap",
+    "2": "MPPT Powered off when disarmed",
+    "3": "MPPT Powered on when armed",
+    "4": "MPPT Powered off at boot",
+    "5": "MPPT Powered on at boot",
+    "6": "Send resistance compensated voltage to GCS",
+    "7": "Allow DroneCAN InfoAux to be from a different CAN node",
+    "8": "Battery is for internal autopilot use only",
+    "9": "Sum monitor measures minimum voltage instead of average"
+   }
+  },
+  "BATT_SERIAL_NUM": {
+   "default": -1.0,
+   "display": "Battery serial number"
+  },
+  "BATT_VLT_OFFSET": {
+   "default": 0.0,
+   "units": "V",
+   "display": "Volage offset"
+  },
+  "BATT_VOLT_MULT": {
+   "default": 10.100000381469727,
+   "display": "Voltage Multiplier"
+  },
+  "BATT_VOLT_PIN": {
+   "default": 13.0,
+   "display": "Battery Voltage sensing pin on the AD7091R5 Ic",
+   "range": [
+    -1.0,
+    127.0
+   ],
+   "values": {
+    "-1": "Disabled"
+   }
+  },
+  "BCN_TYPE": {
+   "default": 0.0
+  },
+  "BRD_BOOT_DELAY": {
+   "default": 0.0
+  },
+  "BRD_OPTIONS": {
+   "default": 0.0
+  },
+  "BRD_RTC_TYPES": {
+   "default": 1.0
+  },
+  "BRD_RTC_TZ_MIN": {
+   "default": 0.0
+  },
+  "BRD_SAFETYOPTION": {
+   "default": 3.0
+  },
+  "BRD_SAFETY_DEFLT": {
+   "default": 0.0
+  },
+  "BRD_SAFETY_MASK": {
+   "default": 16368.0
+  },
+  "BRD_SD_FENCE": {
+   "default": 0.0
+  },
+  "BRD_SD_MISSION": {
+   "default": 0.0
+  },
+  "BRD_SERIAL_NUM": {
+   "default": 0.0
+  },
+  "BRD_VBUS_MIN": {
+   "default": 4.300000190734863
+  },
+  "BRD_VSERVO_MIN": {
+   "default": 0.0
+  },
+  "BTN_ENABLE": {
+   "default": 0.0
+  },
+  "CAM1_TYPE": {
+   "default": 0.0
+  },
+  "CAM2_TYPE": {
+   "default": 0.0
+  },
+  "CAM_AUTO_ONLY": {
+   "default": 0.0
+  },
+  "CAM_MAX_ROLL": {
+   "default": 0.0
+  },
+  "CAN_D1_PROTOCOL": {
+   "default": 1.0
+  },
+  "CAN_D1_PROTOCOL2": {
+   "default": 0.0
+  },
+  "CAN_D2_PROTOCOL": {
+   "default": 1.0
+  },
+  "CAN_D2_PROTOCOL2": {
+   "default": 0.0
+  },
+  "CAN_LOGLEVEL": {
+   "default": 0.0
+  },
+  "CAN_P1_DRIVER": {
+   "default": 0.0
+  },
+  "CAN_P2_DRIVER": {
+   "default": 0.0
+  },
+  "CC_TYPE": {
+   "default": 0.0
+  },
+  "CHUTE_ENABLED": {
+   "default": 0.0
+  },
+  "CIRCLE_OPTIONS": {
+   "default": 1.0
+  },
+  "CIRCLE_RADIUS_M": {
+   "default": 10.0
+  },
+  "CIRCLE_RATE": {
+   "default": 20.0
+  },
+  "COMPASS_AUTODEC": {
+   "default": 1.0,
+   "display": "Auto Declination",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "COMPASS_AUTO_ROT": {
+   "default": 2.0,
+   "display": "Automatically check orientation",
+   "values": {
+    "0": "Disabled",
+    "1": "CheckOnly",
+    "2": "CheckAndFix",
+    "3": "use same tolerance to auto rotate 45 deg rotations"
+   }
+  },
+  "COMPASS_CAL_FIT": {
+   "default": 16.0,
+   "display": "Compass calibration fitness",
+   "range": [
+    4.0,
+    32.0
+   ],
+   "values": {
+    "16": "Default",
+    "32": "Relaxed",
+    "4": "Very Strict",
+    "8": "Strict"
+   }
+  },
+  "COMPASS_DEC": {
+   "default": 0.0,
+   "units": "rad",
+   "display": "Compass declination",
+   "range": [
+    -3.142,
+    3.142
+   ]
+  },
+  "COMPASS_DEV_ID": {
+   "default": 97539.0,
+   "display": "Compass device id"
+  },
+  "COMPASS_DEV_ID2": {
+   "default": 131874.0,
+   "display": "Compass2 device id"
+  },
+  "COMPASS_DEV_ID3": {
+   "default": 263178.0,
+   "display": "Compass3 device id"
+  },
+  "COMPASS_DEV_ID4": {
+   "default": 97283.0,
+   "display": "Compass4 device id"
+  },
+  "COMPASS_DEV_ID5": {
+   "default": 97795.0,
+   "display": "Compass5 device id"
+  },
+  "COMPASS_DEV_ID6": {
+   "default": 98051.0,
+   "display": "Compass6 device id"
+  },
+  "COMPASS_DEV_ID7": {
+   "default": 0.0,
+   "display": "Compass7 device id"
+  },
+  "COMPASS_DEV_ID8": {
+   "default": 0.0,
+   "display": "Compass8 device id"
+  },
+  "COMPASS_DIA2_X": {
+   "default": 1.0,
+   "display": "Compass2 soft-iron diagonal X component"
+  },
+  "COMPASS_DIA2_Y": {
+   "default": 1.0,
+   "display": "Compass2 soft-iron diagonal Y component"
+  },
+  "COMPASS_DIA2_Z": {
+   "default": 1.0,
+   "display": "Compass2 soft-iron diagonal Z component"
+  },
+  "COMPASS_DIA3_X": {
+   "default": 1.0,
+   "display": "Compass3 soft-iron diagonal X component"
+  },
+  "COMPASS_DIA3_Y": {
+   "default": 1.0,
+   "display": "Compass3 soft-iron diagonal Y component"
+  },
+  "COMPASS_DIA3_Z": {
+   "default": 1.0,
+   "display": "Compass3 soft-iron diagonal Z component"
+  },
+  "COMPASS_DIA_X": {
+   "default": 1.0,
+   "display": "Compass soft-iron diagonal X component"
+  },
+  "COMPASS_DIA_Y": {
+   "default": 1.0,
+   "display": "Compass soft-iron diagonal Y component"
+  },
+  "COMPASS_DIA_Z": {
+   "default": 1.0,
+   "display": "Compass soft-iron diagonal Z component"
+  },
+  "COMPASS_DISBLMSK": {
+   "default": 0.0,
+   "display": "Compass disable driver type mask",
+   "bitmask": {
+    "0": "HMC5883",
+    "1": "LSM303D",
+    "11": "DroneCAN",
+    "12": "QMC5883",
+    "14": "MAG3110",
+    "15": "IST8308",
+    "16": "RM3100",
+    "17": "MSP",
+    "18": "ExternalAHRS",
+    "19": "MMC5XX3",
+    "2": "AK8963",
+    "20": "QMC5883P",
+    "21": "BMM350",
+    "22": "IIS2MDC or LIS2MDL",
+    "3": "BMM150",
+    "4": "LSM9DS1",
+    "5": "LIS3MDL",
+    "6": "AK0991x",
+    "7": "IST8310",
+    "8": "ICM20948",
+    "9": "MMC3416"
+   }
+  },
+  "COMPASS_ENABLE": {
+   "default": 1.0,
+   "display": "Enable Compass",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "COMPASS_EXTERN2": {
+   "default": 0.0,
+   "display": "Compass2 is attached via an external cable",
+   "values": {
+    "0": "Internal",
+    "1": "External",
+    "2": "ForcedExternal"
+   }
+  },
+  "COMPASS_EXTERN3": {
+   "default": 0.0,
+   "display": "Compass3 is attached via an external cable",
+   "values": {
+    "0": "Internal",
+    "1": "External",
+    "2": "ForcedExternal"
+   }
+  },
+  "COMPASS_EXTERNAL": {
+   "default": 1.0,
+   "display": "Compass is attached via an external cable",
+   "values": {
+    "0": "Internal",
+    "1": "External",
+    "2": "ForcedExternal"
+   }
+  },
+  "COMPASS_FLTR_RNG": {
+   "default": 0.0,
+   "units": "%",
+   "display": "Range in which sample is accepted",
+   "range": [
+    0.0,
+    100.0
+   ]
+  },
+  "COMPASS_LEARN": {
+   "default": 0.0,
+   "display": "Learn compass offsets automatically",
+   "values": {
+    "0": "Disabled",
+    "2": "EKF-Learning",
+    "3": "InFlight-Learning"
+   }
+  },
+  "COMPASS_MOT2_X": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass2 for body frame X axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT2_Y": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass2 for body frame Y axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT2_Z": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass2 for body frame Z axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT3_X": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass3 for body frame X axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT3_Y": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass3 for body frame Y axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT3_Z": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation to compass3 for body frame Z axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOTCT": {
+   "default": 0.0,
+   "display": "Motor interference compensation type",
+   "values": {
+    "0": "Disabled",
+    "1": "Use Throttle",
+    "2": "Use Current"
+   }
+  },
+  "COMPASS_MOT_X": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation for body frame X axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT_Y": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation for body frame Y axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_MOT_Z": {
+   "default": 0.0,
+   "units": "mGauss/A",
+   "display": "Motor interference compensation for body frame Z axis",
+   "range": [
+    -1000.0,
+    1000.0
+   ]
+  },
+  "COMPASS_ODI2_X": {
+   "default": 0.0,
+   "display": "Compass2 soft-iron off-diagonal X component"
+  },
+  "COMPASS_ODI2_Y": {
+   "default": 0.0,
+   "display": "Compass2 soft-iron off-diagonal Y component"
+  },
+  "COMPASS_ODI2_Z": {
+   "default": 0.0,
+   "display": "Compass2 soft-iron off-diagonal Z component"
+  },
+  "COMPASS_ODI3_X": {
+   "default": 0.0,
+   "display": "Compass3 soft-iron off-diagonal X component"
+  },
+  "COMPASS_ODI3_Y": {
+   "default": 0.0,
+   "display": "Compass3 soft-iron off-diagonal Y component"
+  },
+  "COMPASS_ODI3_Z": {
+   "default": 0.0,
+   "display": "Compass3 soft-iron off-diagonal Z component"
+  },
+  "COMPASS_ODI_X": {
+   "default": 0.0,
+   "display": "Compass soft-iron off-diagonal X component"
+  },
+  "COMPASS_ODI_Y": {
+   "default": 0.0,
+   "display": "Compass soft-iron off-diagonal Y component"
+  },
+  "COMPASS_ODI_Z": {
+   "default": 0.0,
+   "display": "Compass soft-iron off-diagonal Z component"
+  },
+  "COMPASS_OFFS_MAX": {
+   "default": 1800.0,
+   "display": "Compass maximum offset",
+   "range": [
+    500.0,
+    3000.0
+   ]
+  },
+  "COMPASS_OFS2_X": {
+   "default": 5.0,
+   "units": "mGauss",
+   "display": "Compass2 offsets in milligauss on the X axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS2_Y": {
+   "default": 13.0,
+   "units": "mGauss",
+   "display": "Compass2 offsets in milligauss on the Y axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS2_Z": {
+   "default": -18.0,
+   "units": "mGauss",
+   "display": "Compass2 offsets in milligauss on the Z axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS3_X": {
+   "default": 5.0,
+   "units": "mGauss",
+   "display": "Compass3 offsets in milligauss on the X axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS3_Y": {
+   "default": 13.0,
+   "units": "mGauss",
+   "display": "Compass3 offsets in milligauss on the Y axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS3_Z": {
+   "default": -18.0,
+   "units": "mGauss",
+   "display": "Compass3 offsets in milligauss on the Z axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS_X": {
+   "default": 5.0,
+   "units": "mGauss",
+   "display": "Compass offsets in milligauss on the X axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS_Y": {
+   "default": 13.0,
+   "units": "mGauss",
+   "display": "Compass offsets in milligauss on the Y axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OFS_Z": {
+   "default": -18.0,
+   "units": "mGauss",
+   "display": "Compass offsets in milligauss on the Z axis",
+   "range": [
+    -400.0,
+    400.0
+   ]
+  },
+  "COMPASS_OPTIONS": {
+   "default": 0.0,
+   "display": "Compass options",
+   "bitmask": {
+    "0": "CalRequireGPS",
+    "1": "Allow missing DroneCAN compasses to be automaticaly replaced (calibration still required)"
+   }
+  },
+  "COMPASS_ORIENT": {
+   "default": 0.0,
+   "display": "Compass orientation",
+   "values": {
+    "0": "None",
+    "1": "Yaw45",
+    "10": "Yaw90Roll180",
+    "100": "Custom 4.1 and older",
+    "101": "Custom 1",
+    "102": "Custom 2",
+    "11": "Yaw135Roll180",
+    "12": "Pitch180",
+    "13": "Yaw225Roll180",
+    "14": "Yaw270Roll180",
+    "15": "Yaw315Roll180",
+    "16": "Roll90",
+    "17": "Yaw45Roll90",
+    "18": "Yaw90Roll90",
+    "19": "Yaw135Roll90",
+    "2": "Yaw90",
+    "20": "Roll270",
+    "21": "Yaw45Roll270",
+    "22": "Yaw90Roll270",
+    "23": "Yaw135Roll270",
+    "24": "Pitch90",
+    "25": "Pitch270",
+    "26": "Yaw90Pitch180",
+    "27": "Yaw270Pitch180",
+    "28": "Pitch90Roll90",
+    "29": "Pitch90Roll180",
+    "3": "Yaw135",
+    "30": "Pitch90Roll270",
+    "31": "Pitch180Roll90",
+    "32": "Pitch180Roll270",
+    "33": "Pitch270Roll90",
+    "34": "Pitch270Roll180",
+    "35": "Pitch270Roll270",
+    "36": "Yaw90Pitch180Roll90",
+    "37": "Yaw270Roll90",
+    "38": "Yaw293Pitch68Roll180",
+    "39": "Pitch315",
+    "4": "Yaw180",
+    "40": "Pitch315Roll90",
+    "42": "Roll45",
+    "43": "Roll315",
+    "5": "Yaw225",
+    "6": "Yaw270",
+    "7": "Yaw315",
+    "8": "Roll180",
+    "9": "Yaw45Roll180"
+   }
+  },
+  "COMPASS_ORIENT2": {
+   "default": 0.0,
+   "display": "Compass2 orientation",
+   "values": {
+    "0": "None",
+    "1": "Yaw45",
+    "10": "Yaw90Roll180",
+    "100": "Custom 4.1 and older",
+    "101": "Custom 1",
+    "102": "Custom 2",
+    "11": "Yaw135Roll180",
+    "12": "Pitch180",
+    "13": "Yaw225Roll180",
+    "14": "Yaw270Roll180",
+    "15": "Yaw315Roll180",
+    "16": "Roll90",
+    "17": "Yaw45Roll90",
+    "18": "Yaw90Roll90",
+    "19": "Yaw135Roll90",
+    "2": "Yaw90",
+    "20": "Roll270",
+    "21": "Yaw45Roll270",
+    "22": "Yaw90Roll270",
+    "23": "Yaw135Roll270",
+    "24": "Pitch90",
+    "25": "Pitch270",
+    "26": "Yaw90Pitch180",
+    "27": "Yaw270Pitch180",
+    "28": "Pitch90Roll90",
+    "29": "Pitch90Roll180",
+    "3": "Yaw135",
+    "30": "Pitch90Roll270",
+    "31": "Pitch180Roll90",
+    "32": "Pitch180Roll270",
+    "33": "Pitch270Roll90",
+    "34": "Pitch270Roll180",
+    "35": "Pitch270Roll270",
+    "36": "Yaw90Pitch180Roll90",
+    "37": "Yaw270Roll90",
+    "38": "Yaw293Pitch68Roll180",
+    "39": "Pitch315",
+    "4": "Yaw180",
+    "40": "Pitch315Roll90",
+    "42": "Roll45",
+    "43": "Roll315",
+    "5": "Yaw225",
+    "6": "Yaw270",
+    "7": "Yaw315",
+    "8": "Roll180",
+    "9": "Yaw45Roll180"
+   }
+  },
+  "COMPASS_ORIENT3": {
+   "default": 0.0,
+   "display": "Compass3 orientation",
+   "values": {
+    "0": "None",
+    "1": "Yaw45",
+    "10": "Yaw90Roll180",
+    "100": "Custom 4.1 and older",
+    "101": "Custom 1",
+    "102": "Custom 2",
+    "11": "Yaw135Roll180",
+    "12": "Pitch180",
+    "13": "Yaw225Roll180",
+    "14": "Yaw270Roll180",
+    "15": "Yaw315Roll180",
+    "16": "Roll90",
+    "17": "Yaw45Roll90",
+    "18": "Yaw90Roll90",
+    "19": "Yaw135Roll90",
+    "2": "Yaw90",
+    "20": "Roll270",
+    "21": "Yaw45Roll270",
+    "22": "Yaw90Roll270",
+    "23": "Yaw135Roll270",
+    "24": "Pitch90",
+    "25": "Pitch270",
+    "26": "Yaw90Pitch180",
+    "27": "Yaw270Pitch180",
+    "28": "Pitch90Roll90",
+    "29": "Pitch90Roll180",
+    "3": "Yaw135",
+    "30": "Pitch90Roll270",
+    "31": "Pitch180Roll90",
+    "32": "Pitch180Roll270",
+    "33": "Pitch270Roll90",
+    "34": "Pitch270Roll180",
+    "35": "Pitch270Roll270",
+    "36": "Yaw90Pitch180Roll90",
+    "37": "Yaw270Roll90",
+    "38": "Yaw293Pitch68Roll180",
+    "39": "Pitch315",
+    "4": "Yaw180",
+    "40": "Pitch315Roll90",
+    "42": "Roll45",
+    "43": "Roll315",
+    "5": "Yaw225",
+    "6": "Yaw270",
+    "7": "Yaw315",
+    "8": "Roll180",
+    "9": "Yaw45Roll180"
+   }
+  },
+  "COMPASS_PMOT_EN": {
+   "default": 0.0,
+   "display": "per-motor compass correction enable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "COMPASS_PRIO1_ID": {
+   "default": 97539.0,
+   "display": "Compass device id with 1st order priority"
+  },
+  "COMPASS_PRIO2_ID": {
+   "default": 131874.0,
+   "display": "Compass device id with 2nd order priority"
+  },
+  "COMPASS_PRIO3_ID": {
+   "default": 263178.0,
+   "display": "Compass device id with 3rd order priority"
+  },
+  "COMPASS_SCALE": {
+   "default": 1.0,
+   "display": "Compass1 scale factor",
+   "range": [
+    0.0,
+    1.3
+   ]
+  },
+  "COMPASS_SCALE2": {
+   "default": 1.0,
+   "display": "Compass2 scale factor",
+   "range": [
+    0.0,
+    1.3
+   ]
+  },
+  "COMPASS_SCALE3": {
+   "default": 1.0,
+   "display": "Compass3 scale factor",
+   "range": [
+    0.0,
+    1.3
+   ]
+  },
+  "COMPASS_USE": {
+   "default": 1.0,
+   "display": "Use compass for yaw",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "COMPASS_USE2": {
+   "default": 1.0,
+   "display": "Compass2 used for yaw",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "COMPASS_USE3": {
+   "default": 1.0,
+   "display": "Compass3 used for yaw",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "CUST_ROT_ENABLE": {
+   "default": 0.0
+  },
+  "DEV_OPTIONS": {
+   "default": 0.0
+  },
+  "DID_ENABLE": {
+   "default": 0.0
+  },
+  "DISARM_DELAY": {
+   "default": 10.0,
+   "units": "s",
+   "display": "Disarm delay",
+   "range": [
+    0.0,
+    127.0
+   ]
+  },
+  "EAHRS_TYPE": {
+   "default": 0.0
+  },
+  "EFI_TYPE": {
+   "default": 0.0
+  },
+  "EK2_ENABLE": {
+   "default": 0.0
+  },
+  "EK3_ABIAS_P_NSE": {
+   "default": 0.019999999552965164
+  },
+  "EK3_ACC_BIAS_LIM": {
+   "default": 1.0
+  },
+  "EK3_ACC_P_NSE": {
+   "default": 0.3499999940395355
+  },
+  "EK3_AFFINITY": {
+   "default": 0.0
+  },
+  "EK3_ALT_M_NSE": {
+   "default": 2.0
+  },
+  "EK3_BCN_DELAY": {
+   "default": 50.0
+  },
+  "EK3_BCN_I_GTE": {
+   "default": 500.0
+  },
+  "EK3_BCN_M_NSE": {
+   "default": 1.0
+  },
+  "EK3_BETA_MASK": {
+   "default": 0.0
+  },
+  "EK3_CHECK_SCALE": {
+   "default": 100.0
+  },
+  "EK3_DRAG_BCOEF_X": {
+   "default": 0.0
+  },
+  "EK3_DRAG_BCOEF_Y": {
+   "default": 0.0
+  },
+  "EK3_DRAG_MCOEF": {
+   "default": 0.0
+  },
+  "EK3_DRAG_M_NSE": {
+   "default": 0.5
+  },
+  "EK3_EAS_I_GATE": {
+   "default": 400.0
+  },
+  "EK3_EAS_M_NSE": {
+   "default": 1.399999976158142
+  },
+  "EK3_ENABLE": {
+   "default": 1.0
+  },
+  "EK3_ERR_THRESH": {
+   "default": 0.20000000298023224
+  },
+  "EK3_FLOW_DELAY": {
+   "default": 10.0
+  },
+  "EK3_FLOW_I_GATE": {
+   "default": 300.0
+  },
+  "EK3_FLOW_MAX": {
+   "default": 2.5
+  },
+  "EK3_FLOW_M_NSE": {
+   "default": 0.25
+  },
+  "EK3_FLOW_USE": {
+   "default": 1.0
+  },
+  "EK3_GBIAS_P_NSE": {
+   "default": 0.0010000000474974513
+  },
+  "EK3_GLITCH_RAD": {
+   "default": 25.0
+  },
+  "EK3_GND_EFF_DZ": {
+   "default": 4.0
+  },
+  "EK3_GPS_CHECK": {
+   "default": 31.0
+  },
+  "EK3_GPS_VACC_MAX": {
+   "default": 0.0
+  },
+  "EK3_GSF_RST_MAX": {
+   "default": 2.0
+  },
+  "EK3_GSF_RUN_MASK": {
+   "default": 3.0
+  },
+  "EK3_GSF_USE_MASK": {
+   "default": 3.0
+  },
+  "EK3_GYRO_P_NSE": {
+   "default": 0.014999999664723873
+  },
+  "EK3_HGT_DELAY": {
+   "default": 60.0
+  },
+  "EK3_HGT_I_GATE": {
+   "default": 500.0
+  },
+  "EK3_HRT_FILT": {
+   "default": 2.0
+  },
+  "EK3_IMU_MASK": {
+   "default": 3.0
+  },
+  "EK3_LOG_LEVEL": {
+   "default": 0.0
+  },
+  "EK3_MAGB_P_NSE": {
+   "default": 9.999999747378752e-05
+  },
+  "EK3_MAGE_P_NSE": {
+   "default": 0.0010000000474974513
+  },
+  "EK3_MAG_CAL": {
+   "default": 3.0
+  },
+  "EK3_MAG_EF_LIM": {
+   "default": 50.0
+  },
+  "EK3_MAG_I_GATE": {
+   "default": 300.0
+  },
+  "EK3_MAG_MASK": {
+   "default": 0.0
+  },
+  "EK3_MAG_M_NSE": {
+   "default": 0.05000000074505806
+  },
+  "EK3_NOAID_M_NSE": {
+   "default": 10.0
+  },
+  "EK3_OGNM_TEST_SF": {
+   "default": 2.0
+  },
+  "EK3_OGN_HGT_MASK": {
+   "default": 0.0
+  },
+  "EK3_OPTIONS": {
+   "default": 0.0
+  },
+  "EK3_POSNE_M_NSE": {
+   "default": 0.5
+  },
+  "EK3_POS_I_GATE": {
+   "default": 500.0
+  },
+  "EK3_PRIMARY": {
+   "default": 0.0
+  },
+  "EK3_RNG_I_GATE": {
+   "default": 500.0
+  },
+  "EK3_RNG_M_NSE": {
+   "default": 0.5
+  },
+  "EK3_RNG_USE_HGT": {
+   "default": -1.0
+  },
+  "EK3_RNG_USE_SPD": {
+   "default": 2.0
+  },
+  "EK3_SRC1_POSXY": {
+   "default": 3.0,
+   "display": "Position Horizontal Source (Primary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC1_POSZ": {
+   "default": 1.0,
+   "display": "Position Vertical Source",
+   "values": {
+    "0": "None",
+    "1": "Baro",
+    "2": "RangeFinder",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC1_VELXY": {
+   "default": 3.0,
+   "display": "Velocity Horizontal Source",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "5": "OpticalFlow",
+    "6": "ExternalNav",
+    "7": "WheelEncoder"
+   }
+  },
+  "EK3_SRC1_VELZ": {
+   "default": 3.0,
+   "display": "Velocity Vertical Source",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC1_YAW": {
+   "default": 1.0,
+   "display": "Yaw Source",
+   "values": {
+    "0": "None",
+    "1": "Compass",
+    "2": "GPS",
+    "3": "GPS with Compass Fallback",
+    "6": "ExternalNav",
+    "8": "GSF"
+   }
+  },
+  "EK3_SRC2_POSXY": {
+   "default": 0.0,
+   "display": "Position Horizontal Source (Secondary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC2_POSZ": {
+   "default": 1.0,
+   "display": "Position Vertical Source (Secondary)",
+   "values": {
+    "0": "None",
+    "1": "Baro",
+    "2": "RangeFinder",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC2_VELXY": {
+   "default": 0.0,
+   "display": "Velocity Horizontal Source (Secondary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "5": "OpticalFlow",
+    "6": "ExternalNav",
+    "7": "WheelEncoder"
+   }
+  },
+  "EK3_SRC2_VELZ": {
+   "default": 0.0,
+   "display": "Velocity Vertical Source (Secondary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC2_YAW": {
+   "default": 0.0,
+   "display": "Yaw Source (Secondary)",
+   "values": {
+    "0": "None",
+    "1": "Compass",
+    "2": "GPS",
+    "3": "GPS with Compass Fallback",
+    "6": "ExternalNav",
+    "8": "GSF"
+   }
+  },
+  "EK3_SRC3_POSXY": {
+   "default": 0.0,
+   "display": "Position Horizontal Source (Tertiary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC3_POSZ": {
+   "default": 1.0,
+   "display": "Position Vertical Source (Tertiary)",
+   "values": {
+    "0": "None",
+    "1": "Baro",
+    "2": "RangeFinder",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC3_VELXY": {
+   "default": 0.0,
+   "display": "Velocity Horizontal Source (Tertiary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "5": "OpticalFlow",
+    "6": "ExternalNav",
+    "7": "WheelEncoder"
+   }
+  },
+  "EK3_SRC3_VELZ": {
+   "default": 0.0,
+   "display": "Velocity Vertical Source (Tertiary)",
+   "values": {
+    "0": "None",
+    "3": "GPS",
+    "4": "Beacon",
+    "6": "ExternalNav"
+   }
+  },
+  "EK3_SRC3_YAW": {
+   "default": 0.0,
+   "display": "Yaw Source (Tertiary)",
+   "values": {
+    "0": "None",
+    "1": "Compass",
+    "2": "GPS",
+    "3": "GPS with Compass Fallback",
+    "6": "ExternalNav",
+    "8": "GSF"
+   }
+  },
+  "EK3_SRC_OPTIONS": {
+   "default": 0.0,
+   "display": "EKF Source Options",
+   "bitmask": {
+    "0": "FuseAllVelocities",
+    "1": "AlignExtNavPosWhenUsingOptFlow",
+    "3": "UsePerCoreEKFSources"
+   }
+  },
+  "EK3_TAU_OUTPUT": {
+   "default": 25.0
+  },
+  "EK3_TERR_GRAD": {
+   "default": 0.10000000149011612
+  },
+  "EK3_VELD_M_NSE": {
+   "default": 0.5
+  },
+  "EK3_VELNE_M_NSE": {
+   "default": 0.30000001192092896
+  },
+  "EK3_VEL_I_GATE": {
+   "default": 500.0
+  },
+  "EK3_VIS_VERR_MAX": {
+   "default": 0.8999999761581421
+  },
+  "EK3_VIS_VERR_MIN": {
+   "default": 0.10000000149011612
+  },
+  "EK3_WENC_VERR": {
+   "default": 0.10000000149011612
+  },
+  "EK3_WIND_PSCALE": {
+   "default": 1.0
+  },
+  "EK3_WIND_P_NSE": {
+   "default": 0.20000000298023224
+  },
+  "EK3_YAW_I_GATE": {
+   "default": 300.0
+  },
+  "EK3_YAW_M_NSE": {
+   "default": 0.5
+  },
+  "ESC_CALIBRATION": {
+   "default": 0.0
+  },
+  "ESC_TLM_MAV_OFS": {
+   "default": 0.0
+  },
+  "FENCE_ACTION": {
+   "default": 1.0,
+   "display": "Fence Action",
+   "values": {
+    "0": "Report Only",
+    "1": "RTL or Land",
+    "2": "Always Land",
+    "3": "SmartRTL or RTL or Land",
+    "4": "Brake or Land",
+    "5": "SmartRTL or Land"
+   }
+  },
+  "FENCE_ALT_MAX": {
+   "default": 100.0,
+   "units": "m",
+   "display": "Fence Maximum Altitude",
+   "range": [
+    10.0,
+    1000.0
+   ]
+  },
+  "FENCE_ALT_MAX_TP": {
+   "default": 1.0,
+   "display": "Altitude max frame type",
+   "values": {
+    "0": "Above sea level",
+    "1": "Above Home",
+    "2": "Above Origin",
+    "3": "Above Terrain"
+   }
+  },
+  "FENCE_ALT_MIN": {
+   "default": -10.0,
+   "units": "m",
+   "display": "Fence Minimum Altitude",
+   "range": [
+    -100.0,
+    100.0
+   ]
+  },
+  "FENCE_ALT_MIN_TP": {
+   "default": 1.0,
+   "display": "Altitude min frame type",
+   "values": {
+    "0": "Above sea level",
+    "1": "Above Home",
+    "2": "Above Origin",
+    "3": "Above Terrain"
+   }
+  },
+  "FENCE_AUTOENABLE": {
+   "default": 0.0,
+   "display": "Fence Auto-Enable",
+   "range": [
+    0.0,
+    3.0
+   ],
+   "values": {
+    "0": "AutoEnableOff",
+    "1": "AutoEnableOnTakeoff",
+    "2": "AutoEnableDisableFloorOnLanding",
+    "3": "AutoEnableOnlyWhenArmed"
+   }
+  },
+  "FENCE_ENABLE": {
+   "default": 0.0,
+   "display": "Fence enable/disable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "FENCE_MARGIN": {
+   "default": 2.0,
+   "units": "m",
+   "display": "Fence Margin",
+   "range": [
+    1.0,
+    10.0
+   ]
+  },
+  "FENCE_MARGIN_XY": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Fence Horizontal Margin",
+   "range": [
+    0.0,
+    50.0
+   ]
+  },
+  "FENCE_NTF_FREQ": {
+   "default": 1.0,
+   "units": "Hz",
+   "display": "Fence margin notification frequency in hz",
+   "range": [
+    0.0,
+    10.0
+   ]
+  },
+  "FENCE_OPTIONS": {
+   "default": 0.0,
+   "display": "Fence options",
+   "bitmask": {
+    "0": "Disable mode change following fence action until fence breach is cleared",
+    "1": "Allow union of inclusion areas",
+    "2": "Notify on margin breaches"
+   }
+  },
+  "FENCE_RADIUS": {
+   "default": 150.0,
+   "units": "m",
+   "display": "Circular Fence Radius",
+   "range": [
+    30.0,
+    10000.0
+   ]
+  },
+  "FENCE_TOTAL": {
+   "default": 0.0,
+   "display": "Fence polygon point total",
+   "range": [
+    1.0,
+    20.0
+   ]
+  },
+  "FENCE_TYPE": {
+   "default": 7.0,
+   "display": "Fence Type",
+   "bitmask": {
+    "0": "Max altitude",
+    "1": "Circle Centered on Home",
+    "2": "Inclusion/Exclusion Circles+Polygons",
+    "3": "Min altitude"
+   }
+  },
+  "FFT_ENABLE": {
+   "default": 0.0
+  },
+  "FHLD_BRAKE_RATE": {
+   "default": 8.0
+  },
+  "FHLD_FILT_HZ": {
+   "default": 5.0
+  },
+  "FHLD_FLOW_MAX": {
+   "default": 0.6000000238418579
+  },
+  "FHLD_QUAL_MIN": {
+   "default": 10.0
+  },
+  "FHLD_XY_FILT_HZ": {
+   "default": 5.0
+  },
+  "FHLD_XY_I": {
+   "default": 0.30000001192092896
+  },
+  "FHLD_XY_IMAX": {
+   "default": 3000.0
+  },
+  "FHLD_XY_P": {
+   "default": 0.20000000298023224
+  },
+  "FILT1_TYPE": {
+   "default": 0.0
+  },
+  "FILT2_TYPE": {
+   "default": 0.0
+  },
+  "FILT3_TYPE": {
+   "default": 0.0
+  },
+  "FILT4_TYPE": {
+   "default": 0.0
+  },
+  "FILT5_TYPE": {
+   "default": 0.0
+  },
+  "FILT6_TYPE": {
+   "default": 0.0
+  },
+  "FILT7_TYPE": {
+   "default": 0.0
+  },
+  "FILT8_TYPE": {
+   "default": 0.0
+  },
+  "FLIGHT_OPTIONS": {
+   "default": 0.0
+  },
+  "FLOW_ADDR": {
+   "default": 0.0,
+   "display": "Address on the bus",
+   "range": [
+    0.0,
+    127.0
+   ]
+  },
+  "FLOW_FXSCALER": {
+   "default": 0.0,
+   "display": "X axis optical flow scale factor correction",
+   "range": [
+    -800.0,
+    800.0
+   ]
+  },
+  "FLOW_FYSCALER": {
+   "default": 0.0,
+   "display": "Y axis optical flow scale factor correction",
+   "range": [
+    -800.0,
+    800.0
+   ]
+  },
+  "FLOW_OPTIONS": {
+   "default": 0.0,
+   "display": "Optical flow options",
+   "bitmask": {
+    "0": "Roll/Pitch stabilised"
+   }
+  },
+  "FLOW_ORIENT_YAW": {
+   "default": 0.0,
+   "units": "cdeg",
+   "display": "Flow sensor yaw alignment",
+   "range": [
+    -17999.0,
+    18000.0
+   ]
+  },
+  "FLOW_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "X position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "FLOW_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Y position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "FLOW_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Z position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "FLOW_TYPE": {
+   "default": 10.0,
+   "display": "Optical flow sensor type",
+   "values": {
+    "0": "None",
+    "1": "PX4Flow",
+    "10": "SITL",
+    "2": "Pixart",
+    "3": "Bebop",
+    "4": "CXOF",
+    "5": "MAVLink",
+    "6": "DroneCAN",
+    "7": "MSP",
+    "8": "UPFLOW"
+   }
+  },
+  "FLTMODE1": {
+   "default": 7.0
+  },
+  "FLTMODE2": {
+   "default": 9.0
+  },
+  "FLTMODE3": {
+   "default": 6.0
+  },
+  "FLTMODE4": {
+   "default": 3.0
+  },
+  "FLTMODE5": {
+   "default": 5.0
+  },
+  "FLTMODE6": {
+   "default": 0.0
+  },
+  "FLTMODE_CH": {
+   "default": 5.0
+  },
+  "FLTMODE_GCSBLOCK": {
+   "default": 0.0
+  },
+  "FOLL_ENABLE": {
+   "default": 0.0
+  },
+  "FORMAT_VERSION": {
+   "default": 120.0
+  },
+  "FRAME_CLASS": {
+   "default": 1.0
+  },
+  "FRAME_TYPE": {
+   "default": 0.0
+  },
+  "FRSKY_DNLINK1_ID": {
+   "default": 20.0
+  },
+  "FRSKY_DNLINK2_ID": {
+   "default": 7.0
+  },
+  "FRSKY_DNLINK_ID": {
+   "default": 27.0
+  },
+  "FRSKY_OPTIONS": {
+   "default": 0.0
+  },
+  "FRSKY_UPLINK_ID": {
+   "default": 13.0
+  },
+  "FSTRATE_DIV": {
+   "default": 1.0
+  },
+  "FSTRATE_ENABLE": {
+   "default": 0.0
+  },
+  "FS_CRASH_CHECK": {
+   "default": 1.0,
+   "display": "Crash check enable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "FS_DR_ENABLE": {
+   "default": 2.0,
+   "display": "DeadReckon Failsafe Action",
+   "values": {
+    "0": "Disabled/NoAction",
+    "1": "Land",
+    "2": "RTL",
+    "3": "SmartRTL or RTL",
+    "4": "SmartRTL or Land",
+    "6": "Auto DO_LAND_START/DO_RETURN_PATH_START or RTL"
+   }
+  },
+  "FS_DR_TIMEOUT": {
+   "default": 30.0,
+   "display": "DeadReckon Failsafe Timeout",
+   "range": [
+    0.0,
+    120.0
+   ]
+  },
+  "FS_EKF_ACTION": {
+   "default": 1.0,
+   "display": "EKF Failsafe Action",
+   "values": {
+    "0": "Report only",
+    "1": "Switch to Land mode if current mode requires position",
+    "2": "Switch to AltHold mode if current mode requires position",
+    "3": "Switch to Land mode from all modes"
+   }
+  },
+  "FS_EKF_FILT": {
+   "default": 5.0,
+   "units": "Hz",
+   "display": "EKF Failsafe filter cutoff",
+   "range": [
+    0.0,
+    10.0
+   ]
+  },
+  "FS_EKF_THRESH": {
+   "default": 0.800000011920929,
+   "display": "EKF failsafe variance threshold",
+   "range": [
+    0.0,
+    1.0
+   ]
+  },
+  "FS_GCS_ENABLE": {
+   "default": 0.0,
+   "display": "Ground Station Failsafe Enable",
+   "values": {
+    "0": "Disabled/NoAction",
+    "1": "RTL",
+    "2": "RTL or Continue with Mission in Auto Mode (Removed in 4.0+-see FS_OPTIONS)",
+    "3": "SmartRTL or RTL",
+    "4": "SmartRTL or Land",
+    "5": "Land",
+    "6": "Auto DO_LAND_START/DO_RETURN_PATH_START or RTL",
+    "7": "Brake or Land"
+   }
+  },
+  "FS_GCS_TIMEOUT": {
+   "default": 5.0,
+   "units": "s",
+   "display": "GCS failsafe timeout",
+   "range": [
+    2.0,
+    120.0
+   ]
+  },
+  "FS_OPTIONS": {
+   "default": 16.0,
+   "display": "Failsafe options bitmask",
+   "bitmask": {
+    "0": "Continue if in Auto on RC failsafe",
+    "1": "Continue if in Auto on GCS failsafe",
+    "2": "Continue if in Guided on RC failsafe",
+    "3": "Continue if landing on any failsafe",
+    "4": "Continue if in pilot controlled modes on GCS failsafe",
+    "5": "Release Gripper"
+   }
+  },
+  "FS_THR_ENABLE": {
+   "default": 1.0,
+   "display": "Throttle Failsafe Enable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled always RTL",
+    "2": "Enabled Continue with Mission in Auto Mode (Removed in 4.0+)",
+    "3": "Enabled always Land",
+    "4": "Enabled always SmartRTL or RTL",
+    "5": "Enabled always SmartRTL or Land",
+    "6": "Enabled Auto DO_LAND_START/DO_RETURN_PATH_START or RTL",
+    "7": "Enabled always Brake or Land"
+   }
+  },
+  "FS_THR_VALUE": {
+   "default": 975.0,
+   "units": "PWM",
+   "display": "Throttle Failsafe Value",
+   "range": [
+    910.0,
+    1100.0
+   ]
+  },
+  "FS_VIBE_ENABLE": {
+   "default": 1.0,
+   "display": "Vibration Failsafe enable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "GCS_PID_MASK": {
+   "default": 0.0
+  },
+  "GEN_TYPE": {
+   "default": 0.0
+  },
+  "GND_EFFECT_COMP": {
+   "default": 1.0
+  },
+  "GPS1_CAN_NODEID": {
+   "default": 0.0,
+   "display": "Detected CAN Node ID for GPS"
+  },
+  "GPS1_CAN_OVRIDE": {
+   "default": 0.0,
+   "display": "DroneCAN GPS NODE ID"
+  },
+  "GPS1_COM_PORT": {
+   "default": 1.0,
+   "display": "GPS physical COM port",
+   "range": [
+    0.0,
+    10.0
+   ],
+   "values": {
+    "0": "COM1(RS232) on GSOF",
+    "1": "COM2(TTL) on GSOF"
+   }
+  },
+  "GPS1_DELAY_MS": {
+   "default": 0.0,
+   "units": "ms",
+   "display": "GPS delay in milliseconds",
+   "range": [
+    0.0,
+    250.0
+   ]
+  },
+  "GPS1_GNSS_MODE": {
+   "default": 0.0,
+   "display": "GNSS system configuration",
+   "bitmask": {
+    "0": "GPS",
+    "1": "SBAS",
+    "2": "Galileo",
+    "3": "Beidou",
+    "4": "IMES",
+    "5": "QZSS",
+    "6": "GLONASS",
+    "7": "NAVIC"
+   }
+  },
+  "GPS1_MB_TYPE": {
+   "default": 0.0,
+   "display": "Moving base type",
+   "values": {
+    "0": "Relative to alternate GPS instance",
+    "1": "RelativeToCustomBase"
+   }
+  },
+  "GPS1_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Antenna X position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "GPS1_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Antenna Y position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "GPS1_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Antenna Z position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "GPS1_RATE_MS": {
+   "default": 200.0,
+   "units": "ms",
+   "display": "GPS update rate in milliseconds",
+   "range": [
+    50.0,
+    200.0
+   ],
+   "values": {
+    "100": "10Hz",
+    "125": "8Hz",
+    "200": "5Hz"
+   }
+  },
+  "GPS1_TYPE": {
+   "default": 1.0,
+   "display": "GPS type",
+   "values": {
+    "0": "None",
+    "1": "AUTO",
+    "10": "Septentrio(SBF)",
+    "11": "Trimble(GSOF)",
+    "13": "ERB",
+    "14": "MAVLink",
+    "15": "NOVA",
+    "16": "HemisphereNMEA",
+    "17": "uBlox-MovingBaseline-Base",
+    "18": "uBlox-MovingBaseline-Rover",
+    "19": "MSP",
+    "2": "uBlox",
+    "20": "AllyStar",
+    "21": "ExternalAHRS",
+    "22": "DroneCAN-MovingBaseline-Base",
+    "23": "DroneCAN-MovingBaseline-Rover",
+    "24": "UnicoreNMEA",
+    "25": "UnicoreMovingBaselineNMEA",
+    "26": "Septentrio-DualAntenna(SBF)",
+    "5": "NMEA",
+    "6": "SiRF",
+    "7": "HIL",
+    "8": "SwiftNav",
+    "9": "DroneCAN"
+   }
+  },
+  "GPS2_TYPE": {
+   "default": 0.0
+  },
+  "GPS_AUTO_CONFIG": {
+   "default": 1.0
+  },
+  "GPS_AUTO_SWITCH": {
+   "default": 1.0
+  },
+  "GPS_BLEND_MASK": {
+   "default": 5.0
+  },
+  "GPS_DRV_OPTIONS": {
+   "default": 0.0
+  },
+  "GPS_HDOP_GOOD": {
+   "default": 140.0
+  },
+  "GPS_INJECT_TO": {
+   "default": 127.0
+  },
+  "GPS_MIN_ELEV": {
+   "default": -100.0
+  },
+  "GPS_NAVFILTER": {
+   "default": 8.0
+  },
+  "GPS_PRIMARY": {
+   "default": 0.0
+  },
+  "GPS_RAW_DATA": {
+   "default": 0.0
+  },
+  "GPS_SAVE_CFG": {
+   "default": 2.0
+  },
+  "GPS_SBAS_MODE": {
+   "default": 2.0
+  },
+  "GPS_SBP_LOGMASK": {
+   "default": -256.0
+  },
+  "GRIP_ENABLE": {
+   "default": 0.0
+  },
+  "GUID_OPTIONS": {
+   "default": 0.0
+  },
+  "GUID_TIMEOUT": {
+   "default": 3.0
+  },
+  "INITIAL_MODE": {
+   "default": 0.0
+  },
+  "INS_ACC1_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_ACC2OFFS_X": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACC2OFFS_Y": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACC2OFFS_Z": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACC2SCAL_X": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACC2SCAL_Y": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACC2SCAL_Z": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACC2_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_ACC2_ID": {
+   "default": 0.0
+  },
+  "INS_ACC3OFFS_X": {
+   "default": 0.0
+  },
+  "INS_ACC3OFFS_Y": {
+   "default": 0.0
+  },
+  "INS_ACC3OFFS_Z": {
+   "default": 0.0
+  },
+  "INS_ACC3SCAL_X": {
+   "default": 1.0
+  },
+  "INS_ACC3SCAL_Y": {
+   "default": 1.0
+  },
+  "INS_ACC3SCAL_Z": {
+   "default": 1.0
+  },
+  "INS_ACC3_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_ACC3_ID": {
+   "default": 0.0
+  },
+  "INS_ACCEL_FILTER": {
+   "default": 20.0
+  },
+  "INS_ACCOFFS_X": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACCOFFS_Y": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACCOFFS_Z": {
+   "default": 0.0010000000474974513
+  },
+  "INS_ACCSCAL_X": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACCSCAL_Y": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACCSCAL_Z": {
+   "default": 1.0010000467300415
+  },
+  "INS_ACC_BODYFIX": {
+   "default": 2.0
+  },
+  "INS_ACC_ID": {
+   "default": 0.0
+  },
+  "INS_ENABLE_MASK": {
+   "default": 127.0
+  },
+  "INS_FAST_SAMPLE": {
+   "default": 1.0
+  },
+  "INS_GYR1_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_GYR2OFFS_X": {
+   "default": 0.0
+  },
+  "INS_GYR2OFFS_Y": {
+   "default": 0.0
+  },
+  "INS_GYR2OFFS_Z": {
+   "default": 0.0
+  },
+  "INS_GYR2_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_GYR2_ID": {
+   "default": 0.0
+  },
+  "INS_GYR3OFFS_X": {
+   "default": 0.0
+  },
+  "INS_GYR3OFFS_Y": {
+   "default": 0.0
+  },
+  "INS_GYR3OFFS_Z": {
+   "default": 0.0
+  },
+  "INS_GYR3_CALTEMP": {
+   "default": -300.0
+  },
+  "INS_GYR3_ID": {
+   "default": 0.0
+  },
+  "INS_GYROFFS_X": {
+   "default": 0.0
+  },
+  "INS_GYROFFS_Y": {
+   "default": 0.0
+  },
+  "INS_GYROFFS_Z": {
+   "default": 0.0
+  },
+  "INS_GYRO_FILTER": {
+   "default": 20.0
+  },
+  "INS_GYRO_RATE": {
+   "default": 0.0
+  },
+  "INS_GYR_CAL": {
+   "default": 1.0
+  },
+  "INS_GYR_ID": {
+   "default": 0.0
+  },
+  "INS_HNTC2_ENABLE": {
+   "default": 0.0
+  },
+  "INS_HNTC3_ENABLE": {
+   "default": 0.0
+  },
+  "INS_HNTCH_ENABLE": {
+   "default": 0.0
+  },
+  "INS_LOG_BAT_CNT": {
+   "default": 1024.0
+  },
+  "INS_LOG_BAT_LGCT": {
+   "default": 32.0
+  },
+  "INS_LOG_BAT_LGIN": {
+   "default": 20.0
+  },
+  "INS_LOG_BAT_MASK": {
+   "default": 0.0
+  },
+  "INS_LOG_BAT_OPT": {
+   "default": 0.0
+  },
+  "INS_POS1_X": {
+   "default": 0.0
+  },
+  "INS_POS1_Y": {
+   "default": 0.0
+  },
+  "INS_POS1_Z": {
+   "default": 0.0
+  },
+  "INS_POS2_X": {
+   "default": 0.0
+  },
+  "INS_POS2_Y": {
+   "default": 0.0
+  },
+  "INS_POS2_Z": {
+   "default": 0.0
+  },
+  "INS_POS3_X": {
+   "default": 0.0
+  },
+  "INS_POS3_Y": {
+   "default": 0.0
+  },
+  "INS_POS3_Z": {
+   "default": 0.0
+  },
+  "INS_RAW_LOG_OPT": {
+   "default": 0.0
+  },
+  "INS_STILL_THRESH": {
+   "default": 2.5
+  },
+  "INS_TCAL1_ENABLE": {
+   "default": 0.0
+  },
+  "INS_TCAL2_ENABLE": {
+   "default": 0.0
+  },
+  "INS_TCAL3_ENABLE": {
+   "default": 0.0
+  },
+  "INS_TCAL_OPTIONS": {
+   "default": 0.0
+  },
+  "INS_TRIM_OPTION": {
+   "default": 1.0
+  },
+  "INS_USE": {
+   "default": 1.0
+  },
+  "INS_USE2": {
+   "default": 1.0
+  },
+  "INS_USE3": {
+   "default": 1.0
+  },
+  "KDE_NPOLE": {
+   "default": 14.0
+  },
+  "LAND_ALT_LOW_M": {
+   "default": 10.0,
+   "units": "m",
+   "display": "Land alt low",
+   "range": [
+    1.0,
+    100.0
+   ]
+  },
+  "LAND_REPOSITION": {
+   "default": 1.0,
+   "display": "Land repositioning",
+   "values": {
+    "0": "No repositioning",
+    "1": "Repositioning"
+   }
+  },
+  "LAND_SPD_HIGH_MS": {
+   "default": 0.0,
+   "units": "m/s",
+   "display": "Land speed high",
+   "range": [
+    0.0,
+    5.0
+   ]
+  },
+  "LAND_SPD_MS": {
+   "default": 0.5,
+   "units": "m/s",
+   "display": "Land speed",
+   "range": [
+    0.3,
+    2.0
+   ]
+  },
+  "LGR_ENABLE": {
+   "default": 0.0
+  },
+  "LOG_BACKEND_TYPE": {
+   "default": 1.0
+  },
+  "LOG_BITMASK": {
+   "default": 180222.0
+  },
+  "LOG_BLK_RATEMAX": {
+   "default": 0.0
+  },
+  "LOG_DARM_RATEMAX": {
+   "default": 0.0
+  },
+  "LOG_DISARMED": {
+   "default": 0.0
+  },
+  "LOG_FILE_BUFSIZE": {
+   "default": 200.0
+  },
+  "LOG_FILE_DSRMROT": {
+   "default": 0.0
+  },
+  "LOG_FILE_MB_FREE": {
+   "default": 500.0
+  },
+  "LOG_FILE_RATEMAX": {
+   "default": 0.0
+  },
+  "LOG_FILE_TIMEOUT": {
+   "default": 5.0
+  },
+  "LOG_MAV_BUFSIZE": {
+   "default": 8.0
+  },
+  "LOG_MAV_RATEMAX": {
+   "default": 10.0
+  },
+  "LOG_MAX_FILES": {
+   "default": 500.0
+  },
+  "LOG_REPLAY": {
+   "default": 0.0
+  },
+  "LOIT_ACC_MAX_M": {
+   "default": 5.0
+  },
+  "LOIT_ANG_MAX": {
+   "default": 0.0
+  },
+  "LOIT_BRK_ACC_M": {
+   "default": 2.5
+  },
+  "LOIT_BRK_DELAY": {
+   "default": 1.0
+  },
+  "LOIT_BRK_JRK_M": {
+   "default": 5.0
+  },
+  "LOIT_OPTIONS": {
+   "default": 1.0
+  },
+  "LOIT_SPEED_MS": {
+   "default": 12.5
+  },
+  "MAV1_ADSB": {
+   "default": 0.0
+  },
+  "MAV1_EXTRA1": {
+   "default": 0.0
+  },
+  "MAV1_EXTRA2": {
+   "default": 0.0
+  },
+  "MAV1_EXTRA3": {
+   "default": 0.0
+  },
+  "MAV1_EXT_STAT": {
+   "default": 0.0
+  },
+  "MAV1_OPTIONS": {
+   "default": 0.0
+  },
+  "MAV1_PARAMS": {
+   "default": 0.0
+  },
+  "MAV1_POSITION": {
+   "default": 0.0
+  },
+  "MAV1_RAW_CTRL": {
+   "default": 0.0
+  },
+  "MAV1_RAW_SENS": {
+   "default": 0.0
+  },
+  "MAV1_RC_CHAN": {
+   "default": 0.0
+  },
+  "MAV2_ADSB": {
+   "default": 0.0
+  },
+  "MAV2_EXTRA1": {
+   "default": 0.0
+  },
+  "MAV2_EXTRA2": {
+   "default": 0.0
+  },
+  "MAV2_EXTRA3": {
+   "default": 0.0
+  },
+  "MAV2_EXT_STAT": {
+   "default": 0.0
+  },
+  "MAV2_OPTIONS": {
+   "default": 0.0
+  },
+  "MAV2_PARAMS": {
+   "default": 0.0
+  },
+  "MAV2_POSITION": {
+   "default": 0.0
+  },
+  "MAV2_RAW_CTRL": {
+   "default": 0.0
+  },
+  "MAV2_RAW_SENS": {
+   "default": 0.0
+  },
+  "MAV2_RC_CHAN": {
+   "default": 0.0
+  },
+  "MAV3_ADSB": {
+   "default": 0.0
+  },
+  "MAV3_EXTRA1": {
+   "default": 0.0
+  },
+  "MAV3_EXTRA2": {
+   "default": 0.0
+  },
+  "MAV3_EXTRA3": {
+   "default": 0.0
+  },
+  "MAV3_EXT_STAT": {
+   "default": 0.0
+  },
+  "MAV3_OPTIONS": {
+   "default": 0.0
+  },
+  "MAV3_PARAMS": {
+   "default": 0.0
+  },
+  "MAV3_POSITION": {
+   "default": 0.0
+  },
+  "MAV3_RAW_CTRL": {
+   "default": 0.0
+  },
+  "MAV3_RAW_SENS": {
+   "default": 0.0
+  },
+  "MAV3_RC_CHAN": {
+   "default": 0.0
+  },
+  "MAV_GCS_SYSID": {
+   "default": 255.0,
+   "display": "My ground station number",
+   "range": [
+    1.0,
+    255.0
+   ]
+  },
+  "MAV_GCS_SYSID_HI": {
+   "default": 0.0,
+   "display": "ground station system ID, maximum",
+   "range": [
+    0.0,
+    255.0
+   ]
+  },
+  "MAV_OPTIONS": {
+   "default": 0.0
+  },
+  "MAV_SYSID": {
+   "default": 1.0
+  },
+  "MAV_TELEM_DELAY": {
+   "default": 0.0
+  },
+  "MIS_OPTIONS": {
+   "default": 0.0
+  },
+  "MIS_RESTART": {
+   "default": 0.0
+  },
+  "MIS_TOTAL": {
+   "default": 0.0
+  },
+  "MNT1_TYPE": {
+   "default": 0.0
+  },
+  "MNT2_TYPE": {
+   "default": 0.0
+  },
+  "MOT_BAT_CURR_MAX": {
+   "default": 0.0
+  },
+  "MOT_BAT_CURR_TC": {
+   "default": 5.0
+  },
+  "MOT_BAT_IDX": {
+   "default": 0.0
+  },
+  "MOT_BAT_VOLT_MAX": {
+   "default": 12.800000190734863
+  },
+  "MOT_BAT_VOLT_MIN": {
+   "default": 9.600000381469727
+  },
+  "MOT_BOOST_SCALE": {
+   "default": 0.0
+  },
+  "MOT_HOVER_LEARN": {
+   "default": 2.0
+  },
+  "MOT_IDLE_SEC": {
+   "default": 0.0
+  },
+  "MOT_OPTIONS": {
+   "default": 0.0
+  },
+  "MOT_PWM_MAX": {
+   "default": 2000.0
+  },
+  "MOT_PWM_MIN": {
+   "default": 1000.0
+  },
+  "MOT_PWM_TYPE": {
+   "default": 0.0
+  },
+  "MOT_SAFE_DISARM": {
+   "default": 0.0
+  },
+  "MOT_SAFE_TIME": {
+   "default": 1.0
+  },
+  "MOT_SLEW_DN_TIME": {
+   "default": 0.0
+  },
+  "MOT_SLEW_UP_TIME": {
+   "default": 0.0
+  },
+  "MOT_SPIN_ARM": {
+   "default": 0.10000000149011612
+  },
+  "MOT_SPIN_MAX": {
+   "default": 0.949999988079071
+  },
+  "MOT_SPIN_MIN": {
+   "default": 0.15000000596046448
+  },
+  "MOT_SPOOL_TIME": {
+   "default": 0.5
+  },
+  "MOT_SPOOL_TIM_DN": {
+   "default": 0.0
+  },
+  "MOT_THST_EXPO": {
+   "default": 0.6499999761581421
+  },
+  "MOT_THST_HOVER": {
+   "default": 0.38999998569488525
+  },
+  "MOT_YAW_HEADROOM": {
+   "default": 200.0
+  },
+  "MSP_OPTIONS": {
+   "default": 0.0
+  },
+  "MSP_OSD_NCELLS": {
+   "default": 0.0
+  },
+  "NET_ENABLE": {
+   "default": 0.0
+  },
+  "NET_P1_TYPE": {
+   "default": 0.0
+  },
+  "NET_P2_TYPE": {
+   "default": 0.0
+  },
+  "NET_P3_TYPE": {
+   "default": 0.0
+  },
+  "NET_P4_TYPE": {
+   "default": 0.0
+  },
+  "NMEA_MSG_EN": {
+   "default": 3.0
+  },
+  "NMEA_RATE_MS": {
+   "default": 100.0
+  },
+  "NTF_BUZZ_ON_LVL": {
+   "default": 1.0
+  },
+  "NTF_BUZZ_PIN": {
+   "default": -1.0
+  },
+  "NTF_BUZZ_TYPES": {
+   "default": 5.0
+  },
+  "NTF_BUZZ_VOLUME": {
+   "default": 100.0
+  },
+  "NTF_DISPLAY_TYPE": {
+   "default": 0.0
+  },
+  "NTF_LED_BRIGHT": {
+   "default": 3.0
+  },
+  "NTF_LED_LEN": {
+   "default": 1.0
+  },
+  "NTF_LED_OVERRIDE": {
+   "default": 0.0
+  },
+  "NTF_LED_TYPES": {
+   "default": 123079.0
+  },
+  "OA_TYPE": {
+   "default": 0.0
+  },
+  "OSD_TYPE": {
+   "default": 0.0
+  },
+  "PHLD_BRK_ANGLE": {
+   "default": 30.0
+  },
+  "PHLD_BRK_RATE": {
+   "default": 8.0
+  },
+  "PILOT_ACC_Z": {
+   "default": 2.5
+  },
+  "PILOT_SPD_DN": {
+   "default": 0.0
+  },
+  "PILOT_SPD_UP": {
+   "default": 2.5
+  },
+  "PILOT_THR_BHV": {
+   "default": 0.0
+  },
+  "PILOT_THR_FILT": {
+   "default": 0.0
+  },
+  "PILOT_TKO_ALT_M": {
+   "default": 0.0
+  },
+  "PILOT_Y_EXPO": {
+   "default": 0.0
+  },
+  "PILOT_Y_RATE": {
+   "default": 202.5
+  },
+  "PILOT_Y_RATE_TC": {
+   "default": 0.0
+  },
+  "PLDP_DELAY": {
+   "default": 0.0
+  },
+  "PLDP_RNG_MAX": {
+   "default": 0.0
+  },
+  "PLDP_SPEED_DN": {
+   "default": 0.0
+  },
+  "PLDP_THRESH": {
+   "default": 0.8999999761581421
+  },
+  "PLND_ENABLED": {
+   "default": 0.0
+  },
+  "PRX1_TYPE": {
+   "default": 0.0
+  },
+  "PRX2_TYPE": {
+   "default": 0.0
+  },
+  "PRX3_TYPE": {
+   "default": 0.0
+  },
+  "PRX4_TYPE": {
+   "default": 0.0
+  },
+  "PRX5_TYPE": {
+   "default": 0.0
+  },
+  "PRX_ALT_MIN": {
+   "default": 1.0
+  },
+  "PRX_FILT": {
+   "default": 0.25
+  },
+  "PRX_IGN_GND": {
+   "default": 0.0
+  },
+  "PRX_LOG_RAW": {
+   "default": 0.0
+  },
+  "PSC_ANGLE_MAX": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_D": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_D_FF": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_FF": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_FLTD": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_FLTE": {
+   "default": 20.0
+  },
+  "PSC_D_ACC_FLTT": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_I": {
+   "default": 0.10000000149011612
+  },
+  "PSC_D_ACC_IMAX": {
+   "default": 0.800000011920929
+  },
+  "PSC_D_ACC_NEF": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_NTF": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_P": {
+   "default": 0.05000000074505806
+  },
+  "PSC_D_ACC_PDMX": {
+   "default": 0.0
+  },
+  "PSC_D_ACC_SMAX": {
+   "default": 0.0
+  },
+  "PSC_D_JERK": {
+   "default": 5.0
+  },
+  "PSC_D_POS_P": {
+   "default": 1.0
+  },
+  "PSC_D_VEL_D": {
+   "default": 0.0
+  },
+  "PSC_D_VEL_FF": {
+   "default": 0.0
+  },
+  "PSC_D_VEL_FLTD": {
+   "default": 5.0
+  },
+  "PSC_D_VEL_FLTE": {
+   "default": 5.0
+  },
+  "PSC_D_VEL_I": {
+   "default": 0.0
+  },
+  "PSC_D_VEL_IMAX": {
+   "default": 10.0
+  },
+  "PSC_D_VEL_P": {
+   "default": 5.0
+  },
+  "PSC_NE_JERK": {
+   "default": 5.0
+  },
+  "PSC_NE_POS_P": {
+   "default": 1.0
+  },
+  "PSC_NE_VEL_D": {
+   "default": 0.25
+  },
+  "PSC_NE_VEL_FF": {
+   "default": 0.0
+  },
+  "PSC_NE_VEL_FLTD": {
+   "default": 5.0
+  },
+  "PSC_NE_VEL_FLTE": {
+   "default": 5.0
+  },
+  "PSC_NE_VEL_I": {
+   "default": 1.0
+  },
+  "PSC_NE_VEL_IMAX": {
+   "default": 10.0
+  },
+  "PSC_NE_VEL_P": {
+   "default": 2.0
+  },
+  "RALLY_INCL_HOME": {
+   "default": 1.0,
+   "display": "Rally Include Home",
+   "values": {
+    "0": "DoNotIncludeHome",
+    "1": "IncludeHome"
+   }
+  },
+  "RALLY_LIMIT_KM": {
+   "default": 0.30000001192092896,
+   "units": "km",
+   "display": "Rally Limit"
+  },
+  "RALLY_TOTAL": {
+   "default": 0.0,
+   "display": "Rally Total"
+  },
+  "RC10_DZ": {
+   "default": 0.0
+  },
+  "RC10_MAX": {
+   "default": 1900.0
+  },
+  "RC10_MIN": {
+   "default": 1100.0
+  },
+  "RC10_OPTION": {
+   "default": 0.0
+  },
+  "RC10_REVERSED": {
+   "default": 0.0
+  },
+  "RC10_TRIM": {
+   "default": 1500.0
+  },
+  "RC11_DZ": {
+   "default": 0.0
+  },
+  "RC11_MAX": {
+   "default": 1900.0
+  },
+  "RC11_MIN": {
+   "default": 1100.0
+  },
+  "RC11_OPTION": {
+   "default": 0.0
+  },
+  "RC11_REVERSED": {
+   "default": 0.0
+  },
+  "RC11_TRIM": {
+   "default": 1500.0
+  },
+  "RC12_DZ": {
+   "default": 0.0
+  },
+  "RC12_MAX": {
+   "default": 1900.0
+  },
+  "RC12_MIN": {
+   "default": 1100.0
+  },
+  "RC12_OPTION": {
+   "default": 0.0
+  },
+  "RC12_REVERSED": {
+   "default": 0.0
+  },
+  "RC12_TRIM": {
+   "default": 1500.0
+  },
+  "RC13_DZ": {
+   "default": 0.0
+  },
+  "RC13_MAX": {
+   "default": 1900.0
+  },
+  "RC13_MIN": {
+   "default": 1100.0
+  },
+  "RC13_OPTION": {
+   "default": 0.0
+  },
+  "RC13_REVERSED": {
+   "default": 0.0
+  },
+  "RC13_TRIM": {
+   "default": 1500.0
+  },
+  "RC14_DZ": {
+   "default": 0.0
+  },
+  "RC14_MAX": {
+   "default": 1900.0
+  },
+  "RC14_MIN": {
+   "default": 1100.0
+  },
+  "RC14_OPTION": {
+   "default": 0.0
+  },
+  "RC14_REVERSED": {
+   "default": 0.0
+  },
+  "RC14_TRIM": {
+   "default": 1500.0
+  },
+  "RC15_DZ": {
+   "default": 0.0
+  },
+  "RC15_MAX": {
+   "default": 1900.0
+  },
+  "RC15_MIN": {
+   "default": 1100.0
+  },
+  "RC15_OPTION": {
+   "default": 0.0
+  },
+  "RC15_REVERSED": {
+   "default": 0.0
+  },
+  "RC15_TRIM": {
+   "default": 1500.0
+  },
+  "RC16_DZ": {
+   "default": 0.0
+  },
+  "RC16_MAX": {
+   "default": 1900.0
+  },
+  "RC16_MIN": {
+   "default": 1100.0
+  },
+  "RC16_OPTION": {
+   "default": 0.0
+  },
+  "RC16_REVERSED": {
+   "default": 0.0
+  },
+  "RC16_TRIM": {
+   "default": 1500.0
+  },
+  "RC1_DZ": {
+   "default": 20.0
+  },
+  "RC1_MAX": {
+   "default": 2000.0
+  },
+  "RC1_MIN": {
+   "default": 1000.0
+  },
+  "RC1_OPTION": {
+   "default": 0.0
+  },
+  "RC1_REVERSED": {
+   "default": 0.0
+  },
+  "RC1_TRIM": {
+   "default": 1500.0
+  },
+  "RC2_DZ": {
+   "default": 20.0
+  },
+  "RC2_MAX": {
+   "default": 2000.0
+  },
+  "RC2_MIN": {
+   "default": 1000.0
+  },
+  "RC2_OPTION": {
+   "default": 0.0
+  },
+  "RC2_REVERSED": {
+   "default": 0.0
+  },
+  "RC2_TRIM": {
+   "default": 1500.0
+  },
+  "RC3_DZ": {
+   "default": 30.0
+  },
+  "RC3_MAX": {
+   "default": 2000.0
+  },
+  "RC3_MIN": {
+   "default": 1000.0
+  },
+  "RC3_OPTION": {
+   "default": 0.0
+  },
+  "RC3_REVERSED": {
+   "default": 0.0
+  },
+  "RC3_TRIM": {
+   "default": 1500.0
+  },
+  "RC4_DZ": {
+   "default": 20.0
+  },
+  "RC4_MAX": {
+   "default": 2000.0
+  },
+  "RC4_MIN": {
+   "default": 1000.0
+  },
+  "RC4_OPTION": {
+   "default": 0.0
+  },
+  "RC4_REVERSED": {
+   "default": 0.0
+  },
+  "RC4_TRIM": {
+   "default": 1500.0
+  },
+  "RC5_DZ": {
+   "default": 0.0
+  },
+  "RC5_MAX": {
+   "default": 2000.0
+  },
+  "RC5_MIN": {
+   "default": 1000.0
+  },
+  "RC5_OPTION": {
+   "default": 0.0
+  },
+  "RC5_REVERSED": {
+   "default": 0.0
+  },
+  "RC5_TRIM": {
+   "default": 1500.0
+  },
+  "RC6_DZ": {
+   "default": 0.0
+  },
+  "RC6_MAX": {
+   "default": 2000.0
+  },
+  "RC6_MIN": {
+   "default": 1000.0
+  },
+  "RC6_OPTION": {
+   "default": 0.0
+  },
+  "RC6_REVERSED": {
+   "default": 0.0
+  },
+  "RC6_TRIM": {
+   "default": 1500.0
+  },
+  "RC7_DZ": {
+   "default": 0.0
+  },
+  "RC7_MAX": {
+   "default": 2000.0
+  },
+  "RC7_MIN": {
+   "default": 1000.0
+  },
+  "RC7_OPTION": {
+   "default": 7.0
+  },
+  "RC7_REVERSED": {
+   "default": 0.0
+  },
+  "RC7_TRIM": {
+   "default": 1500.0
+  },
+  "RC8_DZ": {
+   "default": 0.0
+  },
+  "RC8_MAX": {
+   "default": 2000.0
+  },
+  "RC8_MIN": {
+   "default": 1000.0
+  },
+  "RC8_OPTION": {
+   "default": 0.0
+  },
+  "RC8_REVERSED": {
+   "default": 0.0
+  },
+  "RC8_TRIM": {
+   "default": 1500.0
+  },
+  "RC9_DZ": {
+   "default": 0.0
+  },
+  "RC9_MAX": {
+   "default": 1900.0
+  },
+  "RC9_MIN": {
+   "default": 1100.0
+  },
+  "RC9_OPTION": {
+   "default": 0.0
+  },
+  "RC9_REVERSED": {
+   "default": 0.0
+  },
+  "RC9_TRIM": {
+   "default": 1500.0
+  },
+  "RCMAP_PITCH": {
+   "default": 2.0
+  },
+  "RCMAP_ROLL": {
+   "default": 1.0
+  },
+  "RCMAP_THROTTLE": {
+   "default": 3.0
+  },
+  "RCMAP_YAW": {
+   "default": 4.0
+  },
+  "RC_FS_TIMEOUT": {
+   "default": 1.0,
+   "units": "s",
+   "display": "RC Failsafe timeout",
+   "range": [
+    0.1,
+    10.0
+   ]
+  },
+  "RC_OPTIONS": {
+   "default": 32.0
+  },
+  "RC_OVERRIDE_TIME": {
+   "default": 3.0
+  },
+  "RC_PROTOCOLS": {
+   "default": 1.0
+  },
+  "RC_SPEED": {
+   "default": 490.0
+  },
+  "RELAY1_DEFAULT": {
+   "default": 0.0
+  },
+  "RELAY1_FUNCTION": {
+   "default": 1.0
+  },
+  "RELAY1_INVERTED": {
+   "default": 0.0
+  },
+  "RELAY1_PIN": {
+   "default": 13.0
+  },
+  "RELAY2_FUNCTION": {
+   "default": 0.0
+  },
+  "RELAY3_FUNCTION": {
+   "default": 0.0
+  },
+  "RELAY4_FUNCTION": {
+   "default": 0.0
+  },
+  "RELAY5_FUNCTION": {
+   "default": 0.0
+  },
+  "RELAY6_FUNCTION": {
+   "default": 0.0
+  },
+  "RNGFND1_ADDR": {
+   "default": 0.0,
+   "display": "Bus address of sensor",
+   "range": [
+    0.0,
+    127.0
+   ]
+  },
+  "RNGFND1_FUNCTION": {
+   "default": 0.0,
+   "display": "Rangefinder function",
+   "values": {
+    "0": "Linear",
+    "1": "Inverted",
+    "2": "Hyperbolic"
+   }
+  },
+  "RNGFND1_GNDCLR": {
+   "default": 0.10000000149011612,
+   "units": "m",
+   "display": "Distance from the range finder to the ground",
+   "range": [
+    0.05,
+    1.5
+   ]
+  },
+  "RNGFND1_MAX": {
+   "default": 7.0,
+   "units": "m",
+   "display": "Rangefinder maximum distance"
+  },
+  "RNGFND1_MIN": {
+   "default": 0.20000000298023224,
+   "units": "m",
+   "display": "Rangefinder minimum distance"
+  },
+  "RNGFND1_OFFSET": {
+   "default": 0.0,
+   "units": "V",
+   "display": "rangefinder offset"
+  },
+  "RNGFND1_ORIENT": {
+   "default": 25.0,
+   "display": "Rangefinder orientation",
+   "values": {
+    "0": "Forward",
+    "1": "Forward-Right",
+    "2": "Right",
+    "24": "Up",
+    "25": "Down",
+    "3": "Back-Right",
+    "4": "Back",
+    "5": "Back-Left",
+    "6": "Left",
+    "7": "Forward-Left"
+   }
+  },
+  "RNGFND1_PIN": {
+   "default": -1.0,
+   "display": "Rangefinder pin",
+   "range": [
+    -1.0,
+    127.0
+   ],
+   "values": {
+    "-1": "Not Used",
+    "103": "Pixhawk SBUS",
+    "11": "Pixracer",
+    "13": "Pixhawk ADC4",
+    "14": "Pixhawk ADC3",
+    "15": "Pixhawk ADC6/Pixhawk2 ADC",
+    "50": "AUX1",
+    "51": "AUX2",
+    "52": "AUX3",
+    "53": "AUX4",
+    "54": "AUX5",
+    "55": "AUX6"
+   }
+  },
+  "RNGFND1_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "X position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "RNGFND1_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Y position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "RNGFND1_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Z position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "RNGFND1_PWRRNG": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Powersave range",
+   "range": [
+    0.0,
+    32767.0
+   ]
+  },
+  "RNGFND1_RMETRIC": {
+   "default": 1.0,
+   "display": "Ratiometric",
+   "values": {
+    "0": "No",
+    "1": "Yes"
+   }
+  },
+  "RNGFND1_SCALING": {
+   "default": 3.0,
+   "units": "m/V",
+   "display": "Rangefinder scaling"
+  },
+  "RNGFND1_STOP_PIN": {
+   "default": -1.0,
+   "display": "Rangefinder stop pin",
+   "range": [
+    -1.0,
+    127.0
+   ],
+   "values": {
+    "-1": "Not Used",
+    "111": "PX4 FMU Relay1",
+    "112": "PX4 FMU Relay2",
+    "113": "PX4IO Relay1",
+    "114": "PX4IO Relay2",
+    "115": "PX4IO ACC1",
+    "116": "PX4IO ACC2",
+    "50": "AUX1",
+    "51": "AUX2",
+    "52": "AUX3",
+    "53": "AUX4",
+    "54": "AUX5",
+    "55": "AUX6"
+   }
+  },
+  "RNGFND1_TYPE": {
+   "default": 100.0,
+   "display": "Rangefinder type",
+   "values": {
+    "0": "None",
+    "1": "Analog",
+    "10": "MAVLink",
+    "100": "SITL",
+    "11": "USD1_Serial",
+    "12": "LeddarOne",
+    "13": "MaxbotixSerial",
+    "14": "TeraRangerI2C",
+    "15": "LidarLiteV3-I2C",
+    "16": "VL53L0X or VL53L1X",
+    "17": "NMEA",
+    "18": "WASP-LRF",
+    "19": "BenewakeTF02",
+    "2": "MaxbotixI2C",
+    "20": "BenewakeTFmini-Serial",
+    "21": "LidarLightV3HP",
+    "22": "PWM",
+    "23": "BlueRoboticsPing",
+    "24": "DroneCAN",
+    "25": "BenewakeTFmini-I2C",
+    "26": "LanbaoPSK-CM8JL65-CC5",
+    "27": "BenewakeTF03",
+    "28": "VL53L1X-ShortRange",
+    "29": "LeddarVu8-Serial",
+    "3": "LidarLite-I2C",
+    "30": "HC-SR04",
+    "31": "GYUS42v2",
+    "32": "MSP",
+    "33": "USD1_CAN",
+    "34": "Benewake_CAN",
+    "35": "TeraRangerSerial",
+    "36": "Lua_Scripting",
+    "37": "NoopLoop_TOFSense",
+    "38": "NoopLoop_TOFSense_CAN",
+    "39": "NRA24_CAN",
+    "40": "NoopLoop_TOFSenseF_I2C",
+    "41": "JRE_Serial",
+    "42": "Ainstein_LR_D1",
+    "43": "RDS02UF",
+    "44": "HexsoonRadar",
+    "45": "LightWare-GRF",
+    "46": "BenewakeTFS20L",
+    "47": "DTS6012M",
+    "48": "LightWare-GRF-I2C",
+    "5": "PWM",
+    "6": "BBB-PRU",
+    "7": "LightWareI2C",
+    "8": "LightWareSerial",
+    "9": "Bebop"
+   }
+  },
+  "RNGFND2_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND3_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND4_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND5_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND6_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND7_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND8_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND9_TYPE": {
+   "default": 0.0
+  },
+  "RNGFNDA_TYPE": {
+   "default": 0.0
+  },
+  "RNGFND_FILT": {
+   "default": 0.5
+  },
+  "RPM1_TYPE": {
+   "default": 0.0
+  },
+  "RPM2_TYPE": {
+   "default": 0.0
+  },
+  "RSSI_TYPE": {
+   "default": 0.0
+  },
+  "RTL_ALT_FINAL_M": {
+   "default": 0.0,
+   "units": "m",
+   "display": "RTL Final Altitude",
+   "range": [
+    0.0,
+    10.0
+   ]
+  },
+  "RTL_ALT_M": {
+   "default": 15.0,
+   "units": "m",
+   "display": "RTL Altitude",
+   "range": [
+    0.3,
+    3000.0
+   ]
+  },
+  "RTL_ALT_TYPE": {
+   "default": 0.0,
+   "display": "RTL mode altitude type",
+   "values": {
+    "0": "Relative to Home",
+    "1": "Terrain"
+   }
+  },
+  "RTL_CLIMB_MIN_M": {
+   "default": 0.0,
+   "units": "m",
+   "display": "RTL minimum climb",
+   "range": [
+    0.0,
+    30.0
+   ]
+  },
+  "RTL_CONE_SLOPE": {
+   "default": 3.0,
+   "display": "RTL cone slope",
+   "range": [
+    0.0,
+    10.0
+   ],
+   "values": {
+    "0": "Disabled",
+    "1": "Shallow",
+    "3": "Steep"
+   }
+  },
+  "RTL_LOIT_TIME": {
+   "default": 5000.0,
+   "units": "ms",
+   "display": "RTL loiter time",
+   "range": [
+    0.0,
+    60000.0
+   ]
+  },
+  "RTL_OPTIONS": {
+   "default": 0.0,
+   "display": "RTL mode options",
+   "bitmask": {
+    "2": "Ignore pilot yaw"
+   }
+  },
+  "RTL_SPEED_MS": {
+   "default": 0.0,
+   "units": "m/s",
+   "display": "RTL speed",
+   "range": [
+    0.0,
+    20.0
+   ]
+  },
+  "SCHED_DEBUG": {
+   "default": 0.0
+  },
+  "SCHED_LOOP_RATE": {
+   "default": 400.0
+  },
+  "SCHED_OPTIONS": {
+   "default": 0.0
+  },
+  "SCR_ENABLE": {
+   "default": 0.0
+  },
+  "SERIAL0_BAUD": {
+   "default": 115.0
+  },
+  "SERIAL0_PROTOCOL": {
+   "default": 2.0
+  },
+  "SERIAL1_BAUD": {
+   "default": 57.0
+  },
+  "SERIAL1_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL1_PROTOCOL": {
+   "default": 2.0
+  },
+  "SERIAL2_BAUD": {
+   "default": 57.0
+  },
+  "SERIAL2_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL2_PROTOCOL": {
+   "default": 2.0
+  },
+  "SERIAL3_BAUD": {
+   "default": 230.0
+  },
+  "SERIAL3_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL3_PROTOCOL": {
+   "default": 5.0
+  },
+  "SERIAL4_BAUD": {
+   "default": 230.0
+  },
+  "SERIAL4_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL4_PROTOCOL": {
+   "default": 5.0
+  },
+  "SERIAL5_BAUD": {
+   "default": 57.0
+  },
+  "SERIAL5_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL5_PROTOCOL": {
+   "default": -1.0
+  },
+  "SERIAL6_BAUD": {
+   "default": 57.0
+  },
+  "SERIAL6_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL6_PROTOCOL": {
+   "default": -1.0
+  },
+  "SERIAL7_BAUD": {
+   "default": 57.0
+  },
+  "SERIAL7_OPTIONS": {
+   "default": 0.0
+  },
+  "SERIAL7_PROTOCOL": {
+   "default": -1.0
+  },
+  "SERIAL_PASS1": {
+   "default": 0.0
+  },
+  "SERIAL_PASS2": {
+   "default": -1.0
+  },
+  "SERIAL_PASSTIMO": {
+   "default": 15.0
+  },
+  "SERVO10_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO10_MAX": {
+   "default": 1900.0
+  },
+  "SERVO10_MIN": {
+   "default": 1100.0
+  },
+  "SERVO10_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO10_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO11_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO11_MAX": {
+   "default": 1900.0
+  },
+  "SERVO11_MIN": {
+   "default": 1100.0
+  },
+  "SERVO11_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO11_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO12_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO12_MAX": {
+   "default": 1900.0
+  },
+  "SERVO12_MIN": {
+   "default": 1100.0
+  },
+  "SERVO12_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO12_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO13_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO13_MAX": {
+   "default": 1900.0
+  },
+  "SERVO13_MIN": {
+   "default": 1100.0
+  },
+  "SERVO13_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO13_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO14_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO14_MAX": {
+   "default": 1900.0
+  },
+  "SERVO14_MIN": {
+   "default": 1100.0
+  },
+  "SERVO14_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO14_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO15_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO15_MAX": {
+   "default": 1900.0
+  },
+  "SERVO15_MIN": {
+   "default": 1100.0
+  },
+  "SERVO15_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO15_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO16_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO16_MAX": {
+   "default": 1900.0
+  },
+  "SERVO16_MIN": {
+   "default": 1100.0
+  },
+  "SERVO16_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO16_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO1_FUNCTION": {
+   "default": 33.0
+  },
+  "SERVO1_MAX": {
+   "default": 1900.0
+  },
+  "SERVO1_MIN": {
+   "default": 1100.0
+  },
+  "SERVO1_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO1_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO2_FUNCTION": {
+   "default": 34.0
+  },
+  "SERVO2_MAX": {
+   "default": 1900.0
+  },
+  "SERVO2_MIN": {
+   "default": 1100.0
+  },
+  "SERVO2_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO2_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO3_FUNCTION": {
+   "default": 35.0
+  },
+  "SERVO3_MAX": {
+   "default": 1900.0
+  },
+  "SERVO3_MIN": {
+   "default": 1100.0
+  },
+  "SERVO3_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO3_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO4_FUNCTION": {
+   "default": 36.0
+  },
+  "SERVO4_MAX": {
+   "default": 1900.0
+  },
+  "SERVO4_MIN": {
+   "default": 1100.0
+  },
+  "SERVO4_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO4_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO5_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO5_MAX": {
+   "default": 1900.0
+  },
+  "SERVO5_MIN": {
+   "default": 1100.0
+  },
+  "SERVO5_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO5_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO6_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO6_MAX": {
+   "default": 1900.0
+  },
+  "SERVO6_MIN": {
+   "default": 1100.0
+  },
+  "SERVO6_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO6_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO7_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO7_MAX": {
+   "default": 1900.0
+  },
+  "SERVO7_MIN": {
+   "default": 1100.0
+  },
+  "SERVO7_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO7_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO8_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO8_MAX": {
+   "default": 1900.0
+  },
+  "SERVO8_MIN": {
+   "default": 1100.0
+  },
+  "SERVO8_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO8_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO9_FUNCTION": {
+   "default": 0.0
+  },
+  "SERVO9_MAX": {
+   "default": 1900.0
+  },
+  "SERVO9_MIN": {
+   "default": 1100.0
+  },
+  "SERVO9_REVERSED": {
+   "default": 0.0
+  },
+  "SERVO9_TRIM": {
+   "default": 1500.0
+  },
+  "SERVO_32_ENABLE": {
+   "default": 0.0
+  },
+  "SERVO_DSHOT_ESC": {
+   "default": 0.0
+  },
+  "SERVO_DSHOT_RATE": {
+   "default": 0.0
+  },
+  "SERVO_FTW_MASK": {
+   "default": 0.0
+  },
+  "SERVO_FTW_POLES": {
+   "default": 14.0
+  },
+  "SERVO_FTW_RVMASK": {
+   "default": 0.0
+  },
+  "SERVO_GPIO_MASK": {
+   "default": 0.0
+  },
+  "SERVO_RATE": {
+   "default": 50.0
+  },
+  "SERVO_RC_FS_MSK": {
+   "default": 0.0
+  },
+  "SERVO_ROB_POSMAX": {
+   "default": 4095.0
+  },
+  "SERVO_ROB_POSMIN": {
+   "default": 0.0
+  },
+  "SERVO_SBUS_RATE": {
+   "default": 50.0
+  },
+  "SERVO_VOLZ_MASK": {
+   "default": 0.0
+  },
+  "SERVO_VOLZ_RANGE": {
+   "default": 200.0
+  },
+  "SID_AXIS": {
+   "default": 0.0
+  },
+  "SIMPLE": {
+   "default": 0.0
+  },
+  "SIM_ACC1_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_ACC1_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC1_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_ACC1_RND": {
+   "default": 0.0
+  },
+  "SIM_ACC1_SCAL_X": {
+   "default": 0.0
+  },
+  "SIM_ACC1_SCAL_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC1_SCAL_Z": {
+   "default": 0.0
+  },
+  "SIM_ACC2_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_ACC2_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC2_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_ACC2_RND": {
+   "default": 0.0
+  },
+  "SIM_ACC2_SCAL_X": {
+   "default": 0.0
+  },
+  "SIM_ACC2_SCAL_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC2_SCAL_Z": {
+   "default": 0.0
+  },
+  "SIM_ACC3_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_ACC3_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC3_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_ACC3_RND": {
+   "default": 0.0
+  },
+  "SIM_ACC3_SCAL_X": {
+   "default": 0.0
+  },
+  "SIM_ACC3_SCAL_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC3_SCAL_Z": {
+   "default": 0.0
+  },
+  "SIM_ACCEL1_FAIL": {
+   "default": 0.0
+  },
+  "SIM_ACCEL2_FAIL": {
+   "default": 0.0
+  },
+  "SIM_ACCEL3_FAIL": {
+   "default": 0.0
+  },
+  "SIM_ACC_FAIL_MSK": {
+   "default": 0.0
+  },
+  "SIM_ACC_FILE_RW": {
+   "default": 0.0
+  },
+  "SIM_ACC_TRIM_X": {
+   "default": 0.0
+  },
+  "SIM_ACC_TRIM_Y": {
+   "default": 0.0
+  },
+  "SIM_ACC_TRIM_Z": {
+   "default": 0.0
+  },
+  "SIM_ADSB_ALT": {
+   "default": 1000.0
+  },
+  "SIM_ADSB_COUNT": {
+   "default": -1.0
+  },
+  "SIM_ADSB_RADIUS": {
+   "default": 10000.0
+  },
+  "SIM_ADSB_TX": {
+   "default": 0.0
+  },
+  "SIM_ADSB_TYPES": {
+   "default": 1.0
+  },
+  "SIM_ARSPD2_FAIL": {
+   "default": 0.0
+  },
+  "SIM_ARSPD2_FAILP": {
+   "default": 0.0
+  },
+  "SIM_ARSPD2_OFS": {
+   "default": 2013.0
+  },
+  "SIM_ARSPD2_PITOT": {
+   "default": 0.0
+  },
+  "SIM_ARSPD2_RATIO": {
+   "default": 1.9900000095367432
+  },
+  "SIM_ARSPD2_RND": {
+   "default": 2.0
+  },
+  "SIM_ARSPD2_SIGN": {
+   "default": 0.0
+  },
+  "SIM_ARSPD_FAIL": {
+   "default": 0.0
+  },
+  "SIM_ARSPD_FAILP": {
+   "default": 0.0
+  },
+  "SIM_ARSPD_OFS": {
+   "default": 2013.0
+  },
+  "SIM_ARSPD_PITOT": {
+   "default": 0.0
+  },
+  "SIM_ARSPD_RATIO": {
+   "default": 1.9900000095367432
+  },
+  "SIM_ARSPD_RND": {
+   "default": 2.0
+  },
+  "SIM_ARSPD_SIGN": {
+   "default": 0.0
+  },
+  "SIM_BAR2_DELAY": {
+   "default": 0.0
+  },
+  "SIM_BAR2_DISABLE": {
+   "default": 0.0
+  },
+  "SIM_BAR2_DRIFT": {
+   "default": 0.0
+  },
+  "SIM_BAR2_FREEZE": {
+   "default": 0.0
+  },
+  "SIM_BAR2_GLITCH": {
+   "default": 0.0
+  },
+  "SIM_BAR2_RND": {
+   "default": 0.20000000298023224
+  },
+  "SIM_BAR2_WCF_BAK": {
+   "default": 0.0
+  },
+  "SIM_BAR2_WCF_DN": {
+   "default": 0.0
+  },
+  "SIM_BAR2_WCF_FWD": {
+   "default": 0.0
+  },
+  "SIM_BAR2_WCF_LFT": {
+   "default": 0.0
+  },
+  "SIM_BAR2_WCF_RGT": {
+   "default": 0.0
+  },
+  "SIM_BAR2_WCF_UP": {
+   "default": 0.0
+  },
+  "SIM_BAR3_DELAY": {
+   "default": 0.0
+  },
+  "SIM_BAR3_DISABLE": {
+   "default": 0.0
+  },
+  "SIM_BAR3_DRIFT": {
+   "default": 0.0
+  },
+  "SIM_BAR3_FREEZE": {
+   "default": 0.0
+  },
+  "SIM_BAR3_GLITCH": {
+   "default": 0.0
+  },
+  "SIM_BAR3_RND": {
+   "default": 0.20000000298023224
+  },
+  "SIM_BAR3_WCF_BAK": {
+   "default": 0.0
+  },
+  "SIM_BAR3_WCF_DN": {
+   "default": 0.0
+  },
+  "SIM_BAR3_WCF_FWD": {
+   "default": 0.0
+  },
+  "SIM_BAR3_WCF_LFT": {
+   "default": 0.0
+  },
+  "SIM_BAR3_WCF_RGT": {
+   "default": 0.0
+  },
+  "SIM_BAR3_WCF_UP": {
+   "default": 0.0
+  },
+  "SIM_BARO_COUNT": {
+   "default": 2.0
+  },
+  "SIM_BARO_DELAY": {
+   "default": 0.0
+  },
+  "SIM_BARO_DISABLE": {
+   "default": 0.0
+  },
+  "SIM_BARO_DRIFT": {
+   "default": 0.0
+  },
+  "SIM_BARO_FREEZE": {
+   "default": 0.0
+  },
+  "SIM_BARO_GLITCH": {
+   "default": 0.0
+  },
+  "SIM_BARO_RND": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_BAK": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_DN": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_FWD": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_LFT": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_RGT": {
+   "default": 0.0
+  },
+  "SIM_BARO_WCF_UP": {
+   "default": 0.0
+  },
+  "SIM_BATT_CAP_AH": {
+   "default": 0.0,
+   "units": "Ah",
+   "display": "Simulated battery capacity"
+  },
+  "SIM_BATT_VOLTAGE": {
+   "default": 12.600000381469727,
+   "units": "V",
+   "display": "Simulated battery voltage"
+  },
+  "SIM_BAUDLIMIT_EN": {
+   "default": 0.0
+  },
+  "SIM_CAN_SRV_MSK": {
+   "default": 0.0
+  },
+  "SIM_CAN_TYPE1": {
+   "default": 1.0
+  },
+  "SIM_CAN_TYPE2": {
+   "default": 1.0
+  },
+  "SIM_CLAMP_CH": {
+   "default": 0.0
+  },
+  "SIM_DRIFT_SPEED": {
+   "default": 0.05000000074505806
+  },
+  "SIM_DRIFT_TIME": {
+   "default": 5.0
+  },
+  "SIM_EFI_TYPE": {
+   "default": 0.0
+  },
+  "SIM_ENGINE_FAIL": {
+   "default": 0.0,
+   "display": "Engine Fail Mask",
+   "bitmask": {
+    "0": "Servo 1",
+    "1": "Servo 2",
+    "10": "Servo 11",
+    "11": "Servo 12",
+    "12": "Servo 13",
+    "13": "Servo 14",
+    "14": "Servo 15",
+    "15": "Servo 16",
+    "16": "Servo 17",
+    "17": "Servo 18",
+    "18": "Servo 19",
+    "19": "Servo 20",
+    "2": "Servo 3",
+    "20": "Servo 21",
+    "21": "Servo 22",
+    "22": "Servo 23",
+    "23": "Servo 24",
+    "24": "Servo 25",
+    "25": "Servo 26",
+    "26": "Servo 27",
+    "27": "Servo 28",
+    "28": "Servo 29",
+    "29": "Servo 30",
+    "3": "Servo 4",
+    "30": "Servo 31",
+    "31": "Servo 32",
+    "4": "Servo 5",
+    "5": "Servo 6",
+    "6": "Servo 7",
+    "7": "Servo 8",
+    "8": "Servo 9",
+    "9": "Servo 10"
+   }
+  },
+  "SIM_ENGINE_MUL": {
+   "default": 0.0,
+   "display": "Engine failure thrust scaler",
+   "range": [
+    0.0,
+    1.0
+   ]
+  },
+  "SIM_ESC_ARM_RPM": {
+   "default": 0.0
+  },
+  "SIM_ESC_TELEM": {
+   "default": 1.0
+  },
+  "SIM_FLOAT_EXCEPT": {
+   "default": 1.0
+  },
+  "SIM_FLOW_DELAY": {
+   "default": 0.0,
+   "units": "ms",
+   "display": "Opflow Delay"
+  },
+  "SIM_FLOW_ENABLE": {
+   "default": 1.0,
+   "display": "Opflow Enable",
+   "values": {
+    "0": "Disable",
+    "1": "Enabled"
+   }
+  },
+  "SIM_FLOW_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Opflow Pos"
+  },
+  "SIM_FLOW_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Opflow Pos"
+  },
+  "SIM_FLOW_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Opflow Pos"
+  },
+  "SIM_FLOW_RATE": {
+   "default": 10.0,
+   "units": "Hz",
+   "display": "Opflow Rate"
+  },
+  "SIM_FLOW_RND": {
+   "default": 0.05000000074505806,
+   "units": "rad/s",
+   "display": "Opflow noise"
+  },
+  "SIM_FTOWESC_ENA": {
+   "default": 0.0
+  },
+  "SIM_FTOWESC_POW": {
+   "default": 4095.0
+  },
+  "SIM_GND_BEHAV": {
+   "default": -1.0
+  },
+  "SIM_GPS1_ACC": {
+   "default": 0.30000001192092896,
+   "display": "GPS Accuracy"
+  },
+  "SIM_GPS1_ALT_OFS": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Altitude Offset"
+  },
+  "SIM_GPS1_BYTELOS": {
+   "default": 0.0,
+   "units": "%",
+   "display": "GPS Byteloss"
+  },
+  "SIM_GPS1_DRFTALT": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Altitude Drift"
+  },
+  "SIM_GPS1_ENABLE": {
+   "default": 1.0,
+   "display": "GPS enable",
+   "values": {
+    "0": "Disable",
+    "1": "Enable"
+   }
+  },
+  "SIM_GPS1_GLTCH_X": {
+   "default": 0.0,
+   "display": "GPS Glitch"
+  },
+  "SIM_GPS1_GLTCH_Y": {
+   "default": 0.0,
+   "display": "GPS Glitch"
+  },
+  "SIM_GPS1_GLTCH_Z": {
+   "default": 0.0,
+   "display": "GPS Glitch"
+  },
+  "SIM_GPS1_HDG": {
+   "default": 0.0,
+   "display": "GPS Heading",
+   "values": {
+    "0": "Disabled",
+    "1": "Emit HDT",
+    "2": "Emit THS",
+    "3": "KSXT",
+    "4": "Be Moving Baseline Base"
+   }
+  },
+  "SIM_GPS1_HDG_OFS": {
+   "default": 0.0,
+   "display": "GPS heading offset"
+  },
+  "SIM_GPS1_HZ": {
+   "default": 5.0,
+   "units": "Hz",
+   "display": "GPS Hz"
+  },
+  "SIM_GPS1_JAM": {
+   "default": 0.0,
+   "display": "GPS jamming enable",
+   "values": {
+    "0": "Disabled",
+    "1": "Enabled"
+   }
+  },
+  "SIM_GPS1_LAG_MS": {
+   "default": 100.0,
+   "units": "ms",
+   "display": "GPS Lag"
+  },
+  "SIM_GPS1_LCKTIME": {
+   "default": 0.0,
+   "units": "s",
+   "display": "GPS Lock Time"
+  },
+  "SIM_GPS1_NOISE": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Noise"
+  },
+  "SIM_GPS1_NUMSATS": {
+   "default": 10.0,
+   "display": "GPS Num Satellites"
+  },
+  "SIM_GPS1_OPTIONS": {
+   "default": 0.0,
+   "display": "GPS Options",
+   "bitmask": {
+    "0": "UBlox GPS is F9P"
+   }
+  },
+  "SIM_GPS1_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Position"
+  },
+  "SIM_GPS1_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Position"
+  },
+  "SIM_GPS1_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "GPS Position"
+  },
+  "SIM_GPS1_TYPE": {
+   "default": 1.0,
+   "display": "GPS type",
+   "values": {
+    "0": "None",
+    "1": "UBlox",
+    "11": "Trimble",
+    "19": "MSP",
+    "5": "NMEA",
+    "6": "SBP",
+    "7": "File",
+    "8": "Nova",
+    "9": "SBP2"
+   }
+  },
+  "SIM_GPS1_VERR_X": {
+   "default": 0.0,
+   "display": "GPS Velocity Error"
+  },
+  "SIM_GPS1_VERR_Y": {
+   "default": 0.0,
+   "display": "GPS Velocity Error"
+  },
+  "SIM_GPS1_VERR_Z": {
+   "default": 0.0,
+   "display": "GPS Velocity Error"
+  },
+  "SIM_GPS2_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_GPS3_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_GPS4_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_GPS_LOG_NUM": {
+   "default": 0.0
+  },
+  "SIM_GRPE_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_GRPE_PIN": {
+   "default": -1.0
+  },
+  "SIM_GRPS_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_GRPS_GRAB": {
+   "default": 2000.0
+  },
+  "SIM_GRPS_PIN": {
+   "default": -1.0
+  },
+  "SIM_GRPS_RELEASE": {
+   "default": 1000.0
+  },
+  "SIM_GRPS_REVERSE": {
+   "default": 0.0
+  },
+  "SIM_GYR1_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_GYR1_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR1_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR1_RND": {
+   "default": 0.0
+  },
+  "SIM_GYR1_SCALE_X": {
+   "default": 0.0
+  },
+  "SIM_GYR1_SCALE_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR1_SCALE_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR2_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_GYR2_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR2_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR2_RND": {
+   "default": 0.0
+  },
+  "SIM_GYR2_SCALE_X": {
+   "default": 0.0
+  },
+  "SIM_GYR2_SCALE_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR2_SCALE_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR3_BIAS_X": {
+   "default": 0.0
+  },
+  "SIM_GYR3_BIAS_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR3_BIAS_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR3_RND": {
+   "default": 0.0
+  },
+  "SIM_GYR3_SCALE_X": {
+   "default": 0.0
+  },
+  "SIM_GYR3_SCALE_Y": {
+   "default": 0.0
+  },
+  "SIM_GYR3_SCALE_Z": {
+   "default": 0.0
+  },
+  "SIM_GYR_FAIL_MSK": {
+   "default": 0.0
+  },
+  "SIM_GYR_FILE_RW": {
+   "default": 0.0
+  },
+  "SIM_IE24_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_IE24_ERROR": {
+   "default": 0.0
+  },
+  "SIM_IE24_STATE": {
+   "default": -1.0
+  },
+  "SIM_IMUT1_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_IMUT2_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_IMUT3_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_IMUT_END": {
+   "default": 45.0
+  },
+  "SIM_IMUT_FIXED": {
+   "default": 0.0
+  },
+  "SIM_IMUT_START": {
+   "default": 25.0
+  },
+  "SIM_IMUT_TCONST": {
+   "default": 300.0
+  },
+  "SIM_IMU_COUNT": {
+   "default": 2.0
+  },
+  "SIM_IMU_ORIENT": {
+   "default": 0.0
+  },
+  "SIM_IMU_POS_X": {
+   "default": 0.0
+  },
+  "SIM_IMU_POS_Y": {
+   "default": 0.0
+  },
+  "SIM_IMU_POS_Z": {
+   "default": 0.0
+  },
+  "SIM_INIT_ALT_OFS": {
+   "default": 0.0
+  },
+  "SIM_INIT_LAT_OFS": {
+   "default": 0.0
+  },
+  "SIM_INIT_LON_OFS": {
+   "default": 0.0
+  },
+  "SIM_INS_THR_MIN": {
+   "default": 0.10000000149011612
+  },
+  "SIM_JSON_MASTER": {
+   "default": 0.0
+  },
+  "SIM_LED_LAYOUT": {
+   "default": 0.0
+  },
+  "SIM_LOOP_DELAY": {
+   "default": 0.0
+  },
+  "SIM_MAG1_DEVID": {
+   "default": 97539.0
+  },
+  "SIM_MAG1_DIA_X": {
+   "default": 0.0
+  },
+  "SIM_MAG1_DIA_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG1_DIA_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG1_FAIL": {
+   "default": 0.0
+  },
+  "SIM_MAG1_ODI_X": {
+   "default": 0.0
+  },
+  "SIM_MAG1_ODI_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG1_ODI_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG1_OFS_X": {
+   "default": 5.0
+  },
+  "SIM_MAG1_OFS_Y": {
+   "default": 13.0
+  },
+  "SIM_MAG1_OFS_Z": {
+   "default": -18.0
+  },
+  "SIM_MAG1_ORIENT": {
+   "default": 0.0
+  },
+  "SIM_MAG1_SCALING": {
+   "default": 1.0
+  },
+  "SIM_MAG2_DEVID": {
+   "default": 131874.0
+  },
+  "SIM_MAG2_DIA_X": {
+   "default": 0.0
+  },
+  "SIM_MAG2_DIA_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG2_DIA_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG2_FAIL": {
+   "default": 0.0
+  },
+  "SIM_MAG2_ODI_X": {
+   "default": 0.0
+  },
+  "SIM_MAG2_ODI_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG2_ODI_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG2_OFS_X": {
+   "default": 5.0
+  },
+  "SIM_MAG2_OFS_Y": {
+   "default": 13.0
+  },
+  "SIM_MAG2_OFS_Z": {
+   "default": -18.0
+  },
+  "SIM_MAG2_ORIENT": {
+   "default": 0.0
+  },
+  "SIM_MAG2_SCALING": {
+   "default": 1.0
+  },
+  "SIM_MAG3_DEVID": {
+   "default": 263178.0
+  },
+  "SIM_MAG3_DIA_X": {
+   "default": 0.0
+  },
+  "SIM_MAG3_DIA_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG3_DIA_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG3_FAIL": {
+   "default": 0.0
+  },
+  "SIM_MAG3_ODI_X": {
+   "default": 0.0
+  },
+  "SIM_MAG3_ODI_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG3_ODI_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG3_OFS_X": {
+   "default": 5.0
+  },
+  "SIM_MAG3_OFS_Y": {
+   "default": 13.0
+  },
+  "SIM_MAG3_OFS_Z": {
+   "default": -18.0
+  },
+  "SIM_MAG3_ORIENT": {
+   "default": 0.0
+  },
+  "SIM_MAG3_SCALING": {
+   "default": 1.0
+  },
+  "SIM_MAG4_DEVID": {
+   "default": 97283.0
+  },
+  "SIM_MAG5_DEVID": {
+   "default": 97795.0
+  },
+  "SIM_MAG6_DEVID": {
+   "default": 98051.0
+  },
+  "SIM_MAG7_DEVID": {
+   "default": 0.0
+  },
+  "SIM_MAG8_DEVID": {
+   "default": 0.0
+  },
+  "SIM_MAG_ALY_HGT": {
+   "default": 1.0
+  },
+  "SIM_MAG_ALY_X": {
+   "default": 0.0
+  },
+  "SIM_MAG_ALY_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG_ALY_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG_DELAY": {
+   "default": 0.0
+  },
+  "SIM_MAG_MOT_X": {
+   "default": 0.0
+  },
+  "SIM_MAG_MOT_Y": {
+   "default": 0.0
+  },
+  "SIM_MAG_MOT_Z": {
+   "default": 0.0
+  },
+  "SIM_MAG_RND": {
+   "default": 0.0
+  },
+  "SIM_MAG_SAVE_IDS": {
+   "default": 1.0
+  },
+  "SIM_ODOM_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_OH_MASK": {
+   "default": 0.0
+  },
+  "SIM_OH_RELAY_MSK": {
+   "default": -1.0
+  },
+  "SIM_OPOS_ALT": {
+   "default": 584.0
+  },
+  "SIM_OPOS_HDG": {
+   "default": 353.0
+  },
+  "SIM_OPOS_LAT": {
+   "default": -35.36326217651367
+  },
+  "SIM_OPOS_LNG": {
+   "default": 149.1652374267578
+  },
+  "SIM_PARA_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_PARA_PIN": {
+   "default": -1.0
+  },
+  "SIM_PIN_MASK": {
+   "default": 0.0
+  },
+  "SIM_PLD_ALT_LMT": {
+   "default": 15.0
+  },
+  "SIM_PLD_DIST_LMT": {
+   "default": 10.0
+  },
+  "SIM_PLD_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_PLD_HEIGHT": {
+   "default": 0.0
+  },
+  "SIM_PLD_LAT": {
+   "default": 40.891048431396484
+  },
+  "SIM_PLD_LON": {
+   "default": -74.21633911132812
+  },
+  "SIM_PLD_OPTIONS": {
+   "default": 0.0
+  },
+  "SIM_PLD_ORIENT": {
+   "default": 24.0
+  },
+  "SIM_PLD_RATE": {
+   "default": 100.0
+  },
+  "SIM_PLD_SHIP": {
+   "default": 0.0
+  },
+  "SIM_PLD_TYPE": {
+   "default": 0.0
+  },
+  "SIM_PLD_YAW": {
+   "default": 0.0
+  },
+  "SIM_RATE_HZ": {
+   "default": 1200.0
+  },
+  "SIM_RC_CHANCOUNT": {
+   "default": 16.0,
+   "display": "RC channel count"
+  },
+  "SIM_RC_FAIL": {
+   "default": 0.0,
+   "display": "Simulated RC signal failure",
+   "values": {
+    "0": "Disabled",
+    "1": "No RC pusles",
+    "2": "All Channels neutral except Throttle is 950us"
+   }
+  },
+  "SIM_RICH_CTRL": {
+   "default": -1.0
+  },
+  "SIM_RICH_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_SERVO_DELAY": {
+   "default": 0.0
+  },
+  "SIM_SERVO_FILTER": {
+   "default": 0.0
+  },
+  "SIM_SERVO_SPEED": {
+   "default": 0.14000000059604645
+  },
+  "SIM_SHIP_DSIZE": {
+   "default": 10.0
+  },
+  "SIM_SHIP_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_SHIP_OFS_X": {
+   "default": 0.0
+  },
+  "SIM_SHIP_OFS_Y": {
+   "default": 0.0
+  },
+  "SIM_SHIP_OFS_Z": {
+   "default": 0.0
+  },
+  "SIM_SHIP_PSIZE": {
+   "default": 1000.0
+  },
+  "SIM_SHIP_SPEED": {
+   "default": 3.0
+  },
+  "SIM_SHIP_SYSID": {
+   "default": 17.0
+  },
+  "SIM_SHOVE_TIME": {
+   "default": 0.0
+  },
+  "SIM_SHOVE_X": {
+   "default": 0.0
+  },
+  "SIM_SHOVE_Y": {
+   "default": 0.0
+  },
+  "SIM_SHOVE_Z": {
+   "default": 0.0
+  },
+  "SIM_SLUP_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_SONAR_GLITCH": {
+   "default": 0.0,
+   "display": "Sonar glitch probablility",
+   "range": [
+    0.0,
+    1.0
+   ]
+  },
+  "SIM_SONAR_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Sonar Offsets"
+  },
+  "SIM_SONAR_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Sonar Offsets"
+  },
+  "SIM_SONAR_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Sonar Offsets"
+  },
+  "SIM_SONAR_RND": {
+   "default": 0.0,
+   "display": "Sonar noise factor"
+  },
+  "SIM_SONAR_ROT": {
+   "default": 25.0,
+   "display": "Sonar rotation"
+  },
+  "SIM_SONAR_SCALE": {
+   "default": 12.121199607849121,
+   "units": "m/V",
+   "display": "Sonar conversion scale"
+  },
+  "SIM_SPEEDUP": {
+   "default": 1.0,
+   "display": "Sim Speedup",
+   "range": [
+    1.0,
+    10.0
+   ]
+  },
+  "SIM_SPR_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_SPR_PUMP": {
+   "default": -1.0
+  },
+  "SIM_SPR_SPIN": {
+   "default": -1.0
+  },
+  "SIM_TA_ENABLE": {
+   "default": 1.0
+  },
+  "SIM_TEMP_BFACTOR": {
+   "default": 0.0
+  },
+  "SIM_TEMP_BRD_OFF": {
+   "default": 20.0
+  },
+  "SIM_TEMP_START": {
+   "default": 25.0
+  },
+  "SIM_TEMP_TCONST": {
+   "default": 30.0
+  },
+  "SIM_TERRAIN": {
+   "default": 1.0,
+   "display": "Terrain Enable",
+   "values": {
+    "0": "Disable",
+    "1": "Enabled"
+   }
+  },
+  "SIM_TETH_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_THML_SCENARI": {
+   "default": 0.0
+  },
+  "SIM_TIDE_DIR": {
+   "default": 0.0
+  },
+  "SIM_TIDE_SPEED": {
+   "default": 0.0
+  },
+  "SIM_TIME_JITTER": {
+   "default": 0.0
+  },
+  "SIM_TWIST_TIME": {
+   "default": 0.0
+  },
+  "SIM_TWIST_X": {
+   "default": 0.0
+  },
+  "SIM_TWIST_Y": {
+   "default": 0.0
+  },
+  "SIM_TWIST_Z": {
+   "default": 0.0
+  },
+  "SIM_UART_LOSS": {
+   "default": 0.0
+  },
+  "SIM_VIB_FREQ_X": {
+   "default": 0.0
+  },
+  "SIM_VIB_FREQ_Y": {
+   "default": 0.0
+  },
+  "SIM_VIB_FREQ_Z": {
+   "default": 0.0
+  },
+  "SIM_VIB_MOT_HMNC": {
+   "default": 1.0
+  },
+  "SIM_VIB_MOT_MASK": {
+   "default": 0.0
+  },
+  "SIM_VIB_MOT_MAX": {
+   "default": 0.0
+  },
+  "SIM_VIB_MOT_MULT": {
+   "default": 1.0
+  },
+  "SIM_VICON_FAIL": {
+   "default": 0.0
+  },
+  "SIM_VICON_GLIT_X": {
+   "default": 0.0
+  },
+  "SIM_VICON_GLIT_Y": {
+   "default": 0.0
+  },
+  "SIM_VICON_GLIT_Z": {
+   "default": 0.0
+  },
+  "SIM_VICON_POS_X": {
+   "default": 0.0
+  },
+  "SIM_VICON_POS_Y": {
+   "default": 0.0
+  },
+  "SIM_VICON_POS_Z": {
+   "default": 0.0
+  },
+  "SIM_VICON_P_SD": {
+   "default": 0.0
+  },
+  "SIM_VICON_QUAL": {
+   "default": 50.0
+  },
+  "SIM_VICON_RATE": {
+   "default": 50.0
+  },
+  "SIM_VICON_TMASK": {
+   "default": 3.0
+  },
+  "SIM_VICON_VGLI_X": {
+   "default": 0.0
+  },
+  "SIM_VICON_VGLI_Y": {
+   "default": 0.0
+  },
+  "SIM_VICON_VGLI_Z": {
+   "default": 0.0
+  },
+  "SIM_VICON_V_SD": {
+   "default": 0.0
+  },
+  "SIM_VICON_YAW": {
+   "default": 0.0
+  },
+  "SIM_VICON_YAWERR": {
+   "default": 0.0
+  },
+  "SIM_VOLZ_ENA": {
+   "default": 0.0
+  },
+  "SIM_VOLZ_FMASK": {
+   "default": 0.0
+  },
+  "SIM_VOLZ_MASK": {
+   "default": 11.0
+  },
+  "SIM_WAVE_AMP": {
+   "default": 0.5
+  },
+  "SIM_WAVE_DIR": {
+   "default": 0.0
+  },
+  "SIM_WAVE_ENABLE": {
+   "default": 0.0
+  },
+  "SIM_WAVE_LENGTH": {
+   "default": 10.0
+  },
+  "SIM_WAVE_SPEED": {
+   "default": 0.5
+  },
+  "SIM_WIND_DIR": {
+   "default": 180.0,
+   "units": "deg",
+   "display": "Direction simulated wind is coming from"
+  },
+  "SIM_WIND_DIR_Z": {
+   "default": 0.0,
+   "units": "deg",
+   "display": "Simulated wind vertical direction"
+  },
+  "SIM_WIND_SPD": {
+   "default": 0.0,
+   "units": "m/s",
+   "display": "Simulated Wind speed"
+  },
+  "SIM_WIND_T": {
+   "default": 0.0,
+   "display": "Wind Profile Type",
+   "values": {
+    "0": "square law",
+    "1": "none",
+    "2": "linear-see WIND_T_COEF"
+   }
+  },
+  "SIM_WIND_TC": {
+   "default": 5.0,
+   "units": "s",
+   "display": "Wind variation time constant"
+  },
+  "SIM_WIND_TURB": {
+   "default": 0.0,
+   "units": "m/s",
+   "display": "Simulated Wind variation"
+  },
+  "SIM_WIND_T_ALT": {
+   "default": 60.0,
+   "units": "m",
+   "display": "Full Wind Altitude"
+  },
+  "SIM_WIND_T_COEF": {
+   "default": 0.009999999776482582,
+   "display": "Linear Wind Curve Coeff"
+  },
+  "SIM_WOW_PIN": {
+   "default": -1.0
+  },
+  "SPRAY_ENABLE": {
+   "default": 0.0
+  },
+  "SRTL_ACCURACY": {
+   "default": 2.0,
+   "units": "m",
+   "display": "SmartRTL accuracy",
+   "range": [
+    0.0,
+    10.0
+   ]
+  },
+  "SRTL_OPTIONS": {
+   "default": 0.0,
+   "display": "SmartRTL options",
+   "bitmask": {
+    "2": "Ignore pilot yaw"
+   }
+  },
+  "SRTL_POINTS": {
+   "default": 300.0,
+   "display": "SmartRTL maximum number of points on path",
+   "range": [
+    0.0,
+    500.0
+   ]
+  },
+  "STAT_BOOTCNT": {
+   "default": 1.0
+  },
+  "STAT_DISTFLWN": {
+   "default": 0.0
+  },
+  "STAT_FLTCNT": {
+   "default": 0.0
+  },
+  "STAT_FLTTIME": {
+   "default": 0.0
+  },
+  "STAT_RESET": {
+   "default": 1.0
+  },
+  "STAT_RUNTIME": {
+   "default": 0.0
+  },
+  "SUPER_SIMPLE": {
+   "default": 0.0
+  },
+  "SURFTRAK_MODE": {
+   "default": 1.0
+  },
+  "SURFTRAK_TC": {
+   "default": 1.0
+  },
+  "TCAL_ENABLED": {
+   "default": 0.0
+  },
+  "TEMP1_TYPE": {
+   "default": 0.0
+  },
+  "TEMP2_TYPE": {
+   "default": 0.0
+  },
+  "TEMP3_TYPE": {
+   "default": 0.0
+  },
+  "TEMP_LOG": {
+   "default": 0.0
+  },
+  "TERRAIN_CACHE_SZ": {
+   "default": 12.0
+  },
+  "TERRAIN_ENABLE": {
+   "default": 1.0
+  },
+  "TERRAIN_MARGIN": {
+   "default": 0.05000000074505806
+  },
+  "TERRAIN_OFS_MAX": {
+   "default": 30.0
+  },
+  "TERRAIN_OPTIONS": {
+   "default": 0.0
+  },
+  "TERRAIN_SPACING": {
+   "default": 100.0
+  },
+  "THROW_ALT_ACSND": {
+   "default": 3.0
+  },
+  "THROW_ALT_DCSND": {
+   "default": 1.0
+  },
+  "THROW_ALT_MAX": {
+   "default": 0.0
+  },
+  "THROW_ALT_MIN": {
+   "default": 0.0
+  },
+  "THROW_MOT_START": {
+   "default": 0.0
+  },
+  "THROW_NEXTMODE": {
+   "default": 18.0
+  },
+  "THROW_TYPE": {
+   "default": 0.0
+  },
+  "THR_DZ": {
+   "default": 100.0
+  },
+  "TKOFF_RPM_MAX": {
+   "default": 0.0
+  },
+  "TKOFF_RPM_MIN": {
+   "default": 0.0
+  },
+  "TKOFF_SLEW_TIME": {
+   "default": 2.0
+  },
+  "TKOFF_THR_MAX": {
+   "default": 0.8999999761581421
+  },
+  "TUNE": {
+   "default": 0.0
+  },
+  "TUNE2": {
+   "default": 0.0
+  },
+  "TUNE2_MAX": {
+   "default": 0.0
+  },
+  "TUNE2_MIN": {
+   "default": 0.0
+  },
+  "TUNE_MAX": {
+   "default": 0.0
+  },
+  "TUNE_MIN": {
+   "default": 0.0
+  },
+  "VISO_DELAY_MS": {
+   "default": 10.0,
+   "units": "ms",
+   "display": "Visual odometry sensor delay",
+   "range": [
+    0.0,
+    250.0
+   ]
+  },
+  "VISO_ORIENT": {
+   "default": 0.0,
+   "display": "Visual odometery camera orientation",
+   "values": {
+    "0": "Forward",
+    "2": "Right",
+    "24": "Up",
+    "25": "Down",
+    "4": "Back",
+    "6": "Left"
+   }
+  },
+  "VISO_POS_M_NSE": {
+   "default": 0.20000000298023224,
+   "units": "m",
+   "display": "Visual odometry position measurement noise",
+   "range": [
+    0.1,
+    10.0
+   ]
+  },
+  "VISO_POS_X": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Visual odometry camera X position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "VISO_POS_Y": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Visual odometry camera Y position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "VISO_POS_Z": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Visual odometry camera Z position offset",
+   "range": [
+    -5.0,
+    5.0
+   ]
+  },
+  "VISO_QUAL_MIN": {
+   "default": 0.0,
+   "units": "%",
+   "display": "Visual odometry minimum quality",
+   "range": [
+    -1.0,
+    100.0
+   ]
+  },
+  "VISO_SCALE": {
+   "default": 1.0,
+   "display": "Visual odometry scaling factor"
+  },
+  "VISO_TYPE": {
+   "default": 1.0,
+   "display": "Visual odometry camera connection type",
+   "values": {
+    "0": "None",
+    "1": "MAVLink",
+    "2": "IntelT265",
+    "3": "VOXL(ModalAI)"
+   }
+  },
+  "VISO_VEL_M_NSE": {
+   "default": 0.10000000149011612,
+   "units": "m/s",
+   "display": "Visual odometry velocity measurement noise",
+   "range": [
+    0.05,
+    5.0
+   ]
+  },
+  "VISO_YAW_M_NSE": {
+   "default": 0.20000000298023224,
+   "units": "rad",
+   "display": "Visual odometry yaw measurement noise",
+   "range": [
+    0.05,
+    1.0
+   ]
+  },
+  "VTX_ENABLE": {
+   "default": 0.0
+  },
+  "WINCH_TYPE": {
+   "default": 0.0
+  },
+  "WP_ACC": {
+   "default": 2.5,
+   "units": "m/s/s",
+   "display": "Waypoint Acceleration",
+   "range": [
+    0.5,
+    5.0
+   ]
+  },
+  "WP_ACC_CNR": {
+   "default": 0.0,
+   "units": "m/s/s",
+   "display": "Waypoint Cornering Acceleration",
+   "range": [
+    0.0,
+    5.0
+   ]
+  },
+  "WP_ACC_Z": {
+   "default": 1.0,
+   "units": "m/s/s",
+   "display": "Waypoint Vertical Acceleration",
+   "range": [
+    0.5,
+    5.0
+   ]
+  },
+  "WP_JERK": {
+   "default": 1.0,
+   "units": "m/s/s/s",
+   "display": "Waypoint Jerk",
+   "range": [
+    1.0,
+    20.0
+   ]
+  },
+  "WP_NAVALT_MIN": {
+   "default": 0.0,
+   "units": "m",
+   "display": "Waypoint navigation altitude minimum",
+   "range": [
+    0.0,
+    5.0
+   ]
+  },
+  "WP_RADIUS_M": {
+   "default": 2.0,
+   "units": "m",
+   "display": "Waypoint Radius",
+   "range": [
+    0.05,
+    10.0
+   ]
+  },
+  "WP_RFND_USE": {
+   "default": 1.0,
+   "display": "Waypoint missions use rangefinder for terrain following",
+   "values": {
+    "0": "Disable",
+    "1": "Enable"
+   }
+  },
+  "WP_SPD": {
+   "default": 10.0,
+   "units": "m/s",
+   "display": "Waypoint Horizontal Speed Target",
+   "range": [
+    0.1,
+    20.0
+   ]
+  },
+  "WP_SPD_DN": {
+   "default": 1.5,
+   "units": "m/s",
+   "display": "Waypoint Descent Speed Target",
+   "range": [
+    0.1,
+    10.0
+   ]
+  },
+  "WP_SPD_UP": {
+   "default": 2.5,
+   "units": "m/s",
+   "display": "Waypoint Climb Speed Target",
+   "range": [
+    0.1,
+    10.0
+   ]
+  },
+  "WP_TER_MARGIN": {
+   "default": 10.0,
+   "units": "m",
+   "display": "Waypoint Terrain following altitude margin",
+   "range": [
+    0.1,
+    100.0
+   ]
+  },
+  "WP_YAW_BEHAVIOR": {
+   "default": 2.0,
+   "display": "Yaw behaviour during missions",
+   "values": {
+    "0": "Never change yaw",
+    "1": "Face next waypoint",
+    "2": "Face next waypoint except RTL",
+    "3": "Face along GPS course"
+   }
+  },
+  "WVANE_ENABLE": {
+   "default": 0.0
+  },
+  "ZIGZ_AUTO_ENABLE": {
+   "default": 0.0
+  }
+ },
+ "variant": "extnav",
+ "boot": {
+  "VISO_TYPE": 1.0,
+  "FLOW_TYPE": 10.0,
+  "SIM_FLOW_ENABLE": 1.0,
+  "RNGFND1_TYPE": 100.0
+ }
+}

@@ -39,6 +39,19 @@ def window_plan(tmp_path: Path, grid=None) -> MissionPlan:
                         origin=ms.ORIGIN, by="op:sim-test", profile=PROFILE)
 
 
+def nav_plan(tmp_path: Path, gnss: str = "none", flow: bool = True, grid=None) -> MissionPlan:
+    """The window mission planned for a GNSS-free vehicle (SIM-2n): ExternalNav (VPS, declared
+    σ 0.5 m) + optical flow. The corridor takes σ_nav where it took σ_GNSS (1.5 m)."""
+    from aerosplat.mission.models import ExtNavSpec, NavProfile
+
+    grid = grid if grid is not None else ms.street_grid()
+    ap = ms.window_ap()
+    target, _, _ = ms.confirmed(tmp_path / "authored-window", ap)
+    prof = PROFILE.model_copy(update={"nav": NavProfile(gnss=gnss, extnav=ExtNavSpec(), flow=flow)})
+    return plan_mission(target=target, ap=ap, grid=grid, occupancy=ms.occupancy_ref(),
+                        origin=ms.ORIGIN, by="op:sim-test", profile=prof)
+
+
 def export(plan: MissionPlan, folder: Path, origin=ms.ORIGIN) -> Path:
     """mission.json + the three flyable formats, as MissionStore.export writes them."""
     folder.mkdir(parents=True, exist_ok=True)

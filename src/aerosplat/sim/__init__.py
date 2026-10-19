@@ -14,4 +14,10 @@ The L2 runner (SIM-1, §4.10) flies missions exported by `aerosplat.mission`:
     record       truth, estimate and events on the simulation clock
     oracles      §4.6 on the TRUE trajectory against the twin
     report       report.html / report.json next to the export
+
+SIM-2n (ADR-0015 stage 1) flies the same missions with NO GNSS:
+
+    extnav       companion emulator: EKF origin, ODOMETRY from the truth + a VPS error model,
+                 VPS-loss reactions (EKF3 source set 2, back off from the wall, land), GNSS monitor
+    camera       camera profiles (configs/sim/cameras), e.g. imx290:4mm
 """

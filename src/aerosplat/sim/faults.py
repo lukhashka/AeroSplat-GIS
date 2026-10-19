@@ -11,6 +11,8 @@ and against the live vehicle by the runner before anything is injected.
     battery_sag     SIM_BATT_VOLTAGE below BATT_LOW_VOLT / BATT_CRT_VOLT -> battery failsafe
     wind_gust       SIM_WIND_SPD / _DIR / _TURB           -> none expected
     motor_degraded  SIM_ENGINE_FAIL (mask) + SIM_ENGINE_MUL (thrust) -> none expected
+    vps_loss        the companion's VPS stops (no ODOMETRY)       -> the companion's reaction
+    gps_spoof       SIM_GPS1_GLTCH_X / _Y (degrees)               -> flagged by the GNSS monitor
 
 `gcs_loss` has no SIM_* parameter: ArduPilot counts heartbeats from MAV_GCS_SYSID only, so the
 runner makes itself the GCS (RUNNER_PARAMS) and the fault is the runner going silent.
@@ -18,11 +20,13 @@ runner makes itself the GCS (RUNNER_PARAMS) and the fault is the runner going si
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Mapping, Optional
 
 from aerosplat.sim.params import FirmwareParams, ParameterError
-from aerosplat.sim.scenario import Environment, Fault, FaultKind, Wind
+from aerosplat.sim.scenario import Environment, Fault, FaultKind, Reaction, Wind
+from aerosplat.sim.vehicle import EARTH_RADIUS_M
 
 RUNNER_SYSID = 245
 # The runner is the vehicle's GCS: GCS loss is the runner's silence, not MAVProxy's.
@@ -79,6 +83,7 @@ class Injection:
     inject: tuple[ParamChange, ...]
     clear: tuple[ParamChange, ...]
     heartbeats: Optional[bool] = None      # gcs_loss: runner heartbeats off (inject) / on (clear)
+    vps: Optional[bool] = None             # vps_loss: companion VPS fixes off (inject) / on (clear)
     note: str = ""
 
     @property
@@ -121,9 +126,10 @@ def _action(name: str, parm, vehicle) -> tuple[str, ...]:
 
 
 def injection(fault: Fault, fw: FirmwareParams, vehicle: Mapping[str, float],
-              wind: Wind = Wind()) -> Injection:
+              wind: Wind = Wind(), lat_deg: float = 0.0) -> Injection:
     """The SIM_* changes for `fault` on a vehicle whose parameters are `vehicle` (what it holds
-    before the fault: thresholds come from there, and clearing puts these values back)."""
+    before the fault: thresholds come from there, and clearing puts these values back).
+    `lat_deg`: where the vehicle flies (a GNSS offset in metres becomes degrees there)."""
 
     def have(*names: str) -> None:
         missing = [n for n in names if n not in fw]
@@ -189,6 +195,24 @@ def injection(fault: Fault, fw: FirmwareParams, vehicle: Mapping[str, float],
                                  ParamChange("SIM_ENGINE_MUL", float(fault.thrust))),
                          (back("SIM_ENGINE_FAIL", 0.0), back("SIM_ENGINE_MUL", 1.0)),
                          note=f"motor {fault.motor} at {fault.thrust:.0%} thrust")
+    if k is FaultKind.vps_loss:
+        if int(vehicle.get("VISO_TYPE", 0)) == 0:
+            raise FaultUnavailable("vps_loss: the vehicle takes no ExternalNav (VISO_TYPE 0)")
+        return Injection(fault, (), (), vps=False, note="companion VPS gives no fix (ODOMETRY stops)")
+    if k is FaultKind.gps_spoof:
+        have("SIM_GPS1_GLTCH_X", "SIM_GPS1_GLTCH_Y")
+        if int(vehicle.get("GPS1_TYPE", 1)) == 0:
+            raise FaultUnavailable("gps_spoof: the vehicle has no GNSS receiver (GPS1_TYPE 0)")
+        assert fault.offset_m is not None
+        north, east = fault.offset_m
+        # SIM_GPS1_GLTCH_X / _Y are added to the reported latitude / longitude in degrees
+        # (libraries/SITL/SIM_GPS.cpp, Copter-4.7.2).
+        dlat = math.degrees(north / EARTH_RADIUS_M)
+        dlon = math.degrees(east / (EARTH_RADIUS_M * math.cos(math.radians(lat_deg))))
+        return Injection(fault, (ParamChange("SIM_GPS1_GLTCH_X", dlat),
+                                 ParamChange("SIM_GPS1_GLTCH_Y", dlon)),
+                         (back("SIM_GPS1_GLTCH_X", 0.0), back("SIM_GPS1_GLTCH_Y", 0.0)),
+                         note=f"GNSS reports {north:+g} m north, {east:+g} m east of the truth")
     raise FaultUnavailable(f"no mapping for fault {k}")
 
 
@@ -217,8 +241,23 @@ def environment_params(env: Environment, fw: FirmwareParams) -> dict[str, float]
     return {**FLAT_GROUND, **wind_params(env.wind, fw)}
 
 
-def response(trigger: str, parm: Mapping[str, float], vehicle: Mapping[str, float]) -> Response:
-    """What the package + vehicle make of a trigger (an abort reason, SIMULATION §4.6)."""
+def response(trigger: str, parm: Mapping[str, float], vehicle: Mapping[str, float],
+             reaction: Optional[Reaction] = None) -> Response:
+    """What the package + vehicle make of a trigger (an abort reason, SIMULATION §4.6).
+    `reaction`: the companion's policy (GNSS-free runs), which answers `vps_loss`."""
+    if trigger == "vps_loss":
+        if reaction is None:
+            raise FaultUnavailable("vps_loss is answered by the companion: a GNSS-free run only")
+        flow = int(vehicle.get("EK3_SRC2_VELXY", parm.get("EK3_SRC2_VELXY", 0))) == 5
+        # The companion stops the mission (GUIDED: brake, back away from a wall, then LAND) at
+        # once near a wall, else when the drift budget on optical flow is spent.
+        budget = reaction.drift_budget_s if flow else 0.0
+        return Response(trigger, ("GUIDED",), ("companion: ADR-0015 §2.5",), delay_s=budget,
+                        note=("optical flow (EKF3 source set 2) carries the vehicle for "
+                              f"{budget:g} s; a wall within {reaction.wall_guard_m:g} m: back off "
+                              f"to {reaction.retreat_m:g} m at once; then LAND") if flow else
+                        "no flow: stop and land at once",
+                        extra={"flow": flow})
     opts = int(_value("FS_OPTIONS", parm, vehicle)) if ("FS_OPTIONS" in parm or "FS_OPTIONS" in vehicle) else 0
     if trigger == "fence_breach":
         if int(_value("FENCE_ENABLE", parm, vehicle)) != 1:

@@ -230,7 +230,11 @@ class Sitl:
     def launcher_log(self) -> Path:
         return Path(tempfile.gettempdir()) / f"aerosplat-sitl-i{self.instance}.log"
 
-    def env(self, home: Optional[Home] = None, speedup: Optional[float] = None) -> dict[str, str]:
+    def env(self, home: Optional[Home] = None, speedup: Optional[float] = None,
+            boot_defaults: tuple[Path, ...] = ()) -> dict[str, str]:
+        """Environment of the WSL scripts. `boot_defaults`: extra parameter files (host paths)
+        loaded at boot after the configured ones — for what must hold from power-on, such as a
+        vehicle without GPS (SIM-2n), which a PARAM_SET after boot cannot give."""
         ap, v = self.cfg.ardupilot, self.cfg.vehicle
         env = {
             "AP_TAG": ap.tag, "AP_COMMIT": ap.commit, "AP_REMOTE": ap.remote,
@@ -238,12 +242,21 @@ class Sitl:
             "AP_VENV": self.cfg.wsl.venv, "SITL_RUN_DIR": self.cfg.wsl.run_dir,
             "SITL_INSTANCE": str(self.instance), "SITL_MODEL": v.model,
             "SITL_SPEEDUP": f"{speedup if speedup is not None else v.speedup:g}",
-            "SITL_WIPE": "1" if v.wipe else "0", "SITL_DEFAULTS": ",".join(v.defaults),
+            "SITL_WIPE": "1" if v.wipe else "0",
+            "SITL_DEFAULTS": ",".join([*v.defaults, *(self.host_path(p) for p in boot_defaults)]),
             "SITL_TEST_PORT": str(self.cfg.ports.test), "SITL_GCS_PORT": str(self.cfg.ports.gcs),
         }
         if home is not None:
             env["SITL_HOME"] = home.arg()
         return env
+
+    @staticmethod
+    def host_path(path: Path) -> str:
+        """A host file as the WSL scripts see it (/mnt/<drive>/...), or as is on Linux."""
+        path = Path(path).resolve()
+        if "," in str(path):
+            raise SitlError(f"{path}: a path with a comma cannot go into SITL_DEFAULTS")
+        return to_wsl_path(path) if sys.platform == "win32" else str(path)
 
     def command(self, script: str, env: dict[str, str]) -> list[str]:
         """argv running tools/sitl/<script> with `env`: through wsl.exe on Windows, else bash."""
@@ -271,13 +284,14 @@ class Sitl:
             raise SitlError(f"status failed ({r.returncode}): {r.stderr.strip() or r.stdout.strip()}")
         return parse_session(r.stdout)
 
-    def start(self, home: Home, speedup: Optional[float] = None, timeout: float = 60) -> dict[str, str]:
+    def start(self, home: Home, speedup: Optional[float] = None, timeout: float = 60,
+              boot_defaults: tuple[Path, ...] = ()) -> dict[str, str]:
         """Start detached and wait until the supervisor reports both processes up."""
         if self.status() is not None:
             raise SitlError(f"SITL instance {self.instance} is already running; stop it first")
         log = self.launcher_log
         with open(log, "wb") as fh:
-            cmd = self.command("run_sitl.sh", self.env(home, speedup))
+            cmd = self.command("run_sitl.sh", self.env(home, speedup, tuple(boot_defaults)))
             if sys.platform == "win32":
                 # Own hidden console, survives the caller's console. Not DETACHED_PROCESS:
                 # wsl.exe then relays no output at all.

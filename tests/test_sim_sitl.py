@@ -109,6 +109,22 @@ def test_commands_windows_and_linux(monkeypatch):
     assert cmd == ["env", "SITL_RUN_DIR=~/x", "bash", str(sitl_mod.SCRIPTS_DIR / "stop_sitl.sh")]
 
 
+def test_boot_defaults_follow_the_configured_ones(monkeypatch, tmp_path):
+    """SIM-2n: a GNSS-free run boots with an extra parameter file, after copter.parm."""
+    cfg = load_config()
+    s = Sitl(cfg, instance=1)
+    boot = tmp_path / "boot.parm"
+    assert s.env(Home.parse("1,2,3"))["SITL_DEFAULTS"] == ",".join(cfg.vehicle.defaults)
+    monkeypatch.setattr(sys, "platform", "win32")
+    if not str(tmp_path.resolve())[1:2] == ":":
+        pytest.skip("needs a drive path")
+    parts = s.env(Home.parse("1,2,3"), boot_defaults=(boot,))["SITL_DEFAULTS"].split(",")
+    assert parts[:-1] == list(cfg.vehicle.defaults)
+    assert parts[-1].startswith("/mnt/") and parts[-1].endswith("/boot.parm")
+    with pytest.raises(SitlError, match="comma"):
+        Sitl.host_path(tmp_path / "a,b.parm")
+
+
 def test_endpoint_override_and_linux(monkeypatch):
     s = Sitl(load_config())
     monkeypatch.setenv(ENDPOINT_ENV, "udpout:10.0.0.5:14560")
