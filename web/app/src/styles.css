@@ -1179,6 +1179,14 @@ kbd {
   stroke-dasharray: 6 4;
   pointer-events: none;
 }
+/* Drawn in another run and projected onto this wall (§5.9): shown, not editable here. */
+.facade-overlay .ap.carried {
+  fill: none;
+  stroke-dasharray: 3 3;
+}
+.facade-overlay .ap.carried.on {
+  fill: rgba(255, 255, 255, 0.08);
+}
 
 /* ── mission / flight view (SIMULATION §2 idea 12) ───────────────────── */
 .field.inline {

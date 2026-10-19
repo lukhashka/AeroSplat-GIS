@@ -23,6 +23,7 @@ from aerosplat.semantics.models import (COVERAGE_NPZ, SEMANTICS_JSON, Building, 
 from aerosplat.server import api_semantics, api_v2                     # noqa: E402
 from aerosplat.store import Catalog, Site                              # noqa: E402
 from aerosplat.store.models import RunStatus                           # noqa: E402
+from aerosplat.store.scenes import SceneLookupError                    # noqa: E402
 
 ORIGIN = GeoPoint(lat=40.8942, lon=-74.2173, h=233.0)
 BASE = "/api/v2/sites/demo/pier"
@@ -42,7 +43,11 @@ def stub_render():
             seen["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
-            self.send_header("X-Render-Meta", '{"stub":true,"width":1,"height":1}')
+            # Like the real service, the meta names the run it rendered; `wrong_run` makes
+            # the stub misbehave as a service older than the API would.
+            run = seen.get("wrong_run", seen["body"].get("run"))
+            self.send_header("X-Render-Meta", json.dumps({"stub": True, "width": 1, "height": 1,
+                                                          "run": run}))
             self.end_headers()
             self.wfile.write(b"\x89PNG-stub")
 
@@ -213,7 +218,10 @@ def test_a_gsd_too_fine_for_one_image_is_refused_before_the_gpu(site):
 
 
 def test_the_ortho_needs_a_trained_scene(client, monkeypatch):
-    monkeypatch.setattr(api_v2, "_scene_name", lambda cat, s: None)
+    def no_scene(cat, site, run):
+        raise SceneLookupError(f"run {run.id} of {site.key} has no trained scene (no splat product)")
+
+    monkeypatch.setattr(api_semantics, "run_scene_source", no_scene)
     r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
     assert r.status_code == 404 and "no trained scene" in r.json()["detail"]
 
@@ -222,6 +230,59 @@ def test_the_render_service_being_down_says_how_to_start_it(client, monkeypatch)
     monkeypatch.setenv("AEROSPLAT_RENDER_URL", "http://127.0.0.1:9")
     r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
     assert r.status_code == 503 and "aerosplat up" in r.json()["detail"]
+
+
+def add_run(run_id, facades=None, *, splat=True):
+    """Another, newer run of the same Site; same facades as r1 unless told otherwise."""
+    cat = api_v2.get_catalog()
+    s = cat.get_site("demo", "pier")
+    cat.create_run(s, "baseline", run_id, capture_ids=[], config={}, earth_model="wgs84",
+                   georeferenced=True)
+    dirs = cat.run_dirs(s, "baseline", run_id)
+    old = cat.run_dirs(s, "baseline", "r1").root / "semantics" / SEMANTICS_JSON
+    result = SemanticsResult(**json.loads(old.read_text(encoding="utf-8")))
+    if facades is not None:
+        result = result.model_copy(update={"facades": facades})
+    sem = dirs.root / "semantics"
+    sem.mkdir(parents=True)
+    (sem / SEMANTICS_JSON).write_text(result.model_dump_json(), encoding="utf-8")
+    products = {"semantics": sem}
+    if splat:
+        dirs.gs.mkdir(parents=True)
+        (dirs.gs / "splat_wgs84.pt").write_bytes(b"stub")
+        products["splat"] = dirs.gs / "splat_wgs84.pt"
+    cat.finish_run(s, "baseline", run_id, status=RunStatus.ok, products=products)
+
+
+def test_the_ortho_of_a_pinned_run_comes_from_that_runs_scene(site):
+    """Session 2026-10-18…19, error 20: `?run=` pinned the facade but not the splat."""
+    client, seen = site
+    add_run("r2")
+    assert client.post(f"{BASE}/facades/B01/N1/ortho", json={}).status_code == 200
+    assert seen["body"]["run"] == "r2"                   # default: the newest run, by name
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={"run_id": "r1"})
+    assert r.status_code == 200 and seen["body"]["run"] == "r1"
+    assert json.loads(r.headers["x-render-meta"])["run"] == "r1"
+
+
+def test_a_run_without_its_own_splat_is_refused_rather_than_mixed(site):
+    client, seen = site
+    add_run("r2", splat=False)
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
+    assert r.status_code == 404 and "r2" in r.json()["detail"]
+    assert "path" not in seen                            # the newest scene was not used instead
+    body = client.get(f"{BASE}/semantics").json()
+    assert body["run_id"] == "r2" and body["scene"] is None
+    assert [(x["id"], x["scene"]) for x in body["runs"]] == [("r2", False), ("r1", True)]
+    assert client.get(f"{BASE}/semantics?run_id=r1").json()["scene"] == "demo/pier"
+    assert client.post(f"{BASE}/facades/B01/N1/ortho", json={"run_id": "r1"}).status_code == 200
+
+
+def test_a_render_service_that_answers_with_another_run_is_caught(site):
+    client, seen = site
+    seen["wrong_run"] = "r0"                             # e.g. a service older than the API
+    r = client.post(f"{BASE}/facades/B01/N1/ortho", json={})
+    assert r.status_code == 502 and "r0" in r.json()["detail"]
 
 
 def test_the_ortho_route_wins_over_the_facade_detail_route(site):
@@ -422,3 +483,208 @@ def test_addressing_an_empty_facade_changes_nothing(client):
     body = client.post(f"{BASE}/facades/B01/N1/address", json={}).json()
     assert body["rows"] == [] and body["features"] == [] and not body["ambiguous"]
     assert client.get(f"{BASE}/audit").json() == []
+
+
+# ── CityJSON export (§2.6) ───────────────────────────────────────────────
+def test_cityjson_export_over_the_api_and_the_cli(client, tmp_path):
+    from aerosplat.semantics import cli as semantics_cli
+    from aerosplat.semantics.cityjson import validate
+
+    ap = draw(client, -7.65, 3.0, -6.35, 4.5).json()
+    cand = draw(client, 2.0, 3.0, 3.3, 4.5, lifecycle="candidate").json()
+    r = client.get(f"{BASE}/export/cityjson")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/city+json")
+    assert 'filename="demo-pier-r1.city.json"' in r.headers["content-disposition"]
+    doc = r.json()
+    assert validate(doc)[0] == []
+    report = json.loads(r.headers["x-export-report"])
+    assert report["buildings"] == 1 and report["solids"] == 1 and report["openings"] == 1
+    sem = doc["CityObjects"]["B01"]["geometry"][1]["semantics"]["surfaces"]
+    assert [s.get("aerosplat_id") for s in sem if s["type"] == "Window"] == [ap["id"]]
+    both = client.get(f"{BASE}/export/cityjson?lifecycle=verified&lifecycle=candidate")
+    assert json.loads(both.headers["x-export-report"])["openings"] == 2
+    assert cand["id"] in both.text
+    assert client.get(f"{BASE}/export/cityjson?run_id=nope").status_code == 404
+
+    out = tmp_path / "out" / "pier.city.json"
+    code = semantics_cli.main(["--projects-root", str(tmp_path / "projects"), "cityjson",
+                               "--site", "demo/pier", "-o", str(out)])
+    assert code == 0 and validate(json.loads(out.read_text(encoding="utf-8")))[0] == []
+    assert semantics_cli.main(["--projects-root", str(tmp_path / "projects"), "match",
+                               "--site", "demo/pier", "--from-run", "r1"]) == 0
+
+
+# ── pad zones (§5.7) ─────────────────────────────────────────────────────
+def _write_terrain(run_id="r1"):
+    """terrain.npz for the fixture's raster (80 × 80 m from (-40, -40)): B01's 20 × 12 m flat
+    roof at 12 m, the ground at 0 everywhere else."""
+    cat = api_v2.get_catalog()
+    s = cat.get_site("demo", "pier")
+    dsm = np.zeros((80, 80))
+    labels = np.zeros((80, 80), np.int32)
+    dsm[28:40, 30:50] = 12.0                             # rows: north -12..0, cols: east -10..10
+    labels[28:40, 30:50] = 1
+    np.savez_compressed(cat.run_dirs(s, "baseline", run_id).root / "semantics" / "terrain.npz",
+                        dsm=dsm, dtm=np.zeros((80, 80)), count=np.full((80, 80), 9),
+                        roughness=np.zeros((80, 80)), labels=labels)
+
+
+def test_pad_candidates_from_the_roof_and_the_yard_are_candidates_only(client):
+    _write_terrain()
+    dry = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "dry_run": True}).json()
+    assert dry["model"].startswith("padzones@") and dry["dry_run"]
+    roof = [z for z in dry["zones"] if z["kind"] == "roof"]
+    assert len(roof) == 1 and roof[0]["z"] == pytest.approx(12.0)
+    assert roof[0]["usable_area_m2"] == 16 * 8                     # 20 × 12 eroded by 2 m
+    assert any(z["kind"] == "ground" for z in dry["zones"])
+    assert client.get(f"{BASE}/audit").json() == []                 # nothing stored
+
+    out = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "by": "tester"}).json()
+    cands = out["candidates"]
+    assert cands and {c["lifecycle"] for c in cands} == {"candidate"}
+    assert {c["provenance"]["origin"] for c in cands} == {"pipeline"}
+    by_class = {c["class"]: c for c in cands}
+    assert by_class["pad.roof_flat"]["pad"]["building_id"] == "B01"
+    assert by_class["pad.ground"]["pad"]["building_id"] is None and "дороги" in by_class["pad.ground"]["notes"]
+    assert by_class["pad.roof_flat"]["attributes"] == {"surface": "unknown", "hazard": "unknown"}
+    assert 0 < by_class["pad.roof_flat"]["confidence"] < 1
+    assert [e["op"] for e in client.get(f"{BASE}/audit").json()] == ["create"] * len(cands)
+
+    # A second press proposes nothing new; a rejected pad is not proposed again either.
+    again = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"]}).json()
+    assert again["candidates"] == [] and again["skipped"] == {"candidate": len(cands)}
+    roof_id = by_class["pad.roof_flat"]["id"]
+    client.patch(f"{BASE}/access-points/{roof_id}", json={"lifecycle": "rejected"})
+    third = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"], "dry_run": True}).json()
+    assert third["candidates"] == [] and third["skipped"].get("rejected") == 1
+
+
+def test_pad_candidates_say_why_not(client):
+    _write_terrain()
+    r = client.post(f"{BASE}/pads/candidates",
+                    json={"building_ids": ["B01"], "ground": False, "clearance_m": 7.0, "dry_run": True})
+    body = r.json()
+    assert body["zones"] == [] and body["rejected"][0]["code"] == "no_room"
+    assert client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B99"]}).status_code == 404
+    add_run("r2")                                                   # newer, without terrain.npz
+    r = client.post(f"{BASE}/pads/candidates", json={"building_ids": ["B01"]})
+    assert r.status_code == 404 and "terrain.npz" in r.json()["detail"]
+
+
+# ── snapping to the facade's frame (§5.6 item 3) ─────────────────────────
+def test_regularize_snaps_within_the_tolerance_and_audits_every_move(client):
+    ids = [draw(client, -9.0 + 3 * i, 3.0 + dv0, -7.6 + 3 * i, 4.5 + dv1).json()["id"]
+           for i, (dv0, dv1) in enumerate([(0.0, 0.0), (0.06, -0.03), (-0.04, 0.02), (0.0, 0.0),
+                                           (0.4, 0.0)])]
+    before = len(client.get(f"{BASE}/audit").json())
+    dry = client.post(f"{BASE}/facades/B01/N1/regularize", json={"dry_run": True}).json()
+    assert dry["dry_run"] and dry["tol_m"] == 0.15
+    assert {(m["id"], m["edge"]) for m in dry["moves"]} == {
+        (ids[1], "v0"), (ids[2], "v0"), (ids[1], "v1"), (ids[2], "v1")}
+    assert all(abs(m["delta"]) <= 0.15 for m in dry["moves"])
+    assert [(k["id"], k["edge"]) for k in dry["kept"]] == [(ids[4], "v0")]   # 0.4 m off: left
+    assert len(client.get(f"{BASE}/audit").json()) == before                 # nothing stored
+
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={"by": "tester"}).json()
+    assert sorted(f["id"] for f in out["features"]) == sorted(ids[1:3])
+    stored = {f["id"]: f for f in client.get(f"{BASE}/access-points?facade=B01/N1").json()}
+    for i in (1, 2):
+        vs = [p[1] for p in stored[ids[i]]["geometry"]["polygon_uv"]]
+        assert (min(vs), max(vs)) == pytest.approx((3.0, 4.5))
+        assert "прив'язка до сітки" in stored[ids[i]]["provenance"]["edits"][-1]["what"]
+    assert [p[1] for p in stored[ids[4]]["geometry"]["polygon_uv"]][0] == pytest.approx(3.4)
+    tail = client.get(f"{BASE}/audit").json()[before:]
+    assert [e["op"] for e in tail] == ["regularize", "regularize"]
+    assert all("низ" in e["what"] and "верх" in e["what"] for e in tail)
+    assert all(e["before"]["geometry"] != e["after"]["geometry"] for e in tail)
+    again = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()
+    assert again["moves"] == [] and again["features"] == []
+
+
+def test_regularize_leaves_rejected_and_other_runs_openings_alone(client):
+    a = draw(client, -9.0, 3.0, -7.6, 4.5).json()
+    b = draw(client, -6.0, 3.1, -4.6, 4.5).json()
+    client.patch(f"{BASE}/access-points/{b['id']}", json={"lifecycle": "rejected"})
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()
+    assert out["moves"] == []                                     # a row of one is no line
+    _rerun_with_renamed_walls()
+    out = client.post(f"{BASE}/facades/B01/N1/regularize", json={}).json()   # r2's B01/N1
+    assert out["run_id"] == "r2" and out["features"] == [] and out["skipped"] == {}
+    still = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["geometry"] for f in still if f["id"] == a["id"]] == [a["geometry"]]
+
+
+# ── facades across runs (§5.9) ───────────────────────────────────────────
+def _rerun_with_renamed_walls():
+    """r2: r1's north wall refitted 0.3 m out and renamed `B07/N3`; `B01/N1` is now another
+    building's wall 100 m away (ids are per run)."""
+    same_wall = _facade("B07/N3", (0.0, 1.0), (0.5, 0.3, 0.0))
+    stranger = _facade("B01/N1", (0.0, 1.0), (100.0, 50.0, 0.0))
+    add_run("r2", facades=[same_wall, stranger])
+
+
+def test_facade_matches_pair_walls_by_geometry_not_by_name(client):
+    _rerun_with_renamed_walls()
+    body = client.get(f"{BASE}/facade-matches?from_run=r1").json()
+    assert body["from_run"] == "r1" and body["to_run"] == "r2"
+    got = {m["a_id"]: m for m in body["matches"]}
+    assert got["B01/N1"]["status"] == "match" and got["B01/N1"]["b_ids"] == ["B07/N3"]
+    assert got["B01/N1"]["relation"] == "same" and got["B01/N1"]["confidence"] > 0.5
+    assert got["B01/E1"]["status"] == "none" and got["B01/E1"]["reason"]
+    assert body["counts"] == {"match": 1, "none": 1}
+    only = client.get(f"{BASE}/facade-matches?from_run=r1&status=none").json()["matches"]
+    assert [m["a_id"] for m in only] == ["B01/E1"]
+    assert client.get(f"{BASE}/facade-matches?from_run=nope").status_code == 404
+
+
+def test_a_same_named_facade_of_another_run_does_not_show_or_address_its_features(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()            # on r1's B01/N1
+    _rerun_with_renamed_walls()
+    listed = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r2").json()
+    assert listed == []                                           # r2's B01/N1 is another wall
+    mine = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["id"] for f in mine] == [ap["id"]]
+    assert client.get(f"{BASE}/semantics").json()["features_by_facade"] == {}
+    assert client.get(f"{BASE}/semantics?run_id=r1").json()["features_by_facade"] == {"B01/N1": 1}
+    assert client.get(f"{BASE}/facades/B01/N1").json()["features"] == 0
+    body = client.post(f"{BASE}/facades/B01/N1/address", json={}).json()
+    assert body["rows"] == [] and body["features"] == []
+
+
+def test_features_of_another_run_are_shown_on_the_matching_wall_and_carried_on_request(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()
+    _rerun_with_renamed_walls()
+    carried = client.get(f"{BASE}/facades/B07/N3/carried").json()
+    assert [c["feature"]["id"] for c in carried] == [ap["id"]]
+    c = carried[0]
+    assert c["placement"]["status"] == "placed" and c["placement"]["facade_id"] == "B07/N3"
+    assert c["here"]["offset_m"] == pytest.approx(0.3, abs=1e-6)
+    # u runs west on a north wall, so moving the origin 0.5 m east moves u by +0.5.
+    us = sorted({p[0] for p in c["here"]["polygon_uv"]})
+    assert us == pytest.approx([-7.15, -5.85])
+    assert client.get(f"{BASE}/facades/B01/N1/carried").json() == []   # the stranger
+    # Nothing moved by itself: the feature is still on r1's frame.
+    still = client.get(f"{BASE}/access-points?facade=B01/N1&run_id=r1").json()
+    assert [f["id"] for f in still] == [ap["id"]]
+
+    r = client.post(f"{BASE}/access-points/{ap['id']}/reanchor",
+                    json={"facade_id": "B07/N3", "by": "tester"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["from_facade"] == "B01/N1" and out["feature"]["host"]["facade_id"] == "B07/N3"
+    assert out["feature"]["lifecycle"] == "verified"
+    moved = client.get(f"{BASE}/access-points?facade=B07/N3&run_id=r2").json()
+    assert [f["id"] for f in moved] == [ap["id"]]
+    last = client.get(f"{BASE}/audit").json()[-1]
+    assert last["op"] == "reanchor" and "B01/N1" in last["what"] and "0.30 м" in last["what"]
+    assert last["before"]["host"]["facade_id"] == "B01/N1"
+    again = client.post(f"{BASE}/access-points/{ap['id']}/reanchor", json={"facade_id": "B07/N3"})
+    assert again.status_code == 409
+
+
+def test_a_feature_is_not_carried_onto_a_wall_it_does_not_land_on(client):
+    ap = draw(client, -7.65, 0.45, -6.35, 1.95).json()
+    _rerun_with_renamed_walls()
+    r = client.post(f"{BASE}/access-points/{ap['id']}/reanchor", json={"facade_id": "B01/N1"})
+    assert r.status_code == 409 and "не можна перенести" in r.json()["detail"]
+    assert client.get(f"{BASE}/audit").json()[-1]["op"] == "create"   # nothing written

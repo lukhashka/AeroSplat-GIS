@@ -295,6 +295,74 @@ def test_proxy_offline_site_without_scene_and_unknown_site(v2, monkeypatch):
     assert c.post("/api/v2/sites/demo/nope/render", json=BODY).status_code == 404
 
 
+# ── a scene pinned to one run (facade editor `?run=`, ACCESS_POINTS §5.9) ─
+@pytest.fixture
+def two_runs(tmp_path):
+    """demo/pier with r1 (older) and r2 (newer), both with a splat; r0 has none."""
+    from aerosplat.geo.crs import GeoPoint
+    from aerosplat.store import Catalog, Site
+    from aerosplat.store.models import RunStatus
+
+    root = tmp_path / "projects"
+    cat = Catalog.open(root)
+    cat.ensure_project("demo")
+    s = cat.create_site(Site(id="pier", project_id="demo",
+                             origin=GeoPoint(lat=40.89, lon=-74.22, h=233.0)))
+    cat.ensure_epoch(s)
+    for run_id, has_splat in (("r0", False), ("r1", True), ("r2", True)):
+        cat.create_run(s, "baseline", run_id, earth_model="wgs84", georeferenced=True)
+        gs = cat.run_dirs(s, "baseline", run_id).gs
+        gs.mkdir(parents=True)
+        (gs / "cloud_wgs84.pt").write_bytes(b"cloud")
+        products = {"cloud": gs / "cloud_wgs84.pt"}
+        if has_splat:
+            (gs / "splat_wgs84.pt").write_bytes(run_id.encode())
+            products["splat"] = gs / "splat_wgs84.pt"
+        cat.finish_run(s, "baseline", run_id, status=RunStatus.ok, products=products)
+    cat.close()
+    return root
+
+
+def test_a_pinned_scene_is_that_run_or_an_error(two_runs):
+    from pathlib import Path
+
+    from aerosplat.store.scenes import SceneLookupError, discover_scenes, pinned_scene
+
+    assert discover_scenes(two_runs, None)["demo/pier"].run == "r2"      # newest by default
+    src = pinned_scene(two_runs, "demo/pier", "r1")
+    assert src.run == "r1" and Path(src.splat).read_bytes() == b"r1"
+    assert src.metric is not None and src.metric["run"] == "r1"
+    for run, why in (("r0", "no trained scene"), ("r9", "no run 'r9'")):
+        with pytest.raises(SceneLookupError, match=why):
+            pinned_scene(two_runs, "demo/pier", run)
+    with pytest.raises(SceneLookupError, match="<project>/<site>"):
+        pinned_scene(two_runs, "pier", "r1")
+    Path(src.splat).unlink()
+    with pytest.raises(SceneLookupError, match="missing"):
+        pinned_scene(two_runs, "demo/pier", "r1")
+
+
+def test_the_engine_never_answers_a_pinned_run_with_another(two_runs):
+    """Resolution only (no GPU): the engine is built without its gsplat constructor."""
+    import threading as th
+
+    from aerosplat.render.engine import RenderEngine, SceneNotFound
+
+    eng = RenderEngine.__new__(RenderEngine)
+    eng.projects_root, eng.data_dir = two_runs, None
+    eng._lock, eng._scenes, eng._listing, eng._pinned = th.RLock(), {}, (-1e9, {}), {}
+    assert eng._resolve("demo/pier").run == "r2"
+    assert eng._resolve("demo/pier", "r2").run == "r2"
+    assert eng._resolve("demo/pier", "r1").run == "r1"
+    assert eng._resolve("pier", "r1").run == "r1"                        # the bare alias too
+    for run in ("r0", "r9"):
+        with pytest.raises(SceneNotFound):
+            eng._resolve("demo/pier", run)
+    assert RenderRequest(position={"e": 0, "n": 0, "u": 1}, run="r1").run == "r1"
+    with pytest.raises(ValidationError):
+        RenderRequest(position={"e": 0, "n": 0, "u": 1}, run="../r1")
+
+
 # ── GPU: render a synthetic scene and compare with the reference projection ─
 def _gsplat_ready():
     try:

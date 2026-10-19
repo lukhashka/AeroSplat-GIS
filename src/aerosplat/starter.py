@@ -238,7 +238,7 @@ def main(argv=None, on_event: Optional[StageCallback] = None,
 
 
 def cli() -> int:
-    """Console-script entry point: `aerosplat [run|doctor|serve|catalog|worker|up|token|render-service|export] ...`."""
+    """Console-script entry point: `aerosplat [run|doctor|serve|catalog|worker|up|token|render-service|export|semantics] ...`."""
     _fix_console_encoding()
     argv = sys.argv[1:]
     cmd = argv[0] if argv and not argv[0].startswith("-") else "run"
@@ -271,8 +271,12 @@ def cli() -> int:
     if cmd == "export":
         from aerosplat.export import run as export_cli
         return export_cli.main(rest)
+    if cmd == "semantics":
+        from aerosplat.semantics import cli as semantics_cli
+        return semantics_cli.main(rest)
     raise SystemExit(f"Невідома команда '{cmd}'. "
-                     f"Доступні: run, doctor, serve, catalog, worker, up, token, render-service, export")
+                     f"Доступні: run, doctor, serve, catalog, worker, up, token, render-service, export, "
+                     f"semantics")
 
 
 

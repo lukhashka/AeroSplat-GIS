@@ -110,6 +110,63 @@ def screen(proposals: Sequence[Proposal], facade: Facade, existing: Iterable[Acc
     return keep, dropped
 
 
+@dataclass(frozen=True)
+class PadProposal:
+    """A pad zone a proposer (aerosplat.semantics.pads) wants a person to look at."""
+
+    class_id: str                                   # pad.roof_flat | pad.ground
+    polygon_enu: list[tuple[float, float]]
+    z: float
+    building_id: Optional[str]                      # the roof's building; None on the ground
+    confidence: float
+    notes: str
+    evidence: list[str]
+
+
+# Two pads are the same place when their outlines overlap this much (of the smaller) and
+# their surfaces are this close in height (a roof pad never blocks the yard below it).
+SAME_PAD_DZ_M = 2.0
+
+
+def screen_pads(proposals: Sequence[PadProposal], existing: Iterable[AccessPoint]
+                ) -> tuple[list[PadProposal], dict[str, int]]:
+    """`screen` for pads: drop proposals on an existing pad of any lifecycle (§3.4)."""
+    from aerosplat.semantics.pads import polygon_overlap
+
+    taken = [(f.pad, f.lifecycle) for f in existing if f.pad is not None]
+    keep: list[PadProposal] = []
+    dropped: dict[str, int] = {}
+    for p in proposals:
+        hit = next((lc for pad, lc in taken
+                    if abs(pad.z - p.z) < SAME_PAD_DZ_M
+                    and polygon_overlap(p.polygon_enu, pad.polygon_enu) >= MIN_OVERLAP), None)
+        if hit is None:
+            keep.append(p)
+        else:
+            dropped[hit.value] = dropped.get(hit.value, 0) + 1
+    return keep, dropped
+
+
+def make_pad_candidates(proposals: Sequence[PadProposal], *, site_key: str, taxonomy: str,
+                        model: str, created_by: str, run_id: Optional[str],
+                        epoch_id: Optional[str]) -> list[AccessPoint]:
+    """`candidate` pad records, never verified (ADR-0009). Surface and hazards are unknown."""
+    from aerosplat.authored.geometry import make_pad_point
+
+    out: list[AccessPoint] = []
+    for p in proposals:
+        ap = make_pad_point(
+            site_key=site_key, class_id=p.class_id, taxonomy=taxonomy,
+            polygon_enu=p.polygon_enu, z=p.z, building_id=p.building_id,
+            attributes={"surface": "unknown", "hazard": "unknown"},
+            lifecycle=Lifecycle.candidate, origin=Origin.pipeline, created_by=created_by,
+            run_id=run_id, epoch_id=epoch_id, evidence=list(p.evidence), notes=p.notes,
+            confidence=float(min(0.99, max(0.01, p.confidence))))
+        ap.provenance.model = model
+        out.append(ap)
+    return out
+
+
 def make_candidates(proposals: Sequence[Proposal], *, site_key: str, facade: Facade,
                     class_id: str, taxonomy: str, model: str, created_by: str,
                     run_id: Optional[str], epoch_id: Optional[str],

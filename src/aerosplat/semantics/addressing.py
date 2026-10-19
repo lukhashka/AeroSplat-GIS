@@ -153,6 +153,130 @@ def address_facade(openings: Sequence[Opening], *, v_ground: float,
                             floor_height_m=floor_h, ambiguous=bool(reasons), reasons=reasons, of=of)
 
 
+# ── snapping to the facade's frame (§5.6 item 3) ─────────────────────────
+# An opening's edge moves to its row's or column's line only when it is already this close.
+SNAP_TOL_M = 0.15
+# Edges closer than this to the line are left alone: not worth an audit entry.
+SNAP_NOOP_M = 0.002
+# After snapping, both sides must still be at least this long (the editor's own minimum).
+SNAP_MIN_SIDE_M = 0.05
+
+Edge = str          # "u0" | "u1" | "v0" | "v1": left, right, bottom, top in facade (u, v)
+
+
+@dataclass(frozen=True)
+class SnapBox:
+    """An opening's axis-aligned box in facade (u, v), and the group it snaps within."""
+
+    id: str
+    u0: float
+    u1: float
+    v0: float
+    v1: float
+    group: str = ""            # e.g. the class: a door does not set a window's lines
+
+
+@dataclass(frozen=True)
+class EdgeMove:
+    id: str
+    edge: Edge
+    old: float
+    new: float
+    line: str                  # "row 3", "column 2" (0-based within the group)
+
+    @property
+    def delta(self) -> float:
+        return self.new - self.old
+
+
+@dataclass(frozen=True)
+class EdgeKept:
+    """An edge further from its line than the tolerance: left where the operator put it."""
+
+    id: str
+    edge: Edge
+    off_m: float
+    line: str
+    reason: str
+
+
+@dataclass
+class SnapResult:
+    tol_m: float
+    moves: list[EdgeMove] = field(default_factory=list)
+    kept: list[EdgeKept] = field(default_factory=list)
+    # id -> the new box (u0, u1, v0, v1), only for boxes that changed
+    boxes: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
+
+    def moves_of(self, box_id: str) -> list[EdgeMove]:
+        return [m for m in self.moves if m.id == box_id]
+
+
+def _median_f(xs: Sequence[float]) -> float:
+    return float(_median(list(xs)))
+
+
+def snap_to_grid(boxes: Sequence[SnapBox], *, tol_m: float = SNAP_TOL_M,
+                 row_tol_m: float = ROW_TOL_M, column_tol_m: float = COLUMN_TOL_M) -> SnapResult:
+    """Snap opening edges to the facade's row and column lines (§5.6 item 3).
+
+    Rows and columns are the same clusters the addressing uses (v- and u-centres, within a
+    group). A row's lines are the medians of its members' bottom and top edges, a column's
+    the medians of their left and right edges; a line needs at least two members. An edge
+    moves onto its line only when it is within `tol_m` of it, so **no edge ever moves by
+    more than `tol_m`**; an edge further away is reported in `kept` and left alone (that is
+    a different opening, or a drawing to look at, not noise). A box that would come out
+    thinner than `SNAP_MIN_SIDE_M` is not touched at all.
+    """
+    if tol_m <= 0:
+        raise ValueError("tol_m must be positive")
+    proposed: dict[str, dict[Edge, tuple[float, str]]] = {}
+    out = SnapResult(tol_m=tol_m)
+    groups: dict[str, list[SnapBox]] = {}
+    for b in boxes:
+        groups.setdefault(b.group, []).append(b)
+
+    def consider(members: list[SnapBox], lo: Edge, hi: Edge, label: str) -> None:
+        for edge in (lo, hi):
+            line = _median_f([getattr(b, edge) for b in members])
+            for b in members:
+                off = line - getattr(b, edge)
+                if abs(off) <= SNAP_NOOP_M:
+                    continue
+                if abs(off) > tol_m:
+                    out.kept.append(EdgeKept(id=b.id, edge=edge, off_m=off, line=label,
+                                             reason=f"{abs(off):.2f} м від лінії > допуску {tol_m:g} м"))
+                    continue
+                proposed.setdefault(b.id, {})[edge] = (line, label)
+
+    for name, members in sorted(groups.items()):
+        tag = f"{name} " if name else ""
+        vc = [0.5 * (b.v0 + b.v1) for b in members]
+        uc = [0.5 * (b.u0 + b.u1) for b in members]
+        rows = sorted(cluster_1d(vc, row_tol_m), key=lambda g: _centre(vc, g))
+        cols = sorted(cluster_1d(uc, column_tol_m), key=lambda g: _centre(uc, g))
+        for k, g in enumerate(rows):
+            if len(g) >= 2:
+                consider([members[i] for i in g], "v0", "v1", f"{tag}ряд {k}")
+        for k, g in enumerate(cols):
+            if len(g) >= 2:
+                consider([members[i] for i in g], "u0", "u1", f"{tag}колонка {k}")
+
+    by_id = {b.id: b for b in boxes}
+    for box_id, edges in proposed.items():
+        b = by_id[box_id]
+        new = {e: edges[e][0] if e in edges else getattr(b, e) for e in ("u0", "u1", "v0", "v1")}
+        if new["u1"] - new["u0"] < SNAP_MIN_SIDE_M or new["v1"] - new["v0"] < SNAP_MIN_SIDE_M:
+            out.kept.extend(EdgeKept(id=box_id, edge=e, off_m=v - getattr(b, e), line=label,
+                                     reason="рамка вийшла б надто тонкою")
+                            for e, (v, label) in edges.items())
+            continue
+        for e, (v, label) in sorted(edges.items()):
+            out.moves.append(EdgeMove(id=box_id, edge=e, old=getattr(b, e), new=v, line=label))
+        out.boxes[box_id] = (new["u0"], new["u1"], new["v0"], new["v1"])
+    return out
+
+
 def floor_label(floor_index: int, floor_offset: int = 0) -> str:
     """Human-facing storey number. In Ukraine the ground floor is the 1st (§4)."""
     return str(floor_index + 1 + floor_offset)

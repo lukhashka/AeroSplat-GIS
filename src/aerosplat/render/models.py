@@ -64,6 +64,9 @@ class RenderRequest(BaseModel):
     output: Literal["rgb", "depth", "alpha"] = "rgb"
     background: tuple[float, float, float] = (0.0, 0.0, 0.0)  # 0..1, behind transparent pixels
     sh_degree: Optional[int] = Field(None, ge=0, le=3)         # None: every band the scene has
+    # Render this run's splat rather than the Site's newest (a facade of an older run must be
+    # seen in its own reconstruction). The service refuses rather than falling back.
+    run: Optional[str] = Field(None, pattern=r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 
     @model_validator(mode="after")
     def _check(self) -> "RenderRequest":

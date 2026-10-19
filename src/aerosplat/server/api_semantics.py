@@ -18,6 +18,7 @@ because somebody said so, and every change is appended to `authored/audit.jsonl`
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 from typing import Any, Optional
@@ -29,19 +30,30 @@ from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
 
-from aerosplat.authored.candidates import Proposal, make_candidates, screen
+from aerosplat.authored.candidates import (PadProposal, Proposal, make_candidates, make_pad_candidates,
+                                          screen, screen_pads)
+from aerosplat.authored.carry import (PlacementStatus, foreign_on, is_native, native_features,
+                                     reanchor)
 from aerosplat.authored.geometry import geometry_from_uv, make_access_point
 from aerosplat.authored.models import AccessPoint, Address, AuditEntry, Lifecycle, Origin, actor
 from aerosplat.authored.store import AuthoredError, AuthoredStore, NotFound as ApNotFound
-from aerosplat.semantics.addressing import Opening, address_facade, canonical_address, floor_label
+from aerosplat.semantics.addressing import (SNAP_TOL_M, Opening, SnapBox, address_facade,
+                                           canonical_address, floor_label, snap_to_grid)
+from aerosplat.semantics.cityjson import export_site
 from aerosplat.semantics.gridfit import CoverageRaster, GridfitParams, GridfitResult, gridfit
+from aerosplat.semantics.matching import (VERSION as MATCH_VERSION, MatchStatus, Relation,
+                                          match_facades)
 from aerosplat.semantics.models import Building, Coverage, Facade, TerrainModel
+from aerosplat.semantics.pads import PadParams, PadZone, find_pads
 from aerosplat.semantics.ortho import (FacadeGrid, FacadeOrthoError, FacadeOrthoSpec,
                                        facade_ortho)
-from aerosplat.semantics.products import SemanticsMissing, SemanticsProduct, require_semantics
+from aerosplat.semantics.products import (SemanticsMissing, SemanticsProduct, require_semantics,
+                                          semantics_runs)
+from aerosplat.render.models import RenderRequest
 from aerosplat.server import api_v2
 from aerosplat.store.catalog import Catalog
 from aerosplat.store.models import Site
+from aerosplat.store.scenes import SceneLookupError, run_scene_source
 from aerosplat.taxonomy import ApKind, Taxonomy, TaxonomyError, cached_taxonomy
 from aerosplat.taxonomy.models import Attribute, TaxonomyClass
 
@@ -86,6 +98,43 @@ def _store(cat: Catalog, site: Site) -> AuthoredStore:
     return AuthoredStore.for_site(cat.site_dirs(site), site.key)
 
 
+def _run_has_scene(cat: Catalog, site: Site, product: SemanticsProduct) -> bool:
+    try:
+        run_scene_source(cat, site, product.run)
+        return True
+    except SceneLookupError:
+        return False
+
+
+def _run_scene(cat: Catalog, site: Site, product: SemanticsProduct) -> str:
+    """The scene name to render this run's facades from, pinned to that run.
+
+    A facade belongs to the run that fitted it; rendering it from another run's splat
+    would put this run's frame over a different reconstruction (session 2026-10-18…19,
+    error 20). So a run without its own splat is a 404, not a fallback to the newest.
+    """
+    try:
+        run_scene_source(cat, site, product.run)
+    except SceneLookupError as e:
+        raise HTTPException(404, f"{e}; the facades of this run cannot be rendered from "
+                                 f"another run's scene") from None
+    return site.key
+
+
+def _pinned_render(scene: str, request: RenderRequest, run_id: str) -> tuple[bytes, str]:
+    """Render through the service pinned to `run_id`, and check that it was that run."""
+    png, meta_json = api_v2._render_call(
+        scene, request.model_copy(update={"run": run_id}).model_dump_json(exclude_none=True))
+    try:
+        got = json.loads(meta_json).get("run")
+    except (ValueError, AttributeError):
+        got = None
+    if got != run_id:
+        raise HTTPException(502, f"render service rendered run {got!r} instead of {run_id!r} "
+                                 f"(is it older than the API? restart `aerosplat up`)")
+    return png, meta_json
+
+
 # ── schemas ──────────────────────────────────────────────────────────────
 class _In(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -119,6 +168,15 @@ class FacadeOut(BaseModel):
     features: int = 0                       # authored access points on this facade
 
 
+class SemanticsRunOut(BaseModel):
+    """A run with semantics, for the facade list's run picker."""
+
+    id: str
+    epoch_id: str
+    finished_at: Any = None
+    scene: bool                             # it has its own splat to render facades from
+
+
 class SemanticsOut(BaseModel):
     """Everything the editor needs to pick a facade, minus the rasters."""
 
@@ -132,7 +190,10 @@ class SemanticsOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
     features_by_facade: dict[str, int] = Field(default_factory=dict)
-    scene: Optional[str] = None             # None when there is nothing to render from
+    # The scene this run's facades render from (pinned to the run), None without a splat.
+    scene: Optional[str] = None
+    # Every run with semantics, newest first; facade ids differ between them.
+    runs: list[SemanticsRunOut] = Field(default_factory=list)
 
 
 class TaxonomyClassOut(BaseModel):
@@ -197,6 +258,48 @@ class AddressRequest(_In):
     by: Optional[str] = None
 
 
+class RegularizeRequest(_In):
+    """Snap the openings' edges to the facade's rows and columns (§5.6 item 3)."""
+
+    run_id: Optional[str] = None
+    tol_m: float = Field(SNAP_TOL_M, gt=0.0, le=0.5)
+    row_tol_m: float = Field(0.6, gt=0.01, le=5.0)
+    column_tol_m: float = Field(0.6, gt=0.01, le=5.0)
+    # Compute and return what would move, store nothing.
+    dry_run: bool = False
+    by: Optional[str] = None
+
+
+class EdgeMoveOut(BaseModel):
+    id: str
+    edge: str
+    old: float
+    new: float
+    delta: float
+    line: str
+
+
+class EdgeKeptOut(BaseModel):
+    id: str
+    edge: str
+    off_m: float
+    line: str
+    reason: str
+
+
+class RegularizeOut(BaseModel):
+    facade_id: str
+    run_id: str
+    tol_m: float
+    dry_run: bool
+    moves: list[EdgeMoveOut] = Field(default_factory=list)
+    kept: list[EdgeKeptOut] = Field(default_factory=list)
+    # Openings not considered at all, with the reason (e.g. not an axis-aligned rectangle).
+    skipped: dict[str, str] = Field(default_factory=dict)
+    # The changed features as stored (or, on a dry run, as they would be).
+    features: list[AccessPoint] = Field(default_factory=list)
+
+
 class RowOut(BaseModel):
     floor_index: int
     floor_label: str
@@ -250,6 +353,83 @@ class GridfitOut(BaseModel):
     skipped: dict[str, int] = Field(default_factory=dict)
 
 
+class PairScoreOut(BaseModel):
+    b_id: str
+    angle_deg: float
+    offset_m: float
+    offset_tol_m: float
+    overlap_m: float
+    overlap_a: float
+    overlap_b: float
+    overlap_v: float
+    span_a: tuple[float, float]
+    score: float
+
+
+class FacadeMatchOut(BaseModel):
+    """Where one facade of `from_run` is in `to_run` (ACCESS_POINTS §5.9)."""
+
+    a_id: str
+    status: MatchStatus
+    b_ids: list[str] = Field(default_factory=list)
+    relation: Optional[Relation] = None
+    confidence: float = 0.0
+    reason: str = ""
+    shared_with: list[str] = Field(default_factory=list)
+    candidates: list[PairScoreOut] = Field(default_factory=list)
+
+
+class FacadeMatchesOut(BaseModel):
+    from_run: str
+    to_run: str
+    model: str
+    counts: dict[str, int]
+    matches: list[FacadeMatchOut]
+
+
+class FacadeFitOut(BaseModel):
+    facade_id: str
+    angle_deg: float
+    offset_m: float
+    offset_tol_m: float
+    inside: float
+    polygon_uv: list[tuple[float, float]]
+
+
+class PlacementOut(BaseModel):
+    feature_id: str
+    status: PlacementStatus
+    facade_id: Optional[str] = None
+    fit: Optional[FacadeFitOut] = None
+    candidates: list[FacadeFitOut] = Field(default_factory=list)
+    reason: str = ""
+
+
+class CarriedOut(BaseModel):
+    """A feature drawn in another run that lands on this facade: shown, never moved by itself."""
+
+    feature: AccessPoint
+    placement: PlacementOut
+    # This facade's fit, even when the placement is ambiguous (so the editor can draw it).
+    here: FacadeFitOut
+
+
+class ReanchorRequest(_In):
+    run_id: Optional[str] = None                # the run of `facade_id`; default: the newest
+    facade_id: str
+    by: Optional[str] = None
+
+
+class ReanchorOut(BaseModel):
+    feature: AccessPoint
+    placement: PlacementOut
+    from_facade: str
+
+
+def _plain(obj: Any) -> dict[str, Any]:
+    return dataclasses.asdict(obj)
+
+
 # ── taxonomy ─────────────────────────────────────────────────────────────
 def _class_out(tax: Taxonomy, cls: TaxonomyClass) -> TaxonomyClassOut:
     handover = tax.handover_of(cls.id)
@@ -275,27 +455,44 @@ def site_taxonomy(project_id: str, site_id: str,
 
 
 # ── facades ──────────────────────────────────────────────────────────────
-def _counts(store: AuthoredStore) -> dict[str, int]:
+def _counts(store: AuthoredStore, facades: list[Facade]) -> dict[str, int]:
+    """Non-rejected features native to each of these facades (drawn in exactly its frame).
+
+    By frame, not by id: facade ids are per run, and `B04/SW1` of one run may be another
+    building in the next (ACCESS_POINTS §5.9). Features of other runs on the same wall are
+    `…/carried`, not counted here.
+    """
+    by_id = {f.id: f for f in facades}
     out: dict[str, int] = {}
     for f in store.load().features:
-        if f.lifecycle is not Lifecycle.rejected and f.facade_id is not None:
-            out[f.facade_id] = out.get(f.facade_id, 0) + 1
+        fc = by_id.get(f.facade_id) if f.facade_id is not None else None
+        if f.lifecycle is not Lifecycle.rejected and fc is not None and is_native(f, fc):
+            out[fc.id] = out.get(fc.id, 0) + 1
     return out
 
 
 @router.get("/sites/{project_id}/{site_id}/semantics", response_model=SemanticsOut)
 def site_semantics(project_id: str, site_id: str, run_id: Optional[str] = None,
                    cat: Catalog = Depends(get_catalog)) -> SemanticsOut:
-    """Terrain header, buildings and facades of the newest run that produced them."""
+    """Terrain header, buildings and facades of the newest run that produced them (or `run_id`)."""
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, run_id)
     r = product.result
+    runs = []
+    for run in semantics_runs(cat, site):
+        try:
+            run_scene_source(cat, site, run)
+            has_scene = True
+        except SceneLookupError:
+            has_scene = False
+        runs.append(SemanticsRunOut(id=run.id, epoch_id=run.epoch_id,
+                                    finished_at=run.finished_at, scene=has_scene))
     return SemanticsOut(
         run_id=product.run.id, epoch_id=product.run.epoch_id,
         finished_at=product.run.finished_at, frame=r.frame, terrain=r.terrain,
         buildings=r.buildings, facades=r.facades, warnings=r.warnings, params=r.params,
-        features_by_facade=_counts(_store(cat, site)),
-        scene=api_v2._scene_name(cat, site))
+        features_by_facade=_counts(_store(cat, site), r.facades),
+        scene=site.key if _run_has_scene(cat, site, product) else None, runs=runs)
 
 
 def _coverage_out(product: SemanticsProduct, facade: Facade) -> Optional[CoverageGrid]:
@@ -343,17 +540,14 @@ async def facade_ortho_render(project_id: str, site_id: str, facade_id: str,
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
-    scene = api_v2._scene_name(cat, site)
-    if scene is None:
-        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    scene = _run_scene(cat, site, product)
     spec = FacadeOrthoSpec(**body.model_dump(exclude={"run_id"}))
     try:
         request, grid = facade_ortho(facade, spec)
     except FacadeOrthoError as e:
         raise HTTPException(422, str(e)) from None
 
-    png, meta_json = await run_in_threadpool(
-        api_v2._render_call, scene, request.model_dump_json(exclude_none=True))
+    png, meta_json = await run_in_threadpool(_pinned_render, scene, request, product.run.id)
     try:
         meta = json.loads(meta_json)
     except ValueError:
@@ -386,7 +580,8 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
     store = _store(cat, site)
-    features = [f for f in store.features(facade_id=facade_id)
+    # Native only: an opening with this facade id from another run is another wall.
+    features = [f for f in native_features(store.features(facade_id=facade_id), facade)
                 if f.kind == ApKind.opening.value and f.lifecycle is not Lifecycle.rejected]
     shapes = [(f.id, f.geometry) for f in features if f.geometry is not None]
     result = address_facade(
@@ -415,7 +610,86 @@ def facade_address(project_id: str, site_id: str, facade_id: str,
             for r in result.rows]
     return AddressOut(facade_id=facade_id, rows=rows, column_centres=result.column_centres,
                       floor_height_m=result.floor_height_m, ambiguous=result.ambiguous,
-                      reasons=result.reasons, features=store.features(facade_id=facade_id))
+                      reasons=result.reasons,
+                      features=native_features(store.features(facade_id=facade_id), facade))
+
+
+EDGE_UK = {"u0": "лівий край", "u1": "правий край", "v0": "низ", "v1": "верх"}
+
+
+def _axis_box(polygon_uv: list[tuple[float, float]]) -> Optional[tuple[float, float, float, float]]:
+    """(u0, u1, v0, v1) of an axis-aligned rectangle; None for any other shape."""
+    if len(polygon_uv) != 4:
+        return None
+    us = [p[0] for p in polygon_uv]
+    vs = [p[1] for p in polygon_uv]
+    u0, u1, v0, v1 = min(us), max(us), min(vs), max(vs)
+    eps = 1e-6
+    if not all((abs(u - u0) < eps or abs(u - u1) < eps) and (abs(v - v0) < eps or abs(v - v1) < eps)
+               for u, v in polygon_uv):
+        return None
+    if len({(round(u, 6), round(v, 6)) for u, v in polygon_uv}) != 4:
+        return None
+    return u0, u1, v0, v1
+
+
+@router.post("/sites/{project_id}/{site_id}/facades/{facade_id:path}/regularize",
+             response_model=RegularizeOut)
+def facade_regularize(project_id: str, site_id: str, facade_id: str,
+                      body: RegularizeRequest = RegularizeRequest(),
+                      cat: Catalog = Depends(get_catalog)) -> RegularizeOut:
+    """Snap opening edges to the facade's row and column lines, within `tol_m` (§5.6 item 3).
+
+    Only when the operator asks. Lines come from the openings themselves (the clusters the
+    addressing uses, per class); an edge moves only if it is within `tol_m` of its line, so
+    nothing moves further than that, and every move is written to the feature's history and
+    the audit log (`op: regularize`). Edges further off are reported in `kept` and left
+    alone. Only this run's own openings (same frame), not rejected ones, and only
+    axis-aligned rectangles. A confirmed target on a moved opening sees `target_changed`
+    until it is confirmed again.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    facade = _facade(product, facade_id)
+    store = _store(cat, site)
+    with store.lock:
+        features = [f for f in native_features(store.features(facade_id=facade_id), facade)
+                    if f.kind == ApKind.opening.value and f.lifecycle is not Lifecycle.rejected]
+        boxes: list[SnapBox] = []
+        skipped: dict[str, str] = {}
+        for f in features:
+            assert f.geometry is not None
+            box = _axis_box(f.geometry.polygon_uv)
+            if box is None:
+                skipped[f.id] = "не прямокутник по осях (u, v): не вирівнюється"
+                continue
+            boxes.append(SnapBox(id=f.id, u0=box[0], u1=box[1], v0=box[2], v1=box[3], group=f.class_))
+        result = snap_to_grid(boxes, tol_m=body.tol_m, row_tol_m=body.row_tol_m,
+                              column_tol_m=body.column_tol_m)
+        changed: list[AccessPoint] = []
+        whats: list[str] = []
+        for f in features:
+            box = result.boxes.get(f.id)
+            if box is None:
+                continue
+            u0, u1, v0, v1 = box
+            try:
+                geometry = geometry_from_uv(facade, [(u0, v0), (u1, v0), (u1, v1), (u0, v1)])
+            except ValueError as e:
+                skipped[f.id] = str(e)
+                continue
+            changed.append(f.model_copy(update={"geometry": geometry}, deep=True))
+            whats.append(f"прив'язка до сітки фасаду (τ {body.tol_m:g} м): " + ", ".join(
+                f"{EDGE_UK[m.edge]} {m.delta:+.3f} м ({m.line})" for m in result.moves_of(f.id)))
+        if changed and not body.dry_run:
+            changed = store.replace_many(changed, by=body.by, op="regularize", whats=whats)
+    moved_ids = {f.id for f in changed}
+    return RegularizeOut(
+        facade_id=facade.id, run_id=product.run.id, tol_m=body.tol_m, dry_run=body.dry_run,
+        moves=[EdgeMoveOut(id=m.id, edge=m.edge, old=m.old, new=m.new, delta=m.delta, line=m.line)
+               for m in result.moves if m.id in moved_ids],
+        kept=[EdgeKeptOut(**dataclasses.asdict(k)) for k in result.kept],
+        skipped=skipped, features=changed)
 
 
 def _decode(png: bytes, what: str, shape: tuple[int, int]) -> np.ndarray:
@@ -500,9 +774,7 @@ async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
     site = _site(cat, project_id, site_id)
     product = _semantics(cat, site, body.run_id)
     facade = _facade(product, facade_id)
-    scene = api_v2._scene_name(cat, site)
-    if scene is None:
-        raise HTTPException(404, f"site {site.key} has no trained scene yet")
+    scene = _run_scene(cat, site, product)
     tax = _taxonomy(site)
     _check_class(tax, GRIDFIT_CLASS, {})
     spec = FacadeOrthoSpec(gsd_cm=body.gsd_cm)
@@ -514,10 +786,60 @@ async def facade_gridfit(project_id: str, site_id: str, facade_id: str,
     layers: dict[str, tuple[bytes, str]] = {}
     for output in ("rgb", "alpha", "depth") if body.depth else ("rgb", "alpha"):
         one = request.model_copy(update={"output": output})
-        layers[output] = await run_in_threadpool(
-            api_v2._render_call, scene, one.model_dump_json(exclude_none=True))
+        layers[output] = await run_in_threadpool(_pinned_render, scene, one, product.run.id)
     return await run_in_threadpool(_run_gridfit, cat, site, product, facade, grid, spec,
                                    (request.height, request.width), layers, tax, body)
+
+
+@router.get("/sites/{project_id}/{site_id}/facade-matches", response_model=FacadeMatchesOut)
+def facade_matches(project_id: str, site_id: str, from_run: str, to_run: Optional[str] = None,
+                   facade: Optional[str] = None, status: Optional[list[MatchStatus]] = Query(None),
+                   cat: Catalog = Depends(get_catalog)) -> FacadeMatchesOut:
+    """Which facade of `to_run` (default: the newest) each facade of `from_run` is (§5.9).
+
+    Geometry only, in Site ENU: normals, plane offset within the planes' scatter, shared
+    stretch and height. `ambiguous` and `none` are answers, not errors: nothing is guessed.
+    Read-only; carrying a feature over is `POST …/access-points/{id}/reanchor`.
+    """
+    site = _site(cat, project_id, site_id)
+    a = _semantics(cat, site, from_run)
+    b = _semantics(cat, site, to_run)
+    facades = a.result.facades if facade is None else [_facade(a, facade)]
+    matches = match_facades(facades, b.result.facades)
+    counts: dict[str, int] = {}
+    for m in matches:
+        counts[m.status] = counts.get(m.status, 0) + 1
+    if status:
+        matches = [m for m in matches if m.status in status]
+    return FacadeMatchesOut(from_run=a.run.id, to_run=b.run.id, model=f"facade-match@{MATCH_VERSION}",
+                            counts=counts,
+                            matches=[FacadeMatchOut.model_validate(_plain(m)) for m in matches])
+
+
+@router.get("/sites/{project_id}/{site_id}/facades/{facade_id:path}/carried",
+            response_model=list[CarriedOut])
+def facade_carried(project_id: str, site_id: str, facade_id: str, run_id: Optional[str] = None,
+                   cat: Catalog = Depends(get_catalog)) -> list[CarriedOut]:
+    """Features drawn in other runs that land on this facade of this run (§5.9).
+
+    For the editor to show (dashed) and offer to carry over. `placement.status` says
+    whether a feature can be carried here: `placed` on this facade, or `ambiguous` between
+    this one and another (then it cannot, and the reason says between which).
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, run_id)
+    facade = _facade(product, facade_id)
+    features = _store(cat, site).features()
+    out: list[CarriedOut] = []
+    for p in foreign_on(facade, product.result.facades, features):
+        f = next(x for x in features if x.id == p.feature_id)
+        here = next(c for c in p.candidates if c.facade_id == facade.id) \
+            if p.candidates else None
+        if here is None:                         # placed elsewhere: not this facade's business
+            continue
+        out.append(CarriedOut(feature=f, placement=PlacementOut.model_validate(_plain(p)),
+                              here=FacadeFitOut.model_validate(_plain(here))))
+    return out
 
 
 @router.get("/sites/{project_id}/{site_id}/facades/{facade_id:path}", response_model=FacadeOut)
@@ -531,17 +853,176 @@ def facade_detail(project_id: str, site_id: str, facade_id: str, run_id: Optiona
     return FacadeOut(facade=facade, building=building,
                      coverage_grid=_coverage_out(product, facade), run_id=product.run.id,
                      epoch_id=product.run.epoch_id,
-                     features=_counts(_store(cat, site)).get(facade_id, 0))
+                     features=_counts(_store(cat, site), [facade]).get(facade_id, 0))
+
+
+# ── pad zones on roofs and in yards (§5.7) ───────────────────────────────
+PAD_CLASS = {"roof": "pad.roof_flat", "ground": "pad.ground"}
+
+
+class PadsRequest(_In):
+    run_id: Optional[str] = None
+    building_ids: list[str] = Field(min_length=1, max_length=50)
+    roofs: bool = True
+    ground: bool = True
+    max_slope_deg: float = Field(PadParams.max_slope_deg, gt=0.0, le=15.0)
+    max_rms_m: float = Field(PadParams.max_rms_m, gt=0.0, le=0.5)
+    clearance_m: float = Field(PadParams.clearance_m, ge=0.5, le=10.0)
+    yard_radius_m: float = Field(PadParams.yard_radius_m, ge=0.0, le=100.0)
+    min_sky_view: float = Field(PadParams.min_sky_view, ge=0.0, le=1.0)
+    # Search and screen, store nothing.
+    dry_run: bool = False
+    by: Optional[str] = None
+
+
+class PadZoneOut(BaseModel):
+    kind: str
+    building_id: str
+    polygon_enu: list[tuple[float, float]]
+    z: float
+    centre: tuple[float, float]
+    slope_deg: float
+    rms_m: float
+    free_area_m2: float
+    usable_area_m2: float
+    clearance_max_m: float
+    sky_view: float
+    notes: list[str] = Field(default_factory=list)
+    confidence: float
+
+
+class PadRejectionOut(BaseModel):
+    kind: str
+    building_id: str
+    reason: str
+    code: str
+    area_m2: float = 0.0
+    centre: Optional[tuple[float, float]] = None
+
+
+class PadsOut(BaseModel):
+    run_id: str
+    model: str
+    dry_run: bool
+    params: dict[str, Any]
+    zones: list[PadZoneOut]
+    rejected: list[PadRejectionOut]
+    candidates: list[AccessPoint] = Field(default_factory=list)
+    skipped: dict[str, int] = Field(default_factory=dict)
+
+
+def _pad_note(model: str, z: PadZone) -> str:
+    where = f"дах {z.building_id}" if z.kind == "roof" else f"двір біля {z.building_id}"
+    text = (f"{model}, {where}: ухил {z.slope_deg:.1f}°, нерівність {100 * z.rms_m:.1f} см, "
+            f"центр може бути на {z.usable_area_m2:.0f} м² із {z.free_area_m2:.0f} м² вільних, "
+            f"найбільший запас {z.clearance_max_m:.1f} м, відкритість неба {z.sky_view:.2f}")
+    return "; ".join([text, *z.notes])
+
+
+@router.post("/sites/{project_id}/{site_id}/pads/candidates", response_model=PadsOut)
+def pad_candidates(project_id: str, site_id: str, body: PadsRequest,
+                   cat: Catalog = Depends(get_catalog)) -> PadsOut:
+    """Pad zones on the roofs and in the yards of the given buildings, as candidates (§5.7).
+
+    From the run's own terrain rasters (`semantics/terrain.npz`): flat (slope), smooth
+    (plane residual), clear of obstacles by `clearance_m`, and — on the ground — open to
+    the sky. Every region that is not a pad comes back in `rejected` with the reason.
+    Zones become `candidate` access points of class `pad.roof_flat` / `pad.ground`, never
+    verified (ADR-0009); one already covered by a pad of any lifecycle is skipped, so a
+    rejected pad is not proposed again (§3.4). Roads, water and cars are not recognised:
+    a ground zone says so in its notes.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    tax = _taxonomy(site)
+    for cid in PAD_CLASS.values():
+        _check_class(tax, cid, {"surface": "unknown", "hazard": "unknown"})
+    known = {b.id for b in product.result.buildings}
+    unknown = [b for b in body.building_ids if b not in known]
+    if unknown:
+        raise HTTPException(404, f"run {product.run.id} has no building {', '.join(unknown)}")
+    try:
+        rasters = product.rasters()
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e)) from None
+    params = PadParams(max_slope_deg=body.max_slope_deg, max_rms_m=body.max_rms_m,
+                       clearance_m=body.clearance_m, yard_radius_m=body.yard_radius_m,
+                       min_sky_view=body.min_sky_view)
+    result = find_pads(rasters, product.result.buildings, building_ids=body.building_ids,
+                       roofs=body.roofs, ground=body.ground, params=params)
+    proposals = [PadProposal(class_id=PAD_CLASS[z.kind], polygon_enu=z.polygon_enu, z=z.z,
+                             building_id=z.building_id if z.kind == "roof" else None,
+                             confidence=z.confidence, notes=_pad_note(result.model, z),
+                             evidence=[f"terrain:{product.run.id}", f"pads:{z.building_id}"])
+                 for z in result.zones]
+    store = _store(cat, site)
+    with store.lock:
+        keep, skipped = screen_pads(proposals, store.features())
+        candidates = make_pad_candidates(
+            keep, site_key=site.key, taxonomy=tax.version_string, model=result.model,
+            created_by="pipeline:padzones", run_id=product.run.id, epoch_id=product.run.epoch_id)
+        if candidates and not body.dry_run:
+            store.create_many(candidates, by=body.by, what=f"{result.model} запропонував")
+    return PadsOut(
+        run_id=product.run.id, model=result.model, dry_run=body.dry_run,
+        params=dataclasses.asdict(params),
+        zones=[PadZoneOut(**dataclasses.asdict(z), confidence=z.confidence) for z in result.zones],
+        rejected=[PadRejectionOut(**dataclasses.asdict(x)) for x in result.rejected],
+        candidates=candidates, skipped=skipped)
+
+
+# ── CityJSON export (§2.6) ───────────────────────────────────────────────
+CITYJSON_MEDIA = "application/city+json"
+
+
+@router.get("/sites/{project_id}/{site_id}/export/cityjson",
+            responses={200: {"content": {CITYJSON_MEDIA: {}}, "description":
+                             "CityJSON 2.0; what went in is in the `X-Export-Report` header (JSON)"}})
+def export_cityjson_route(project_id: str, site_id: str, run_id: Optional[str] = None,
+                          lifecycle: Optional[list[Lifecycle]] = Query(None),
+                          cat: Catalog = Depends(get_catalog)) -> Response:
+    """Buildings of a run (LoD1 solids; LoD3 walls with their openings) and the access points.
+
+    Default: the newest run with semantics and `verified` features only. Coordinates are the
+    Site's UTM zone, heights WGS84 ellipsoidal. The document is validated before it is sent;
+    a document that fails is a 500 with the reasons, never a broken file.
+    """
+    site = _site(cat, project_id, site_id)
+    try:
+        doc, report, errors, _ = export_site(cat, site, run_id=run_id,
+                                             lifecycles=lifecycle or [Lifecycle.verified])
+    except SemanticsMissing as e:
+        raise HTTPException(404, str(e)) from None
+    except TaxonomyError as e:
+        raise HTTPException(500, f"taxonomy packs {site.taxonomy_packs}: {e}") from None
+    if errors:
+        raise HTTPException(500, f"the CityJSON export failed its own validation: {errors[:5]}")
+    run = doc["metadata"]["identifier"].rsplit("/", 1)[-1]
+    return Response(
+        content=json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+        media_type=CITYJSON_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{site.project_id}-{site.id}-{run}.city.json"',
+                 "X-Export-Report": json.dumps(report.as_dict())})
 
 
 # ── authored access points ───────────────────────────────────────────────
 @router.get("/sites/{project_id}/{site_id}/access-points", response_model=list[AccessPoint])
 def list_access_points(project_id: str, site_id: str, facade: Optional[str] = None,
                        lifecycle: Optional[list[Lifecycle]] = Query(None),
+                       run_id: Optional[str] = None,
                        cat: Catalog = Depends(get_catalog)) -> list[AccessPoint]:
-    """Authored features, optionally one facade's. Keyed to the facade, not to a run."""
+    """Authored features, optionally one facade's.
+
+    With `facade` alone, every feature whose host carries that id, whatever run it was drawn
+    in. With `facade` and `run_id`, only the ones native to that run's facade (same frame):
+    facade ids are per run, so the id alone can name a different wall in another run.
+    """
     site = _site(cat, project_id, site_id)
-    return _store(cat, site).features(facade_id=facade, lifecycle=lifecycle)
+    features = _store(cat, site).features(facade_id=facade, lifecycle=lifecycle)
+    if facade is not None and run_id is not None:
+        fc = _facade(_semantics(cat, site, run_id), facade)
+        features = native_features(features, fc)
+    return features
 
 
 def _check_class(tax: Taxonomy, class_id: str, attributes: dict[str, str]) -> None:
@@ -620,6 +1101,43 @@ def update_access_point(project_id: str, site_id: str, feature_id: str, body: Ac
         return store.replace(new, by=body.by, what=", ".join(touched) or "touched")
     except (AuthoredError, ValueError) as e:
         raise HTTPException(422, str(e)) from None
+
+
+@router.post("/sites/{project_id}/{site_id}/access-points/{feature_id}/reanchor",
+             response_model=ReanchorOut)
+def reanchor_access_point(project_id: str, site_id: str, feature_id: str, body: ReanchorRequest,
+                          cat: Catalog = Depends(get_catalog)) -> ReanchorOut:
+    """Carry a feature of another run onto a facade of this run — only when a person asks.
+
+    Allowed only when the feature lands on exactly that facade (`placed`, §5.9); an
+    `ambiguous` or `none` placement is a 409 with the reason. The shape keeps its height and
+    is projected onto the new plane (it moves by the plane offset, reported); lifecycle and
+    history stay, the address is dropped (it named the old facade), and the change goes to
+    the audit log with the facade it came from. A target confirmed on this feature sees
+    `target_changed` at planning until it is confirmed again.
+    """
+    site = _site(cat, project_id, site_id)
+    product = _semantics(cat, site, body.run_id)
+    facade = _facade(product, body.facade_id)
+    store = _store(cat, site)
+    with store.lock:
+        try:
+            old = store.get(feature_id)
+        except ApNotFound as e:
+            raise HTTPException(404, str(e)) from None
+        if is_native(old, facade):
+            raise HTTPException(409, f"{feature_id} is already on {facade.id} of run {product.run.id}")
+        try:
+            new, placement = reanchor(old, facade, product.result.facades)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
+        assert old.host is not None and placement.fit is not None
+        what = (f"перенесено з {old.host.facade_id} на {facade.id} (run {product.run.id}): "
+                f"зсув площини {placement.fit.offset_m:.2f} м, кут {placement.fit.angle_deg:.1f}°"
+                + ("; адресу скинуто" if old.address is not None else ""))
+        stored = store.replace(new, by=body.by, what=what, op="reanchor")
+    return ReanchorOut(feature=stored, placement=PlacementOut.model_validate(_plain(placement)),
+                       from_facade=old.host.facade_id)
 
 
 def _host_facade(cat: Catalog, site: Site, feature: AccessPoint) -> Facade:

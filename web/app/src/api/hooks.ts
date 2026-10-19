@@ -7,6 +7,10 @@ import type {
   AccessPointPatch,
   AddressOut,
   AuditEntry,
+  CarriedOut,
+  PadsOut,
+  ReanchorOut,
+  RegularizeOut,
   GridfitOut,
   GridfitRequest,
   CaptureSource,
@@ -213,7 +217,7 @@ export const refreshScenes = () => api.post<{ scenes: string[]; changed: string[
 
 // ── semantics, taxonomy and authored access points (ACCESS_POINTS §3-§5) ──
 export const semanticKeys = {
-  semantics: (p: string, s: string) => ["semantics", p, s] as const,
+  semantics: (p: string, s: string, run: string | null = null) => ["semantics", p, s, run ?? ""] as const,
   facade: (p: string, s: string, f: string, run: string | null = null) =>
     ["facade", p, s, f, run ?? ""] as const,
   taxonomy: (p: string, s: string) => ["taxonomy", p, s] as const,
@@ -221,10 +225,14 @@ export const semanticKeys = {
   audit: (p: string, s: string) => ["audit", p, s] as const,
 };
 
-export const useSemantics = (project: string, site: string) =>
+// `runId` null: the newest run with semantics.
+export const useSemantics = (project: string, site: string, runId: string | null = null) =>
   useQuery({
-    queryKey: semanticKeys.semantics(project, site),
-    queryFn: () => api.get<SemanticsOut>(`/sites/${project}/${site}/semantics`),
+    queryKey: semanticKeys.semantics(project, site, runId),
+    queryFn: () =>
+      api.get<SemanticsOut>(
+        `/sites/${project}/${site}/semantics` + (runId ? `?run_id=${encodeURIComponent(runId)}` : ""),
+      ),
     retry: false,
     staleTime: 30_000,
   });
@@ -251,14 +259,34 @@ export const useTaxonomy = (project: string, site: string) =>
     staleTime: 5 * 60_000,
   });
 
-export const useAccessPoints = (project: string, site: string, facadeId: string | null) =>
+// With a facade and its run: only the features native to that run's facade (same frame).
+// Facade ids are per run, so the id alone can name another wall in another run (§5.9).
+export const useAccessPoints = (project: string, site: string, facadeId: string | null,
+                                runId: string | null = null, enabled = true) =>
   useQuery({
-    queryKey: semanticKeys.features(project, site, facadeId),
+    queryKey: [...semanticKeys.features(project, site, facadeId), runId ?? ""],
     queryFn: () => {
-      const q = facadeId ? `?facade=${encodeURIComponent(facadeId)}` : "";
-      return api.get<AccessPoint[]>(`/sites/${project}/${site}/access-points${q}`);
+      const q = new URLSearchParams();
+      if (facadeId) q.set("facade", facadeId);
+      if (facadeId && runId) q.set("run_id", runId);
+      const qs = q.toString();
+      return api.get<AccessPoint[]>(`/sites/${project}/${site}/access-points${qs ? `?${qs}` : ""}`);
     },
+    enabled,
     staleTime: 2000,
+  });
+
+/** Features drawn in other runs that land on this facade of `runId` (shown, carried on request). */
+export const useCarried = (project: string, site: string, facadeId: string | null, runId: string | null) =>
+  useQuery({
+    queryKey: ["carried", project, site, facadeId ?? "", runId ?? ""],
+    queryFn: () =>
+      api.get<CarriedOut[]>(
+        `/sites/${project}/${site}/facades/${facadeId}/carried` +
+          (runId ? `?run_id=${encodeURIComponent(runId)}` : ""),
+      ),
+    enabled: !!facadeId && !!runId,
+    staleTime: 5000,
   });
 
 export const useAudit = (project: string, site: string, limit = 50) =>
@@ -268,6 +296,20 @@ export const useAudit = (project: string, site: string, limit = 50) =>
     staleTime: 2000,
   });
 
+/** Pad zones on the roofs and in the yards of buildings (§5.7): candidates only, never verified. */
+export function usePadCandidates(project: string, site: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { building_ids: string[]; run_id: string | null; dry_run?: boolean; by?: string }) =>
+      api.post<PadsOut>(`/sites/${project}/${site}/pads/candidates`, body),
+    onSuccess: (r) => {
+      if (r.dry_run) return;
+      qc.invalidateQueries({ queryKey: ["access-points", project, site] });
+      qc.invalidateQueries({ queryKey: semanticKeys.audit(project, site) });
+    },
+  });
+}
+
 /** Create, change and delete authored features. Nothing here is ever automatic (ADR-0009). */
 export function useAccessPointEdits(project: string, site: string, facadeId: string | null) {
   const qc = useQueryClient();
@@ -275,7 +317,8 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["access-points", project, site] });
     qc.invalidateQueries({ queryKey: ["facade", project, site] });
-    qc.invalidateQueries({ queryKey: semanticKeys.semantics(project, site) });
+    qc.invalidateQueries({ queryKey: ["semantics", project, site] });
+    qc.invalidateQueries({ queryKey: ["carried", project, site] });
     qc.invalidateQueries({ queryKey: semanticKeys.audit(project, site) });
   };
   return {
@@ -298,6 +341,22 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
           `/sites/${project}/${site}/facades/${facadeId}/address`,
           body,
         ),
+      onSuccess: refresh,
+    }),
+    // Snap the openings' edges to the facade's rows and columns within a tolerance (§5.6
+    // item 3). A dry run first shows what would move; nothing moves further than tol_m.
+    regularize: useMutation({
+      mutationFn: (body: { run_id: string | null; tol_m?: number; dry_run?: boolean; by?: string }) =>
+        api.post<RegularizeOut>(`/sites/${project}/${site}/facades/${facadeId}/regularize`, body),
+      onSuccess: (r) => {
+        if (!r.dry_run) refresh();
+      },
+    }),
+    // Carry a feature of another run onto this facade -- only when the operator asks, and
+    // only when it lands on exactly this facade (§5.9). The address is recomputed after.
+    reanchor: useMutation({
+      mutationFn: ({ id, ...body }: { id: string; facade_id: string; run_id: string | null; by?: string }) =>
+        api.post<ReanchorOut>(`${base}/${id}/reanchor`, body),
       onSuccess: refresh,
     }),
     // Window candidates from the facade's periodic grid: stored as `candidate`,

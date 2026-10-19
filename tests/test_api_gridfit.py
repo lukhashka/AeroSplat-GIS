@@ -27,6 +27,7 @@ from aerosplat.semantics.models import (COVERAGE_NPZ, SEMANTICS_JSON, Building, 
 from aerosplat.server import api_semantics, api_v2                     # noqa: E402
 from aerosplat.store import Catalog, Site                              # noqa: E402
 from aerosplat.store.models import RunStatus                           # noqa: E402
+from aerosplat.store.scenes import SceneLookupError                    # noqa: E402
 from gridfit_scenes import NAVY, Painter, facade as paint_facade       # noqa: E402
 
 ORIGIN = GeoPoint(lat=50.45, lon=30.52, h=180.0)
@@ -61,11 +62,12 @@ def stub_render():
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             state["outputs"].append(body["output"])
+            state.setdefault("runs", []).append(body.get("run"))
             p, _ = _painted(state["scenario"])
             rgb, alpha = p.finish(seed=1)
             w, h = body["width"], body["height"]
             assert rgb.shape[:2] == (h, w), (rgb.shape, w, h)
-            meta = {"width": w, "height": h}
+            meta = {"width": w, "height": h, "run": body.get("run")}
             if body["output"] == "rgb":
                 img = Image.fromarray(rgb)
             elif body["output"] == "alpha":
@@ -248,9 +250,17 @@ def test_unknown_facade_is_a_404(client):
 
 
 def test_no_trained_scene_is_a_404(client, monkeypatch):
-    monkeypatch.setattr(api_v2, "_scene_name", lambda cat, site: None)
+    def no_scene(cat, site, run):
+        raise SceneLookupError(f"run {run.id} of {site.key} has no trained scene (no splat product)")
+
+    monkeypatch.setattr(api_semantics, "run_scene_source", no_scene)
     r = client.post(URL, json={})
     assert r.status_code == 404 and "scene" in r.json()["detail"]
+
+
+def test_gridfit_renders_the_runs_own_scene(client, stub_render):
+    client.post(URL, json={"dry_run": True})
+    assert stub_render[1]["runs"] and set(stub_render[1]["runs"]) == {"r1"}
 
 
 def test_the_render_service_being_down_is_a_503(client, monkeypatch):

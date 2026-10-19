@@ -14,15 +14,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from numpy.typing import NDArray
 
-from aerosplat.semantics.models import COVERAGE_NPZ, SEMANTICS_JSON, Facade, SemanticsResult
+from aerosplat.semantics.models import COVERAGE_NPZ, SEMANTICS_JSON, TERRAIN_NPZ, Facade, SemanticsResult
 from aerosplat.store.catalog import Catalog
 from aerosplat.store.models import Run, RunStatus, Site
 from aerosplat.store.scenes import SEMANTICS
+
+if TYPE_CHECKING:
+    from aerosplat.semantics.pads import Rasters
 
 SEMANTICS_DIR = "semantics"         # the directory inside a run, when the product is not registered
 
@@ -42,6 +45,24 @@ class SemanticsProduct:
     @property
     def coverage_npz(self) -> Path:
         return self.dir / COVERAGE_NPZ
+
+    @property
+    def terrain_npz(self) -> Path:
+        return self.dir / TERRAIN_NPZ
+
+    def rasters(self) -> "Rasters":
+        """The stage's DSM / DTM / count / building labels, for pad zones (§5.7).
+
+        Raises FileNotFoundError when the run's semantics have no terrain.npz.
+        """
+        from aerosplat.semantics.pads import Rasters
+
+        if not self.terrain_npz.is_file():
+            raise FileNotFoundError(f"run {self.run.id}: no {TERRAIN_NPZ} in {self.dir}")
+        with np.load(self.terrain_npz) as z:
+            return Rasters(model=self.result.terrain, dsm=z["dsm"].astype(float),
+                           dtm=z["dtm"].astype(float), count=z["count"].astype(np.int64),
+                           labels=z["labels"].astype(np.int64))
 
     def facade(self, facade_id: str) -> Facade:
         return self.result.facade(facade_id)
@@ -66,6 +87,14 @@ def _semantics_dir(catalog: Catalog, site: Site, run: Run) -> Optional[Path]:
     if path is None:
         path = catalog.run_dirs(site, run.epoch_id, run.id).root / SEMANTICS_DIR
     return path if (path / SEMANTICS_JSON).is_file() else None
+
+
+def semantics_runs(catalog: Catalog, site: Site) -> list[Run]:
+    """Successful runs whose semantics output is on disk, newest first (for a run picker)."""
+    runs = [r for r in catalog.list_runs(site) if r.status == RunStatus.ok
+            and _semantics_dir(catalog, site, r) is not None]
+    runs.sort(key=lambda r: (r.finished_at or r.created_at, r.id), reverse=True)
+    return runs
 
 
 def find_semantics(catalog: Catalog, site: Site, *, run_id: Optional[str] = None,

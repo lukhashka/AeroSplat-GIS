@@ -398,7 +398,17 @@ export interface SemanticsOut {
   warnings: string[];
   params: Record<string, unknown>;
   features_by_facade: Record<string, number>;
+  /** The scene this run's facades render from (pinned to the run); null without its own splat. */
   scene: string | null;
+  /** Every run with semantics, newest first. Facade ids differ between runs. */
+  runs: SemanticsRun[];
+}
+
+export interface SemanticsRun {
+  id: string;
+  epoch_id: string;
+  finished_at: string | null;
+  scene: boolean;
 }
 
 export interface TaxonomyAttribute {
@@ -527,8 +537,10 @@ export interface AccessPoint {
   class: string;
   kind: ApKind;
   taxonomy: string;
-  host: ApHost;
-  geometry: ApGeometry;
+  /** Drawn on a facade: host + geometry. A pad: `pad` alone (ACCESS_POINTS §3.2). */
+  host: ApHost | null;
+  geometry: ApGeometry | null;
+  pad: ApPad | null;
   attributes: Record<string, string>;
   address: ApAddress | null;
   confidence: number | null;
@@ -573,6 +585,99 @@ export interface AddressOut {
   ambiguous: boolean;
   reasons: string[];
   features: AccessPoint[];
+}
+
+/** A flat pad outline in Site ENU (§3.2): a roof (`building_id`) or the ground (null). */
+export interface ApPad {
+  frame: string;
+  polygon_enu: [number, number][];
+  z: number;
+  building_id: string | null;
+  center: [number, number, number];
+  area_m2: number;
+}
+
+// ── pad zones on roofs and in yards (§5.7; aerosplat.semantics.pads) ──
+export interface PadZone {
+  kind: "roof" | "ground";
+  building_id: string;
+  polygon_enu: [number, number][];
+  z: number;
+  centre: [number, number];
+  slope_deg: number;
+  rms_m: number;
+  free_area_m2: number;
+  usable_area_m2: number;
+  clearance_max_m: number;
+  sky_view: number;
+  notes: string[];
+  confidence: number;
+}
+
+export interface PadRejection {
+  kind: "roof" | "ground";
+  building_id: string;
+  reason: string;
+  code: string;
+  area_m2: number;
+  centre: [number, number] | null;
+}
+
+export interface PadsOut {
+  run_id: string;
+  model: string;
+  dry_run: boolean;
+  params: Record<string, number>;
+  zones: PadZone[];
+  rejected: PadRejection[];
+  candidates: AccessPoint[];
+  skipped: Partial<Record<Lifecycle, number>>;
+}
+
+// ── snapping openings to the facade's rows and columns (§5.6 item 3) ──
+export interface RegularizeOut {
+  facade_id: string;
+  run_id: string;
+  tol_m: number;
+  dry_run: boolean;
+  moves: { id: string; edge: string; old: number; new: number; delta: number; line: string }[];
+  kept: { id: string; edge: string; off_m: number; line: string; reason: string }[];
+  skipped: Record<string, string>;
+  features: AccessPoint[];
+}
+
+// ── facades across runs (ACCESS_POINTS §5.9; aerosplat.authored.carry) ──
+export interface FacadeFit {
+  facade_id: string;
+  angle_deg: number;
+  offset_m: number;
+  offset_tol_m: number;
+  inside: number;
+  polygon_uv: [number, number][];
+}
+
+export type PlacementStatus = "placed" | "ambiguous" | "none" | "not_on_facade";
+
+export interface Placement {
+  feature_id: string;
+  status: PlacementStatus;
+  facade_id: string | null;
+  fit: FacadeFit | null;
+  candidates: FacadeFit[];
+  reason: string;
+}
+
+/** A feature drawn in another run that lands on this facade: shown, never moved by itself. */
+export interface CarriedOut {
+  feature: AccessPoint;
+  placement: Placement;
+  here: FacadeFit;
+}
+
+export interface ReanchorOut {
+  feature: AccessPoint;
+  placement: Placement;
+  from_facade: string;
 }
 
 // ── window candidates from the facade grid (aerosplat.semantics.gridfit) ──
