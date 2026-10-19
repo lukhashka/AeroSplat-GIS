@@ -25,6 +25,8 @@ function formatDetail(detail: unknown): string {
       })
       .join("; ");
   }
+  // the planner's refusals: {message, reasons} — the message already names every reason
+  if (detail && typeof detail === "object" && "message" in detail && typeof detail.message === "string") return detail.message;
   return detail ? JSON.stringify(detail) : "";
 }
 

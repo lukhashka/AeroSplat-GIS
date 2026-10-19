@@ -25,11 +25,16 @@ import type {
   GeoPoint,
   FacadeDetail,
   FlightTrajectory,
+  MissionCreate,
   MissionGeometry,
+  MissionPlan,
   MissionSummary,
+  MissionTarget,
   SemanticsOut,
   SimReport,
   SimRunSummary,
+  TakeoffQuery,
+  TakeoffSearch,
   TaxonomyOut,
 } from "./types";
 
@@ -268,6 +273,7 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
 // ── missions and simulated flights (api_mission, api_sim) ────────────────
 export const flightKeys = {
   missions: (p: string, s: string) => ["missions", p, s] as const,
+  targets: (p: string, s: string) => ["targets", p, s] as const,
   sims: (p: string, s: string) => ["sims", p, s] as const,
   geometry: (p: string, s: string, m: string) => ["mission-geometry", p, s, m] as const,
   report: (p: string, s: string, m: string, run: string, seed: number | null) =>
@@ -323,3 +329,26 @@ export const useSimTrajectory = (
     enabled: !!mission && !!run,
     staleTime: Infinity,
   });
+
+export const useTargets = (project: string, site: string) =>
+  useQuery({
+    queryKey: flightKeys.targets(project, site),
+    queryFn: () => api.get<MissionTarget[]>(`/sites/${project}/${site}/targets`),
+    staleTime: 10_000,
+  });
+
+/** Ranked takeoff spots near a target. Read-only on the server, but an explicit operator action. */
+export const useTakeoffSearch = (project: string, site: string) =>
+  useMutation({
+    mutationFn: ({ targetId, query }: { targetId: string; query: TakeoffQuery }) =>
+      api.post<TakeoffSearch>(`/sites/${project}/${site}/targets/${targetId}/takeoff`, query),
+  });
+
+/** Plan a mission (201 whatever the verdict; 409 with named reasons when there is no plan). */
+export function usePlanMission(project: string, site: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: MissionCreate) => api.post<MissionPlan>(`/sites/${project}/${site}/missions`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: flightKeys.missions(project, site) }),
+  });
+}

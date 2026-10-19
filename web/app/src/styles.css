@@ -1452,3 +1452,108 @@ kbd {
 .drone-marker.failsafe svg {
   fill: #d03b3b;
 }
+
+/* ── mission planning: takeoff spots (api_mission …/takeoff) ─────────── */
+.planner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.planner-form {
+  align-items: flex-end;
+}
+.planner-form select {
+  max-width: 320px;
+}
+.planner-num input {
+  width: 128px;
+}
+.note.warn {
+  background: var(--amber-soft);
+}
+.server-text {
+  overflow-wrap: anywhere;
+}
+.takeoff-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 480px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .takeoff-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.takeoff-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+table.list.compact th,
+table.list.compact td {
+  padding: 6px 8px;
+  font-size: 12.5px;
+  vertical-align: top;
+}
+table.list tr.on td {
+  background: var(--accent-soft);
+}
+.takeoff-pin {
+  font: 700 12px/1 var(--sans);
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  color: #062823;
+  background: #7cb8ff;
+  border: 2px solid #0a1017;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  cursor: pointer;
+}
+.takeoff-pin.on {
+  background: #3ddbc4;
+  box-shadow: 0 0 0 3px rgb(61 219 196 / 0.45);
+}
+.takeoff-pin.miss {
+  background: #ffb84d;
+  cursor: default;
+}
+.takeoff-pin.target,
+.takeoff-pin.origin {
+  height: 18px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: rgb(8 12 16 / 0.82);
+  color: #3ddbc4;
+  border: 1px solid #3ddbc4;
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
+}
+.takeoff-pin.origin {
+  color: #dbe5ef;
+  border-color: #dbe5ef;
+}
+/* above the attribution, under the basemap switch */
+.flight-legend.takeoff-legend {
+  top: 50px;
+  bottom: auto;
+  flex-direction: column;
+  max-width: calc(100% - 70px);
+}
+.findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+.error-box.refusal .server-text {
+  color: var(--text);
+}
