@@ -329,6 +329,8 @@ class Approach(_Model):
     heading_deg: Optional[float] = None     # compass yaw at H (towards the opening); None: free
     candidates: int = 1                     # directions tried
     candidate_clearance_m: list[tuple[float, float, float]] = Field(default_factory=list)
+    # Directions of the cone not tried: E or H closer to the grid's edge than r + 2 voxels.
+    candidates_outside_grid: int = 0
 
 
 class Leg(_Model):

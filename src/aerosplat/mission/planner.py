@@ -8,6 +8,7 @@ From a confirmed target and the occupancy grid of the twin:
 
 `a` is the target's normal `n` unless that corridor is blocked: then directions inside the
 class's approach cone (half its apex angle each side) are tried and the clearest is taken.
+Directions whose E or H lie too close to the grid's edge are not tried at all.
 Every number of the target's class — standoff, m, cone, D_entry, Δh, the σ gate — comes from
 the taxonomy through the target's `HandoverSpec`; the vehicle's numbers from the profile.
 
@@ -183,22 +184,28 @@ def _entry_hover(H: F64, E: F64, radius: float) -> list[tuple[str, F64, float]]:
     return [("entry E", E, radius), ("hover H", H, radius)]
 
 
-def require_cone_inside_grid(grid: OccupancyGrid, directions: list[tuple[F64, F64]],
-                             radius: float, cone_deg: float) -> None:
-    """Refuse early when E or H of every direction the cone search may choose ((H, E), the
-    direct approach first) is too close to the grid's edge.
+# A direction the cone search may choose: (a, tilt from n in degrees, H, E).
+Direction = tuple[F64, float, F64, F64]
 
-    The plan checks E and H of the chosen direction with `require_inside_grid` after the cone
-    search; when no direction can pass, that refusal is certain whichever is chosen, so it is
-    given before any corridor is checked (a wide one reaching beyond the grid takes minutes).
-    It names the direct approach: the one chosen when no corridor is clear.
+
+def directions_inside_grid(grid: OccupancyGrid, directions: list[Direction], radius: float,
+                           cone_deg: float) -> list[Direction]:
+    """The directions of the cone (the direct approach first) whose E and H keep `radius` plus
+    two voxels from the grid's edge, in their order; refuse when there is none.
+
+    Only these are tried: the plan checks E and H of the chosen direction with
+    `require_inside_grid`, so a direction that falls short would be refused even when another
+    one fits, and its corridor, reaching beyond the grid, cannot be checked anyway (a wide one
+    took minutes to find that out). When none fits, the refusal is certain, so it is given
+    before any corridor is checked; it names the direct approach.
     """
-    if not all(grid_shortfalls(grid, _entry_hover(H, E, radius)) for H, E in directions):
-        return
-    H, E = directions[0]
-    require_inside_grid(grid, _entry_hover(H, E, radius), note="" if len(directions) == 1 else (
-        f" (all {len(directions) - 1} other directions of the {cone_deg:g}° approach cone fall "
-        f"short too, so no corridor was checked)"))
+    fit = [d for d in directions if not grid_shortfalls(grid, _entry_hover(d[2], d[3], radius))]
+    if not fit:
+        _, _, H, E = directions[0]
+        require_inside_grid(grid, _entry_hover(H, E, radius), note="" if len(directions) == 1 else (
+            f" (all {len(directions) - 1} other directions of the {cone_deg:g}° approach cone "
+            f"fall short too, so no corridor was checked)"))
+    return fit
 
 
 # ── home ─────────────────────────────────────────────────────────────────
@@ -345,21 +352,25 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
     # Where E goes when no transit height exists: the ceiling (the plan is infeasible anyway).
     z_entry = z_pad if math.isfinite(z_pad) else max_z
 
-    # H and E of every direction the cone search may choose (a pad's flat ones are not tried).
-    directions: list[tuple[F64, float, F64, F64]] = []
+    # H and E of every direction the cone search may choose (a pad's flat ones are not tried);
+    # those too close to the grid's edge are not tried either.
+    directions: list[Direction] = []
     for a, tilt in candidates:
         if kind == "opening":
             directions.append((a, tilt, c + a * spec.standoff_m + dh, c + a * d_entry + dh))
         elif a[2] > 0.2:
             directions.append((a, tilt, hover, hover + a * max(0.0, z_entry - hover[2]) / a[2]))
     r_eh = max(r_tr, r_app)
-    require_cone_inside_grid(grid, [(H, E) for _, _, H, E in directions], r_eh,
-                             spec.approach_cone_deg)
+    fit = directions_inside_grid(grid, directions, r_eh, spec.approach_cone_deg)
+    outside = len(directions) - len(fit)
+    direct_fits = fit[0][1] == 0.0
 
+    # The clearest corridor among those that fit; with none clear, the first that fits: the
+    # direct approach, or (when its E or H fall short) the least tilted one that fits.
     tried: list[tuple[float, float, float]] = []
     best = None
     first = None
-    for a, tilt, H, E in directions:
+    for a, tilt, H, E in fit:
         check = check_leg(grid, [E, H], r_app, target_plane)
         tried.append((tilt, heading_deg(a[:2]) if np.linalg.norm(a[:2]) > 1e-9 else 0.0,
                       check.min_clearance_m))
@@ -374,10 +385,21 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
     assert first is not None
     chosen = best if best is not None else first
     a, tilt, H, E, app_check = chosen
-    if best is None and len(candidates) > 1:
-        cone_note = f"; none of the {len(tried)} directions in the {spec.approach_cone_deg:g}° cone is clear"
+    cone = f"{spec.approach_cone_deg:g}° cone"
+    if best is None and len(candidates) > 1 and not outside:
+        cone_note = f"; none of the {len(tried)} directions in the {cone} is clear"
+    elif best is None and len(candidates) > 1:
+        shown = "the direct approach" if tilt == 0.0 else f"the least tilted ({tilt:.1f}°)"
+        cone_note = (f"; none of the {len(tried)} directions in the {cone} that fit the grid is "
+                     f"clear ({outside} more come closer to its edge than r + 2 voxels and were "
+                     f"not tried), {shown} is shown")
+    elif tilt == 0.0:
+        cone_note = ""
+    elif direct_fits:
+        cone_note = f"; direct approach blocked, tilted {tilt:.1f}° in the cone"
     else:
-        cone_note = "" if tilt == 0.0 else f"; direct approach blocked, tilted {tilt:.1f}° in the cone"
+        cone_note = (f"; the direct approach comes closer to the grid's edge than r + 2 voxels, "
+                     f"tilted {tilt:.1f}° in the cone")
 
     # ── transit height ───────────────────────────────────────────────────
     if kind == "opening":
@@ -400,7 +422,8 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
         E = H + a * max(0.0, z_t - H[2]) / a[2]
         app_check = check_leg(grid, [E, H], r_app, target_plane)
 
-    # Where the chosen approach put E and H (an entry distance or a tilted cone reaches out).
+    # Where the chosen approach put E and H. Only directions that fit were tried, so this holds
+    # unless the pad's E, placed again at the transit height above, moved.
     require_inside_grid(grid, _entry_hover(H, E, r_eh))
     home_up = np.array([hxyz[0], hxyz[1], z_t])
     e_up = np.array([E[0], E[1], z_t])
@@ -501,7 +524,7 @@ def plan_mission(*, target: MissionTarget, ap: AccessPoint, grid: OccupancyGrid,
 
     approach = Approach(kind=kind, center=_v(c), normal=_v(n), direction=_v(a), tilt_deg=tilt,
                         hover=_v(H), entry=_v(E), heading_deg=heading, candidates=len(tried),
-                        candidate_clearance_m=tried)
+                        candidate_clearance_m=tried, candidates_outside_grid=outside)
     return MissionPlan(
         id=new_ulid(MISSION_PREFIX), site_key=target.site_key, created_by=by, target=target,
         access_point=ap, occupancy=occupancy, profile=prof, sigma=sigma,
