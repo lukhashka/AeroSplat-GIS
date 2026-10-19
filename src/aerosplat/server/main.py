@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import math
+import mimetypes
 import os
 import threading
 import time
@@ -45,7 +46,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 from aerosplat.logging_utils import fix_console_encoding as _fix_console_encoding
-from aerosplat.server import api_mission, api_semantics, api_v2
+from aerosplat.server import api_mission, api_semantics, api_sim, api_v2
 from aerosplat.paths import DATA_DIR, PROJECT_DIR
 from aerosplat.store.paths import default_projects_root
 from aerosplat.store.scenes import SceneSource, discover_scenes
@@ -1005,6 +1006,7 @@ app.state.refresh_scenes = refresh_scenes
 app.include_router(api_v2.router)
 app.include_router(api_semantics.router)
 app.include_router(api_mission.router)
+app.include_router(api_sim.router)
 
 class _RevalidatedStaticFiles(StaticFiles):
     """The classic viewer's files are unversioned (no content hash in the name), so
@@ -1027,6 +1029,9 @@ app.mount(
 # index.html; hashed assets are served as files. Without a build, / falls back
 # to the classic viewer.
 UI_DIST = PROJECT_DIR / "web" / "app" / "dist"
+# MapLibre's worker is an ES module (.mjs). On Windows the registry maps .mjs to text/plain,
+# browsers refuse a module of that type, and every GeoJSON layer of the maps stays empty.
+mimetypes.add_type("text/javascript", ".mjs")
 
 
 @app.get("/", include_in_schema=False)

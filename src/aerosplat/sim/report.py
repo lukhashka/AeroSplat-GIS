@@ -1,5 +1,6 @@
 """Report of an L2 run: `report.json` (everything, machine-readable), `trajectory.json` (the
-recording) and a self-contained `report.html` (SIMULATION §4.1 "звіт"):
+recording), `clearance.json` (the clearance oracle's series, for the flight view of the web UI)
+and a self-contained `report.html` (SIMULATION §4.1 "звіт"):
 
 * verdicts of the oracles, expected vs got, and the outcome;
 * the true trajectory over the twin (top view: column heights of the occupancy grid, unknown
@@ -9,15 +10,20 @@ recording) and a self-contained `report.html` (SIMULATION §4.1 "звіт"):
 * events (modes, mission progress, faults, STATUSTEXT) and the parameters that were applied.
 
 No plotting library: SVG written here, colours as CSS tokens with a dark variant.
+
+A run recorded before `clearance.json` existed gets one after the fact, against the occupancy
+it was judged on: `python -m aerosplat.sim.report clearance <run dir> --occupancy <dir>`.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import html
 import io
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,6 +33,9 @@ from aerosplat.surface.models import FREE, UNKNOWN
 
 H_MAX_DISPLAY_M = 40.0          # the grey ramp of the top view saturates here (above home)
 CLEARANCE_CAP_M = 12.0          # the clearance chart is cut here (the field saturates anyway)
+REPORT_JSON = "report.json"
+TRAJECTORY_JSON = "trajectory.json"
+CLEARANCE_JSON = "clearance.json"
 
 
 def _json_default(o: Any) -> Any:
@@ -81,12 +90,82 @@ def write_report(result, out_dir: Path) -> Path:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     d = report_dict(result)
-    (out_dir / "report.json").write_text(json.dumps(d, indent=1, ensure_ascii=False,
-                                                    default=_json_default) + "\n", encoding="utf-8")
+    (out_dir / REPORT_JSON).write_text(json.dumps(d, indent=1, ensure_ascii=False,
+                                                  default=_json_default) + "\n", encoding="utf-8")
     if result.recording is not None:
-        result.recording.save(out_dir / "trajectory.json")
+        result.recording.save(out_dir / TRAJECTORY_JSON)
+    if result.clearance is not None:
+        write_clearance(result.clearance, out_dir)
     (out_dir / "report.html").write_text(render_html(result, d), encoding="utf-8")
     return out_dir / "report.html"
+
+
+def _finite_or_none(values) -> list[Optional[float]]:
+    return [round(float(v), 3) if math.isfinite(float(v)) else None for v in values]
+
+
+def clearance_dict(series) -> dict:
+    """The clearance oracle's series as JSON: airborne samples only, on the recording's clock.
+
+    `target_distance_m` is null outside the zone where the target surface is left out; values
+    at `cap_m` mean "at least that" (the exact search stops there, oracles.clearance_series).
+    """
+    return {"schema": 1,
+            "t": [round(float(v), 3) for v in series.t],
+            "clearance_m": _finite_or_none(series.clearance),
+            "target_distance_m": _finite_or_none(series.target_distance),
+            "state": list(series.state),
+            "required_m": float(series.required),
+            "cap_m": float(series.cap) if math.isfinite(series.cap) else None}
+
+
+def write_clearance(series, out_dir: Path) -> Path:
+    path = Path(out_dir) / CLEARANCE_JSON
+    path.write_text(json.dumps(clearance_dict(series), separators=(",", ":")), encoding="utf-8")
+    return path
+
+
+def mission_dir_of(run_dir: Path) -> Path:
+    """`<mission>/sim/<scenario>[/seed-<n>]` -> `<mission>`."""
+    run_dir = Path(run_dir)
+    up = run_dir.parent if run_dir.name.startswith("seed-") else run_dir
+    if up.parent.name != "sim":
+        raise ValueError(f"{run_dir} is not <mission>/sim/<scenario>[/seed-<n>]: pass --mission")
+    return up.parent.parent
+
+
+def backfill_clearance(run_dir: Path, occupancy_dir: Path,
+                       mission_dir: Optional[Path] = None) -> Path:
+    """Write `clearance.json` for a run recorded without one, from its own files.
+
+    The occupancy must be the one the run was judged on (report.json `scenario.occupancy`):
+    the minimum of the series is then the clearance verdict's `min_clearance_m`, which is
+    checked here so that a wrong grid does not pass for the right one.
+    """
+    from aerosplat.mission.models import MISSION_JSON, MissionPlan
+    from aerosplat.sim.oracles import Context, clearance_series
+    from aerosplat.sim.record import Recording
+    from aerosplat.sim.scenario import Expect
+    from aerosplat.surface.occupancy import read_occupancy
+
+    run_dir = Path(run_dir)
+    rec = Recording.load(run_dir / TRAJECTORY_JSON)
+    report = json.loads((run_dir / REPORT_JSON).read_text(encoding="utf-8"))
+    mdir = Path(mission_dir) if mission_dir is not None else mission_dir_of(run_dir)
+    plan = MissionPlan(**json.loads((mdir / MISSION_JSON).read_text(encoding="utf-8")))
+    if rec.meta.get("mission") not in (None, plan.id):
+        raise ValueError(f"{run_dir} flew {rec.meta.get('mission')}, not {plan.id}")
+    grid, _ = read_occupancy(Path(occupancy_dir))
+    ctx = Context(plan=plan, items=[], planned_enu={}, fence_enu=[], params={}, grid=grid,
+                  expect=Expect(**report["scenario"]["expect"]))
+    series = clearance_series(rec, ctx)
+    judged = next((v.get("metrics", {}).get("min_clearance_m") for v in report.get("verdicts", [])
+                   if v.get("invariant") == "clearance"), None)
+    if judged is not None and len(series.t) and abs(float(np.min(series.clearance)) - judged) > 0.01:
+        raise ValueError(f"minimum clearance {float(np.min(series.clearance)):.3f} m against "
+                         f"{occupancy_dir}, but the run was judged at {judged:.3f} m: "
+                         f"not the occupancy it flew against")
+    return write_clearance(series, run_dir)
 
 
 # ── HTML ─────────────────────────────────────────────────────────────────
@@ -447,3 +526,24 @@ def _clearance_chart(result) -> str:
               "поріг; червоні точки — нижче порогу</span><span>поверхні, яких місія торкається навмисно "
               "(земля під домом і під точкою посадки, площина цілі на підході), не враховано</span></div>")
     return f"<div class='card'>{chart}{legend}</div>"
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    from aerosplat.logging_utils import fix_console_encoding
+
+    fix_console_encoding()
+    ap = argparse.ArgumentParser(prog="python -m aerosplat.sim.report",
+                                 description="after-the-fact products of an L2 run")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    cl = sub.add_parser("clearance", help="write clearance.json for a run recorded without it")
+    cl.add_argument("run_dir", type=Path, help="<mission>/sim/<scenario>[/seed-<n>]")
+    cl.add_argument("--occupancy", type=Path, required=True,
+                    help="the occupancy folder the run was judged on")
+    cl.add_argument("--mission", type=Path, help="mission folder (default: from run_dir)")
+    args = ap.parse_args(argv)
+    print(f"wrote {backfill_clearance(args.run_dir, args.occupancy, args.mission)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

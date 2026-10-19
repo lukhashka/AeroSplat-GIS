@@ -31,7 +31,7 @@ export interface MapPoint {
 
 setWorkerUrl(maplibreWorkerUrl);
 
-type Basemap = "scheme" | "satellite";
+export type Basemap = "scheme" | "satellite";
 
 const prefersLight = () => window.matchMedia?.("(prefers-color-scheme: light)").matches ?? false;
 
@@ -43,7 +43,7 @@ const ESRI = {
   maxzoom: 19,
 };
 
-function rasterStyle(basemap: Basemap): StyleSpecification {
+export function rasterStyle(basemap: Basemap): StyleSpecification {
   const src = basemap === "satellite" ? ESRI : OSM;
   // Dark theme: OSM with brightness inverted (min > max) and hue turned back,
   // so the map sits quietly behind the UI instead of glaring white.

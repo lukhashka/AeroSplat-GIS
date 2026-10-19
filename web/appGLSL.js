@@ -1050,11 +1050,14 @@ async function loadSpatialData() {
 
         injectModeSelector();
         window.AeroDebug && AeroDebug.probe();
+        // For embedders (web/mission.html): the scene is placed and framed.
+        window.dispatchEvent(new CustomEvent('aerosplat:scene-loaded', { detail: meta }));
 
     } catch (err) {
         if (stale()) return;   // a newer load already superseded this failure
         console.error('Помилка завантаження:', err);
         showFatal(`AeroSplat-GIS load failed (${currentMode}):\n${err.message}`);
+        window.dispatchEvent(new CustomEvent('aerosplat:scene-failed', { detail: err.message }));
     }
 }
 
@@ -1123,8 +1126,26 @@ window.addEventListener('resize', handleResize);
 
 handleResize();        // seed viewportPx before the first load
 injectModeSelector();  // built up front, so its absence isn't a load-failure signal
-loadSpatialData();
+// web/mission.html?noscene=1 draws a mission without a 3DGS scene under it: the embedder
+// places the scene root itself (AeroViewer.placeScene) instead of loading a scene.
+if (!window.AEROSPLAT_NO_SCENE) loadSpatialData();
 animate();
+
+// Embedders (web/mission.html, web/mission-overlay.js) reach the viewer through this handle
+// rather than by name: what they may touch, and nothing else.
+window.AeroViewer = {
+    sceneRoot,
+    camera,
+    controls,
+    meta: () => sceneMeta,
+    loaded: () => activeMesh !== null,
+    // The transform and framing a loaded scene gets, from a scene-meta-shaped object.
+    placeScene: (meta) => {
+        sceneMeta = meta;
+        applySceneTransform(meta);
+        frameCamera(meta);
+    },
+};
 
 // Hook 6 (see aero-debug.js): the panel resolves most viewer bindings
 // by name (they're reachable as top-level const/let in this classic

@@ -24,7 +24,12 @@ import type {
   SystemInfo,
   GeoPoint,
   FacadeDetail,
+  FlightTrajectory,
+  MissionGeometry,
+  MissionSummary,
   SemanticsOut,
+  SimReport,
+  SimRunSummary,
   TaxonomyOut,
 } from "./types";
 
@@ -259,3 +264,62 @@ export function useAccessPointEdits(project: string, site: string, facadeId: str
     }),
   };
 }
+
+// ── missions and simulated flights (api_mission, api_sim) ────────────────
+export const flightKeys = {
+  missions: (p: string, s: string) => ["missions", p, s] as const,
+  sims: (p: string, s: string) => ["sims", p, s] as const,
+  geometry: (p: string, s: string, m: string) => ["mission-geometry", p, s, m] as const,
+  report: (p: string, s: string, m: string, run: string, seed: number | null) =>
+    ["sim-report", p, s, m, run, seed ?? ""] as const,
+  trajectory: (p: string, s: string, m: string, run: string, seed: number | null) =>
+    ["sim-trajectory", p, s, m, run, seed ?? ""] as const,
+};
+
+const seedQuery = (seed: number | null) => (seed === null ? "" : `?seed=${seed}`);
+
+export const useMissions = (project: string, site: string) =>
+  useQuery({
+    queryKey: flightKeys.missions(project, site),
+    queryFn: () => api.get<MissionSummary[]>(`/sites/${project}/${site}/missions`),
+    staleTime: 30_000,
+  });
+
+export const useSiteSims = (project: string, site: string) =>
+  useQuery({
+    queryKey: flightKeys.sims(project, site),
+    queryFn: () => api.get<SimRunSummary[]>(`/sites/${project}/${site}/sims`),
+    staleTime: 30_000,
+  });
+
+export const useMissionGeometry = (project: string, site: string, mission: string | null) =>
+  useQuery({
+    queryKey: flightKeys.geometry(project, site, mission ?? ""),
+    queryFn: () => api.get<MissionGeometry>(`/sites/${project}/${site}/missions/${mission}/geometry`),
+    enabled: !!mission,
+    staleTime: Infinity,
+  });
+
+export const useSimReport = (project: string, site: string, mission: string | null, run: string | null, seed: number | null) =>
+  useQuery({
+    queryKey: flightKeys.report(project, site, mission ?? "", run ?? "", seed),
+    queryFn: () =>
+      api.get<SimReport>(`/sites/${project}/${site}/missions/${mission}/sims/${run}/report${seedQuery(seed)}`),
+    enabled: !!mission && !!run,
+    staleTime: Infinity,
+  });
+
+export const useSimTrajectory = (
+  project: string,
+  site: string,
+  mission: string | null,
+  run: string | null,
+  seed: number | null,
+) =>
+  useQuery({
+    queryKey: flightKeys.trajectory(project, site, mission ?? "", run ?? "", seed),
+    queryFn: () =>
+      api.get<FlightTrajectory>(`/sites/${project}/${site}/missions/${mission}/sims/${run}/trajectory${seedQuery(seed)}`),
+    enabled: !!mission && !!run,
+    staleTime: Infinity,
+  });

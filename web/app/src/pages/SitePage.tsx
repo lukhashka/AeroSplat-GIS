@@ -78,6 +78,13 @@ export function SitePage() {
           >
             <Icon name="map" /> Фасади
           </button>
+          <button
+            className="btn"
+            title="Місії до точок доступу і їхні прольоти в SITL: 3D над сценою, вид згори, вердикти"
+            onClick={() => navigate(`/flight/${s.project_id}/${s.id}`)}
+          >
+            <Icon name="pulse" /> Місія / проліт
+          </button>
           <button className="btn primary" disabled={!data.scene} onClick={() => navigate(`/viewer/${s.project_id}/${s.id}`)}>
             <Icon name="cube" /> Відкрити 3D
           </button>

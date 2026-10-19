@@ -390,3 +390,23 @@ def test_classic_viewer_files_revalidate(server):
     client, _ = server
     r = client.get("/web/appGLSL.js")
     assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
+def test_ui_modules_are_served_as_javascript(server, tmp_path, monkeypatch):
+    """MapLibre's worker is a .mjs module; served as text/plain (the Windows registry's type)
+    the browser refuses it and no GeoJSON layer of a map ever draws."""
+    client, mod = server
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (dist / "assets" / "maplibre-gl-worker-x.mjs").write_text("export {};", encoding="utf-8")
+    monkeypatch.setattr(mod, "UI_DIST", dist)
+    r = client.get("/app/assets/maplibre-gl-worker-x.mjs")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
+
+
+def test_the_mission_viewer_page_is_served(server):
+    client, _ = server
+    r = client.get("/web/mission.html")
+    assert r.status_code == 200 and "mission-overlay.js" in r.text
+    assert client.get("/web/mission-overlay.js").status_code == 200

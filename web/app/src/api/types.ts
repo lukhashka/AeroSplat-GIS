@@ -548,3 +548,179 @@ export interface AuditEntry {
   before: Record<string, unknown> | null;
   after: Record<string, unknown> | null;
 }
+
+// ── missions and their simulated flights (aerosplat.server.api_mission, api_sim) ──
+export type MissionVerdict = "feasible" | "feasible_with_risks" | "infeasible";
+
+export interface MissionFinding {
+  code: string;
+  severity: "blocking" | "risk";
+  leg: string | null;
+  detail: string;
+  at: Vec3 | null;
+}
+
+export interface MissionSummary {
+  id: string;
+  target_id: string;
+  ap_id: string;
+  verdict: MissionVerdict;
+  findings: MissionFinding[];
+  created_at: string;
+  created_by: string;
+}
+
+export interface GeoVertex {
+  enu: Vec3;
+  lon: number;
+  lat: number;
+  h_ellipsoid: number;
+}
+
+export interface GeoWaypoint extends GeoVertex {
+  seq: number;
+  role: string;
+  command: number;
+  alt_rel_m: number;
+}
+
+export interface GeoLeg {
+  name: string;
+  points_enu: Vec3[];
+  lonlat: [number, number][];
+  radius_m: number;
+  sigma_m: number;
+  min_clearance_m: number | null;
+  excluded_surface: string | null;
+  risk_only: boolean;
+}
+
+export interface MissionGeometry {
+  id: string;
+  site_key: string;
+  verdict: MissionVerdict;
+  findings: MissionFinding[];
+  frame: "site_enu";
+  origin: GeoPoint;
+  home: GeoVertex;
+  transit_z: number;
+  waypoints: GeoWaypoint[];
+  legs: GeoLeg[];
+  fence: {
+    polygon_enu: [number, number][];
+    lonlat: [number, number][];
+    floor_z: number;
+    ceiling_z: number;
+    alt_max_rel_m: number;
+    radius_m: number;
+  };
+  target: {
+    kind: string;
+    ap_id: string;
+    ap_class: string;
+    facade_id: string | null;
+    polygon_enu: Vec3[];
+    lonlat: [number, number][];
+    center: GeoVertex;
+    normal: Vec3;
+    direction: Vec3;
+    hover: GeoVertex;
+    entry: GeoVertex;
+    heading_deg: number | null;
+  };
+  rally: GeoVertex[];
+  r_drone_m: number;
+  bbox_enu: [Vec3, Vec3];
+  twin: { run_id: string; epoch_id: string; format: string; res_m: number; scene: string; legacy: boolean };
+}
+
+export interface SimVerdict {
+  invariant: string;
+  status: "pass" | "fail" | "n/a" | string;
+  expected: string | null;
+  detail: string;
+}
+
+export interface SimRunSummary {
+  mission_id: string;
+  scenario: string;
+  seed: number | null;
+  description: string;
+  passed: boolean;
+  outcome: string;
+  reason: string | null;
+  summary: string;
+  verdicts: SimVerdict[];
+  samples: number;
+  mission_sim_s: number | null;
+  firmware: string | null;
+  has_trajectory: boolean;
+  has_clearance: boolean;
+  written_at: string;
+}
+
+export interface SimEvent {
+  t: number;
+  kind: string;
+  detail: string;
+  data: Record<string, unknown>;
+}
+
+export interface FlightSegment {
+  phase: string;
+  failsafe: boolean;
+  mode: string;
+  i0: number;
+  i1: number;
+}
+
+export interface FlightTrajectory {
+  mission_id: string;
+  scenario: string;
+  seed: number | null;
+  origin: GeoPoint;
+  origin_offset_m: number;
+  home_enu: Vec3;
+  mission_start_t: number | null;
+  t: number[];
+  enu: Vec3[];
+  lonlat: [number, number][];
+  alt_rel_m: number[];
+  speed_mps: number[];
+  yaw_deg: number[];
+  mode: string[];
+  armed: boolean[];
+  seq: number[];
+  phase: string[];
+  failsafe: boolean[];
+  segments: FlightSegment[];
+  phases: string[];
+  clearance: {
+    clearance_m: (number | null)[];
+    target_distance_m: (number | null)[];
+    required_m: number;
+    cap_m: number | null;
+  } | null;
+  events: SimEvent[];
+}
+
+/** report.json of a run (aerosplat.sim.report.report_dict); only what the page reads. */
+export interface SimReport {
+  passed: boolean;
+  summary: string;
+  outcome: string;
+  reason: string | null;
+  detail: string;
+  scenario: { scenario: string; description: string; vehicle: string; faults: unknown[] };
+  verdicts: {
+    invariant: string;
+    status: string;
+    detail: string;
+    expected: string | null;
+    metrics: Record<string, unknown>;
+  }[];
+  warnings: string[];
+  firmware: { tag?: string; version?: string; git?: string };
+  timing: Record<string, number>;
+  faults: { fault: string; reason: string; on: number | null; off: number | null; note: string }[];
+}

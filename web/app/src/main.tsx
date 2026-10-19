@@ -7,6 +7,7 @@ import { Shell } from "./components/Shell";
 import { Dashboard } from "./pages/Dashboard";
 import { FacadePage } from "./pages/FacadePage";
 import { FacadesPage } from "./pages/FacadesPage";
+import { FlightPage } from "./pages/FlightPage";
 import { JobPage } from "./pages/JobPage";
 import { JobsPage } from "./pages/JobsPage";
 import { RenderPage } from "./pages/RenderPage";
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")!).render(
             <Route path="facades/:project/:site" element={<FacadesPage />} />
             {/* the facade id has a slash in it ("B01/N1"), hence the splat */}
             <Route path="facade/:project/:site/*" element={<FacadePage />} />
+            <Route path="flight/:project/:site" element={<FlightPage />} />
             <Route path="jobs" element={<JobsPage />} />
             <Route path="jobs/:id" element={<JobPage />} />
             <Route path="*" element={<NotFound />} />
