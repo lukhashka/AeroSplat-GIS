@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import shutil
 import struct
 import sys
 
@@ -220,6 +221,52 @@ def test_legacy_outputs_are_still_served(env):
     assert mod.DEFAULT_DATASET == "old" and mod.SCENES["old"].kind == "legacy"
     meta = client.get("/api/v1/scene-meta", params={"mode": "splat"}).json()
     assert meta["dataset"] == "old" and meta["metric"] is None   # no geo registration
+
+
+@pytest.mark.parametrize("deleted", [False, True])
+def test_catalog_scene_shadows_legacy_only_while_its_files_exist(env, caplog, deleted):
+    """A catalog site overrides the legacy scene of the same name, but not once its
+    run folder is gone: then `?dataset=old` is the legacy data/old_*.pt again."""
+    projects, data = env
+    write_pt(data / "old_dense.pt", "dense", N)
+    write_pt(data / "old_splat.pt", "splat", N)
+    add_site_run(projects, "old")
+    if deleted:
+        cat = Catalog.open(projects)
+        shutil.rmtree(cat.site_dirs(cat.get_site("demo", "old")).root)
+        cat.close()
+    mod = _load_server()
+    client = TestClient(mod.app)
+    meta = client.get("/api/v1/scene-meta", params={"dataset": "old"})
+    assert meta.status_code == 200
+    if deleted:
+        assert "demo/old" not in mod.SCENES and mod.SCENES["old"].kind == "legacy"
+        assert meta.json()["dataset"] == "old"
+        assert "demo/old: run 20261001-000000" in caplog.text
+        assert client.get("/api/v2/sites/demo/old").json()["scene"] is None
+    else:
+        assert mod.SCENES["old"] is mod.SCENES["demo/old"]
+        assert mod.SCENES["old"].kind == "catalog" and meta.json()["dataset"] == "demo/old"
+        assert client.get("/api/v2/sites/demo/old").json()["scene"] == "demo/old"
+    for cat in mod.api_v2._CATALOGS.values():
+        cat.close()
+    mod.api_v2._CATALOGS.clear()
+
+
+def test_run_with_missing_files_falls_back_to_older_run(server, env, caplog):
+    client, mod = server
+    cat = Catalog.open(env[0])
+    site = cat.get_site("demo", "t")
+    cat.create_run(site, "baseline", "20261002-000000", georeferenced=True)
+    rd = cat.run_dirs(site, "baseline", "20261002-000000")
+    write_pt(rd.gs / "splat.pt", "splat", 10)
+    cat.finish_run(site, "baseline", "20261002-000000", status=RunStatus.ok,
+                   products={SPLAT: rd.gs / "splat.pt"})
+    cat.close()
+    (rd.gs / "splat.pt").unlink()
+    client.post("/api/v1/reload")
+    assert mod.SCENES["demo/t"].run == "20261001-000000"
+    assert "беру старіший run 20261001-000000" in caplog.text
 
 
 def test_scene_meta_metric_for_sphere_enu_run(env):
