@@ -230,6 +230,8 @@ def test_gsplat_preset_is_valid():
 
     cfg = build_config(ROOT / "configs" / "gsplat-earthstudio.yaml")
     assert (cfg.rasterizer, cfg.densify_strategy, cfg.sh_degree) == ("gsplat", "mcmc", 0)
+    # Owner's decision 2026-10-19: MVS depth on for Earth Studio (geometry -20 %, docs/BASELINE.md).
+    assert (cfg.depth_reg, cfg.depth_weight, cfg.depth_weight_final) == ("mvs", 1.0, 0.01)
 
 
 def test_train_argv_and_fingerprint_carry_gsplat_keys_only_for_gsplat(tmp_path):

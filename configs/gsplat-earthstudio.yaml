@@ -11,3 +11,10 @@ rasterize_mode: antialiased   # SSIM +0.004; matches the viewer's Mip-Splatting 
 sh_degree: 0
 iterations: 5500
 max_gaussians: 2000000
+# Depth regularisation from the run's own COLMAP MVS depth maps (owner's decision 2026-10-19):
+# dataset_v6, 7000 its, 2 seeds: depth error on test frames -20 % (0.149 -> 0.119 % vs MVS,
+# 0.146 -> 0.114 % vs SfM points), PSNR unchanged (-0.04 dB, noise), +10 % training time.
+# Geometry feeds semantics, occupancy and missions, so it is worth the time here.
+depth_reg: mvs
+depth_weight: 1.0
+depth_weight_final: 0.01
