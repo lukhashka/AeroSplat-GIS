@@ -9,6 +9,9 @@ description = "UAV 3D reconstruction (COLMAP + 3D Gaussian Splatting) with GIS g
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
+    # ndimage and distance transforms: aerosplat.semantics (terrain, buildings, facades, pads),
+    # aerosplat.surface (occupancy, carving, esdf), mission.takeoff, export.dem.
+    "scipy>=1.11",
     "pillow>=10",
     "piexif==1.1.3",
     "pydantic>=2",
@@ -26,7 +29,13 @@ dependencies = [
 train = ["torch>=2.2", "torchvision>=0.17"]
 # Optional training log (`tensorboard: true` / `--tensorboard DIR`, gsplat only).
 tensorboard = ["tensorboard>=2.14"]
-dev = ["pytest", "ruff", "mypy", "httpx"]
+# `ruff check .` and `mypy src` are CI gates, so a new release of either must not turn the build
+# red on unchanged code — that is how three type errors became 67 between 2026-10-15 and
+# 2026-10-21. These two are pinned exactly, to the versions CI proved green. numpy is pinned here
+# rather than in the runtime dependency because its stubs decide what `mypy src` reports; a normal
+# install keeps the wider range above. Raise any of them deliberately, in a commit that also fixes
+# whatever the new version flags.
+dev = ["pytest", "httpx", "ruff==0.17.1", "mypy==2.4.0", "numpy>=2.4,<2.5"]
 # ArduPilot SITL harness (aerosplat.sim, `pytest -m sitl`); SITL itself runs in WSL2 / Linux.
 sim = ["pymavlink==2.4.50"]
 # GIS export (aerosplat.export, `aerosplat export`): GeoTIFF/COG and LAS/LAZ.

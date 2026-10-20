@@ -4,6 +4,8 @@
 torch>=2.2
 torchvision>=0.17
 numpy>=1.26
+# ndimage and distance transforms: aerosplat.semantics, aerosplat.surface, mission.takeoff.
+scipy>=1.11
 pillow>=10
 piexif==1.1.3
 pydantic>=2
