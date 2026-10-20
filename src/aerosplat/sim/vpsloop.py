@@ -257,8 +257,9 @@ class VpsCompanion(Companion):
                     self.world.render(view, self.cam.width, self.cam.height, self.cam.K)[0]
                 t1 = time.perf_counter()
                 img = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                omega_cam = tuple(float(x) for x in mount_axes(self.cam.mount_pitch_deg,
-                                                               self.cam.mount_yaw_deg) @ np.asarray(job.omega_body))
+                w = mount_axes(self.cam.mount_pitch_deg,
+                               self.cam.mount_yaw_deg) @ np.asarray(job.omega_body)
+                omega_cam = (float(w[0]), float(w[1]), float(w[2]))
                 img = perturb.rolling_shutter(img, omega_cam, self.readout_s, self.cam.K)
                 img = perturb.apply(img, perturb.draw(job.level, np.random.default_rng(job.seed)))
                 assert self.localizer is not None

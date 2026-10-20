@@ -1654,7 +1654,7 @@ train-кадр 30 (орбіта замкнута; середня різниця 
 | `mvs/stereo/depth_maps/*.geometric.bin` | dense | train (`depth_reg: mvs`) | COLMAP dense array (float32) |
 | `gs/{dense,cloud,splat}_wgs84.pt` (`<ds>_*_wgs84.pt`) | georef | server | той самий формат + ключ `frame` (WGS84 Site ENU, A, b, джерело) |
 | `reports/metrics.json`, `report.html` (`<ds>/run/`) | eval | людина | JSON / HTML |
-| `occupancy/occupancy.{npz,json}` | occupancy | mission (8.1b), SIL | npz (`state`, `esdf_cm`, колонки) + JSON `occupancy-v1` (§3.17) |
+| `occupancy/occupancy.{npz,json}` | occupancy | mission (8.1b), SIL | npz (`state`, `esdf_cm`, колонки) + JSON `occupancy-v2` (§3.17; версія спільна для обох файлів — `surface/models.py: FORMAT_VERSION`, читач відмовляє чужій) |
 | рядок `runs` + `products` у `catalog.db` | `run --site`, migrate | server | SQLite (шляхи відносно run-а) |
 | `exports/{ortho,dsm,dtm,ndsm}.tif`, `cloud.laz`, `splat.ply`, `exports.json` | `aerosplat export` | GIS, людина, API (завантаження) | COG у UTM-зоні ділянки (або `--crs`), LAS 1.4 + WKT, INRIA PLY у Site ENU; бюджет геоприв'язки в кожному (§3.25) |
 | HTTP `spatial-chunk` | server | viewer | raw Float32 LE |
@@ -1712,18 +1712,21 @@ AeroSplat-GIS/
 
 ---
 
-## 8. Розбіжності README ↔ код
+## 8. README ↔ код
 
-| README каже | Насправді |
-|---|---|
-| `exif_injector.py` у `reconstruction/` | у `aerosplat/geo/` |
-| тренер `optimization/gs_trainer.py` | активний — `aerosplat/gs/trainer.py` |
-| `web/app.js`, `orbit_controls.js` | `appGLSL.js`, OrbitControls з CDN; `app.js` видалено |
-| кадри в `data/raw_images_3d/` | `data/<ds>/footage/` → `data/raw_images_<ds>/` |
-| запуск 5 скриптів вручну | є `starter.py` |
-| `pip install fastapi uvicorn pillow pyautogui piexif` | потрібні ще numpy, torch, COLMAP, збірка CUDA-растеризатора |
-| «1 unit ≈ 1 m» | правда лише для `earthstudio_json` (тоді `scene-meta.metric` заповнений); в'ювер перемасштабовує сцену до радіуса 100 |
-| запуск через `--dataset` | основний шлях тепер `aerosplat run --site <project>/<site>` + `aerosplat catalog`; README цього ще не описує |
+**Розбіжностей немає (2026-10-21).** README переписано під фактичний стан коду, і всі сім рядків
+колишньої таблиці розбіжностей закрито: `exif_injector.py` у `reconstruction/`, активний тренер
+`optimization/gs_trainer.py`, `web/app.js` і `orbit_controls.js`, кадри в `data/raw_images_3d/`,
+«запуск 5 скриптів вручну», неповний `pip install`, «1 unit ≈ 1 m» без застережень і запуск лише
+через `--dataset`. README тепер описує й `aerosplat run --site`, і каталог, і платформу, і GIS-експорт,
+і семантику, і місії, і трек SIM.
+
+Правило лишається: **правдою вважається код.** README — англійською (рішення власника 2026-10-21),
+`docs/` — українською. README охоплює ширше коло тем, але менш детально за цей документ; де вони
+розходяться, детальнішим джерелом є цей документ, а остаточним — код.
+
+Зміну коду, яка робить README неправдивим, правлять у тому самому коміті — таблиці відкладених
+розбіжностей більше не ведемо.
 
 ---
 

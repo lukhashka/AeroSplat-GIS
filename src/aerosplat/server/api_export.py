@@ -10,6 +10,7 @@ the same explanation the CLI gives.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -134,6 +135,7 @@ def download_export(project_id: str, site_id: str, epoch_id: str, run_id: str, k
     site = api_v2._site(cat, project_id, site_id)
     run = _run(cat, site, epoch_id, run_id)
     root = cat.run_dirs(site, run.epoch_id, run.id).root
+    path: Optional[Path]
     if kind == "manifest":
         path = root / EXPORTS_DIR / MANIFEST
     else:

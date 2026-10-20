@@ -96,9 +96,9 @@ def build_terrain(xyz, *, res_m: float = 1.0, max_window_m: float = 48.0,
     flat = i * cols + j
 
     count = np.bincount(flat, minlength=rows * cols).reshape(rows, cols)
-    dsm = np.full(rows * cols, -np.inf)
-    np.maximum.at(dsm, flat, p[:, 2])
-    dsm = np.where(np.isinf(dsm), np.nan, dsm).reshape(rows, cols)
+    top = np.full(rows * cols, -np.inf)
+    np.maximum.at(top, flat, p[:, 2])
+    dsm = np.where(np.isinf(top), np.nan, top).reshape(rows, cols)
 
     dtm = progressive_morphological_dtm(_fill_nan(dsm), res_m, max_window_m=max_window_m,
                                         slope=slope)

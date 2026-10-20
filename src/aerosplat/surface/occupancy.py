@@ -495,12 +495,12 @@ def build_occupancy(xyz, terrain: TerrainModel, dsm, dtm, *, res_m: float = 0.5,
     pj = np.floor((p[:, 0] - x0) / res_m).astype(np.int64)
     inside = (pi >= 0) & (pi < rows) & (pj >= 0) & (pj < cols)
     pi, pj, pz = pi[inside], pj[inside], p[inside, 2]
-    top_pts = np.full(rows * cols, -np.inf)
-    np.maximum.at(top_pts, pi * cols + pj, pz)
-    top_pts = top_pts.reshape(rows, cols)
-    low_pts = np.full(rows * cols, np.inf)                  # ... and the lowest
-    np.minimum.at(low_pts, pi * cols + pj, pz)
-    low_pts = low_pts.reshape(rows, cols)
+    top_flat = np.full(rows * cols, -np.inf)
+    np.maximum.at(top_flat, pi * cols + pj, pz)
+    top_pts = top_flat.reshape(rows, cols)
+    low_flat = np.full(rows * cols, np.inf)                 # ... and the lowest
+    np.minimum.at(low_flat, pi * cols + pj, pz)
+    low_pts = low_flat.reshape(rows, cols)
 
     ti = (i_lo + np.arange(rows)) // k_per_cell
     tj = (j_lo + np.arange(cols)) // k_per_cell

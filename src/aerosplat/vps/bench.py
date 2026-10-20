@@ -116,7 +116,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     cam = load_camera(mount.camera)
     pitch = float(mount.pitch_deg)
     if a.center:
-        centre = tuple(float(v) for v in a.center.split(","))
+        cxy = [float(v) for v in a.center.split(",")]
+        centre = (cxy[0], cxy[1])
     else:
         centre = run.tallest_centre() or (0.0, 0.0)
     rng = np.random.default_rng(a.seed)
@@ -142,8 +143,9 @@ def cmd_run(a: argparse.Namespace) -> int:
         u = run.ground_z(e, nn) + rng.uniform(20, 60)
         if not run.clear(e, nn, u):
             continue
-        v = {"C": [e, nn, u], "yaw_deg": float(rng.uniform(0, 360)),
-             "pitch_deg": float(pitch + rng.uniform(-5, 5)), "roll_deg": float(rng.uniform(-5, 5))}
+        v: dict[str, Any] = {"C": [e, nn, u], "yaw_deg": float(rng.uniform(0, 360)),
+                             "pitch_deg": float(pitch + rng.uniform(-5, 5)),
+                             "roll_deg": float(rng.uniform(-5, 5))}
         _, depth = renderer.render(View(tuple(v["C"]), v["yaw_deg"], v["pitch_deg"], v["roll_deg"]),
                                    320, 180, (cam.fx / 6, cam.fy / 6, 159.5, 89.5))
         if float((depth > 0).mean()) < 0.9:
@@ -220,14 +222,17 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not r["ok"]:
             reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
 
+    def _round(v: Optional[float], digits: int) -> Optional[float]:
+        return None if v is None else round(v, digits)
+
     def pct(vals: list[float]) -> dict[str, Optional[float]]:
-        return {f"p{q}": (None if not vals else round(percentile(vals, q), 3)) for q in (50, 90, 95)} | \
+        return {f"p{q}": _round(percentile(vals, q), 3) for q in (50, 90, 95)} | \
                {"max": round(max(vals), 3) if vals else None}
 
     def t(stage: str) -> dict[str, Optional[float]]:
-        vals = [r["t"].get(stage) for r in rows if r["t"].get(stage) is not None]
-        return {"p50": None if not vals else round(percentile(vals, 50), 1),
-                "p95": None if not vals else round(percentile(vals, 95), 1)}
+        vals = [r["t"][stage] for r in rows if r["t"].get(stage) is not None]
+        return {"p50": _round(percentile(vals, 50), 1),
+                "p95": _round(percentile(vals, 95), 1)}
 
     ratio = [r["err"]["horiz_m"] / r["sigma_h_m"] for r in ok if r["sigma_h_m"]]
     return {
@@ -241,7 +246,7 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "yaw_err_deg": pct([r["err"]["yaw_deg"] for r in ok]),
         "sigma_h_m": pct([r["sigma_h_m"] for r in ok]),
         "within_2sigma_h": round(float(np.mean(np.array(ratio) <= 2.0)), 3) if ratio else None,
-        "err_over_sigma_p95": round(percentile(ratio, 95), 2) if ratio else None,
+        "err_over_sigma_p95": _round(percentile(ratio, 95), 2) if ratio else None,
         "timing_ms": {s: t(s) for s in ("extract", "retrieve", "match", "pnp", "verify", "total")},
     }
 

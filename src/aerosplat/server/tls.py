@@ -96,7 +96,7 @@ def machine_names() -> tuple[list[str], list[str]]:
     ips = {"127.0.0.1", "::1"}
     try:
         for info in socket.getaddrinfo(socket.gethostname(), None):
-            ips.add(info[4][0].split("%")[0])
+            ips.add(str(info[4][0]).split("%")[0])
     except OSError:
         pass
     return sorted(n for n in names if n), sorted(ips)

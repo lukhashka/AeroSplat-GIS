@@ -480,7 +480,7 @@ def _depth(node) -> int:
 
 def _rings_of(geom_type: str, boundaries) -> list[tuple[tuple[int, ...], list[list[int]]]]:
     """(path to the surface, its rings) for every surface of a geometry."""
-    out = []
+    out: list[tuple[tuple[int, ...], list[list[int]]]] = []
     if geom_type in ("MultiSurface", "CompositeSurface"):
         for s, rings in enumerate(boundaries):
             out.append(((s,), rings))
@@ -623,8 +623,8 @@ def validate(doc: dict[str, Any]) -> tuple[list[str], list[str]]:
                     edges: dict[tuple[int, int], int] = {}
                     for rings in shell:
                         for ring in rings:
-                            for k in range(len(ring)):
-                                e = (ring[k - 1], ring[k])
+                            for idx in range(len(ring)):
+                                e = (ring[idx - 1], ring[idx])
                                 edges[e] = edges.get(e, 0) + 1
                     bad = [e for e, n in edges.items() if n != 1 or edges.get((e[1], e[0]), 0) != 1]
                     if bad:

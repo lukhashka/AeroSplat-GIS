@@ -234,7 +234,7 @@ def match_facades(a_facades: Sequence[Facade], b_facades: Sequence[Facade],
         near = ((nb @ np.asarray(a.normal, float) >= cos_max - 1e-9)
                 & (np.hypot(*(mid_b - mid_a).T)
                    <= (0.5 * a.length + half_b) * slack + params.max_offset_tol_m + 1.0))
-        out.append(match_facade(a, [b_facades[i] for i in np.flatnonzero(near)], params))
+        out.append(match_facade(a, [b_facades[int(i)] for i in np.flatnonzero(near)], params))
 
     # A facade of B that several facades of A matched one-to-one is a merge of them: each of
     # those is `inside` it, whatever the overlap shares say.

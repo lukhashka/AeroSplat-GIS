@@ -270,7 +270,7 @@ def run_ingest(catalog: Catalog, spec: IngestSpec, job_id: str, emit: Emit) -> d
 
         if ours:
             # Renamed into place by an earlier attempt, not registered yet: finish that.
-            if "capture" not in marker or "images" not in marker:
+            if marker is None or "capture" not in marker or "images" not in marker:
                 raise IngestError(f"{final.root / MARKER} says registered, the catalog disagrees; "
                                   f"check the catalog before re-running")
             capture = Capture(**marker["capture"])

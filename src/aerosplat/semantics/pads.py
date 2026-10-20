@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Sequence
+from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -45,6 +45,9 @@ from aerosplat.semantics.models import Building, TerrainModel
 
 VERSION = "1.0.0"
 F64 = NDArray[np.float64]
+# Arithmetic on float64 arrays widens to `floating[Any]` for the type checker, so helpers that
+# work for any float dtype say so rather than forcing a cast at every call site.
+FArr = NDArray[np.floating[Any]]
 PadKind = Literal["roof", "ground"]
 
 
@@ -122,7 +125,7 @@ class Rasters:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
-def plane_fit(x: F64, y: F64, z: F64) -> tuple[float, float]:
+def plane_fit(x: FArr, y: FArr, z: FArr) -> tuple[float, float]:
     """Least-squares plane z = a x + b y + c: (slope in degrees, RMS residual in metres)."""
     if len(z) < 3:
         return float("nan"), float("nan")

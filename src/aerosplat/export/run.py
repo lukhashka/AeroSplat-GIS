@@ -321,8 +321,8 @@ def export_run(target: ExportTarget, kinds: list[str], opts: ExportOptions, *,
         files = manifest.setdefault("files", {})
         done: dict[str, Path] = {}
         # The terrain rasters share one resampling grid, so they are one step.
-        steps = [("ortho", ["ortho"])] if "ortho" in kinds else []
-        dem = [k for k in ("dsm", "dtm", "ndsm") if k in kinds]
+        steps: list[tuple[str, list[str]]] = [("ortho", ["ortho"])] if "ortho" in kinds else []
+        dem: list[str] = [k for k in ("dsm", "dtm", "ndsm") if k in kinds]
         steps += [("dem", dem)] if dem else []
         steps += [(k, [k]) for k in ("las", "ply") if k in kinds]
         for step, group in steps:
@@ -441,7 +441,8 @@ def _export_kind(kind: str, group: list[str], target: ExportTarget, proj: SitePr
             xyz, rgb, meta = cloud_points(data)
             what = (f"run cloud product {src.name} (parse stage output: "
                     f"{meta.get('source', 'dense or sparse COLMAP cloud')})")
-            stats = {k: meta[k] for k in ("num_points", "spacing", "stats") if k in meta}
+            stats: dict[str, Any] = {k: meta[k] for k in ("num_points", "spacing", "stats")
+                                     if k in meta}
         else:
             xyz, rgb = splat_points(data)
             what = f"3DGS Gaussian centres of {src.name} (DC colour; not survey points)"
@@ -516,7 +517,7 @@ def options_from_args(args: argparse.Namespace) -> ExportOptions:
     return ExportOptions(crs=args.crs, gsd_m=args.gsd_m, dem_px_m=args.dem_px_m,
                          tile_px=args.tile_px, cog=not args.no_cog, las_source=args.las_source,
                          las_ext=".las" if args.las else ".laz", max_gap_m=args.max_gap_m,
-                         sh_degree=args.sh_degree, area_enu=area, out_dir=args.out_dir)  # type: ignore[arg-type]
+                         sh_degree=args.sh_degree, area_enu=area, out_dir=args.out_dir)
 
 
 def main(argv: Optional[list[str]] = None, on_event: Optional[EventFn] = None) -> int:

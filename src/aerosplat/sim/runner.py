@@ -660,9 +660,10 @@ class Runner:
             rec = Recording()
             if self.navsim is not None:
                 # At once: EKF3 keeps the first origin it gets, and must get the Site's.
-                kw = dict(origin=pkg.origin, sim=self.navsim, spec=self._extnav_spec(),
-                          flow=self.navp.flow, grid=self.grid, speedup=self.speedup,
-                          event=rec.event, log=lambda s: self.log(f"[{sc.scenario}] {s}"))
+                kw: dict[str, Any] = dict(
+                    origin=pkg.origin, sim=self.navsim, spec=self._extnav_spec(),
+                    flow=self.navp.flow, grid=self.grid, speedup=self.speedup,
+                    event=rec.event, log=lambda s: self.log(f"[{sc.scenario}] {s}"))
                 self.companion = self._vps_companion(v, kw) if self.vps is not None \
                     else Companion(v, **kw)
                 self.companion.attach()
@@ -673,7 +674,7 @@ class Runner:
                     self.companion.detach()
                     result.preflight.setdefault("nav", {})["companion"] = self.companion.summary()
 
-    def _vps_companion(self, v: Vehicle, kw: dict) -> Companion:
+    def _vps_companion(self, v: Vehicle, kw: dict[str, Any]) -> Companion:
         """The in-the-loop companion: the world renderer (loaded once per runner), the camera of
         the vehicle profile, the atlas the companion holds (the package's, unless the scenario
         gives another one)."""
@@ -693,10 +694,13 @@ class Runner:
         atlas = self._resolve(self.vps.atlas) if self.vps.atlas else self.pkg.dir / self.pkg.plan.vps.atlas.file
         readout = camera.readout_ms(self.vps.fps) / 1000.0 if self.vps.rolling_shutter else 0.0
         land_seq = next((it.seq for it in self.pkg.items if it.command == 21), None)
+        res = mount.vps.resolution
+        home = self.pkg.plan.home.enu
         return VpsCompanion(v, binding=self.pkg.plan.vps, atlas_path=atlas, world=self.world,
-                            cam=CameraModel.of(camera, mount, tuple(mount.vps.resolution)),
+                            cam=CameraModel.of(camera, mount, (int(res[0]), int(res[1]))),
                             readout_s=readout, rate_hz=self.vps.rate_hz or mount.vps.rate_hz,
-                            home_enu=tuple(self.pkg.plan.home.enu), land_seq=land_seq, **kw)
+                            home_enu=(float(home[0]), float(home[1]), float(home[2])),
+                            land_seq=land_seq, **kw)
 
     def _extnav_spec(self) -> ExtNavSpec:
         return self.navp.extnav if self.navp.extnav is not None else ExtNavSpec()
@@ -986,6 +990,7 @@ class Runner:
         nav_ctx = None
         if self.companion is not None:
             comp = self.companion
+            assert self.navsim is not None          # a companion is only attached with one
             if trigger_t is None and resp is not None and resp.trigger == "vps_loss":
                 # No injected fault: a no-fix zone took VPS away (capture time of the first miss).
                 trigger_t = next((t for t, fix in comp.nav.fix if not fix and t >= t_start), None)
