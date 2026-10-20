@@ -98,7 +98,7 @@ class CameraModel:
                    mount_pitch_deg=float(mount.pitch_deg), mount_yaw_deg=float(mount.yaw_deg),
                    name=camera.name)
 
-    def view(self, C: Sequence[float], roll: float, pitch: float, yaw: float) -> View:
+    def view(self, C: Sequence[float] | np.ndarray, roll: float, pitch: float, yaw: float) -> View:
         """The camera's view for a vehicle at C (ENU) with this attitude (radians, NED)."""
         y, p, r = angles(camera_rotation(roll, pitch, yaw, self.mount_pitch_deg, self.mount_yaw_deg))
         return View((float(C[0]), float(C[1]), float(C[2])), y, p, r)
@@ -609,7 +609,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     mount = veh.airframe.vps_mount()
     if mount is None or mount.vps is None:
         raise SystemExit(f"vehicle {a.vehicle} has no VPS camera")
-    cam = CameraModel.of(load_camera(mount.camera), mount, tuple(mount.vps.resolution))
+    res = mount.vps.resolution
+    cam = CameraModel.of(load_camera(mount.camera), mount, (int(res[0]), int(res[1])))
     renderer = EngineRenderer(run)
     try:
         plan, atlas, rep = prepare(plan, renderer, cam, make_extractor(mount.vps.extractor),

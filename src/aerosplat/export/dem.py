@@ -83,7 +83,8 @@ def mask_far_from_data(dtm: F64, count: NDArray[np.integer], res_m: float,
     return np.where(dist > max_gap_m, np.nan, dtm)
 
 
-def load_terrain(npz: Path, model: TerrainModel) -> dict[str, F64]:
+def load_terrain(npz: Path, model: TerrainModel) -> dict[str, NDArray[Any]]:
+    # Not dict[str, F64]: `count` is the integer point count per cell, `dsm`/`dtm` are float64.
     with np.load(npz) as z:
         missing = {"dsm", "dtm", "count"} - set(z.files)
         if missing:

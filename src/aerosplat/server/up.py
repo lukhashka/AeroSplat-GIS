@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from aerosplat.jobs.proctree import group_kwargs, kill_tree
 from aerosplat.logging_utils import fix_console_encoding
@@ -219,7 +219,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         describe_scenes()
         print(f"\n🚀 AeroSplat-GIS: {scheme}://{args.host}:{args.port}/   "
               f"(процеси: {', '.join(resources) or '—'})\n", flush=True)
-        ssl = {} if tls is None else {"ssl_certfile": str(tls.cert), "ssl_keyfile": str(tls.key)}
+        # dict[str, Any]: uvicorn.run takes many typed keywords, so a narrower mapping makes the
+        # splat ambiguous for the type checker.
+        ssl: dict[str, Any] = ({} if tls is None
+                               else {"ssl_certfile": str(tls.cert), "ssl_keyfile": str(tls.key)})
         uvicorn.run(app, host=args.host, port=args.port, **ssl)
     finally:
         supervisor.stop()

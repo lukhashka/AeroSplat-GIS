@@ -41,7 +41,7 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -59,6 +59,9 @@ from aerosplat.surface.models import FREE, ColumnSource
 from aerosplat.surface.occupancy import OccupancyGrid
 
 F64 = NDArray[np.float64]
+# Arithmetic on float64 arrays widens to `floating[Any]` for the type checker, so helpers that
+# work for any float dtype say so rather than forcing a cast at every call site.
+FArr = NDArray[np.floating[Any]]
 MEASURED = (int(ColumnSource.POINTS), int(ColumnSource.CELL))
 # How far around a spot its open ground is measured, beyond the corridor radius.
 OPEN_REACH_M = 10.0
@@ -77,7 +80,7 @@ class Ground:
     dtm: F64                                # (rows, cols)
     labels: Optional[NDArray[np.integer]]   # building map (0 = none); None: not available
 
-    def cells_of(self, x: F64, y: F64) -> tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.bool_]]:
+    def cells_of(self, x: FArr, y: FArr) -> tuple[NDArray[np.int64], NDArray[np.int64], NDArray[np.bool_]]:
         t = self.terrain
         ti = np.floor((y - t.y0) / t.res_m).astype(np.int64)
         tj = np.floor((x - t.x0) / t.res_m).astype(np.int64)

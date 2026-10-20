@@ -132,10 +132,13 @@ def run_semantics(cloud: Path, out_dir: Path, *, sparse: Optional[Path] = None,
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / SEMANTICS_JSON).write_text(
         result.model_dump_json(indent=2), encoding="utf-8")
-    np.savez_compressed(out_dir / TERRAIN_NPZ, labels=labels.astype(np.int32),
-                        **terrain.to_npz())
+    # dict[str, Any]: `savez_compressed` also takes keyword options, so a narrower mapping makes
+    # the splat ambiguous for the type checker.
+    rasters: dict[str, Any] = {"labels": labels.astype(np.int32), **terrain.to_npz()}
+    np.savez_compressed(out_dir / TERRAIN_NPZ, **rasters)
     if grids:
-        np.savez_compressed(out_dir / COVERAGE_NPZ, **grids)
+        coverage: dict[str, Any] = dict(grids)
+        np.savez_compressed(out_dir / COVERAGE_NPZ, **coverage)
     log.info(f"  Збережено: {out_dir / SEMANTICS_JSON}")
     return result
 
